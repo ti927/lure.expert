@@ -420,13 +420,13 @@ Esse documento especifica, pra cada uma das 11 tabelas:
 **Objetivo:** cliente sobe relatório (qualquer formato), sistema extrai e estrutura.
 
 **Deliverables:**
-- Tela de upload de arquivo (drag-and-drop)
-- Pipeline assíncrono (com Inngest): arquivo → storage → parsing → tabela transactions
-- Suporte a Excel/CSV via código (parser determinístico)
-- Suporte a PDF via LLM (extrai estrutura)
-- Sistema de "templates": quando o mesmo formato aparece de novo, reusa parser sem chamar LLM
-- Tela de "revisão" das linhas extraídas antes de gravar — **com edição em lote**
-- Histórico de uploads por organização
+- ✅ Tela de upload de arquivo (drag-and-drop)
+- ✅ Pipeline assíncrono (com Inngest): arquivo → storage → parsing → tabela transactions
+- ✅ Suporte a Excel/CSV via código (parser determinístico)
+- ⏳ Suporte a PDF via LLM (extrai estrutura) — **Sessão 2.5**
+- ⏳ Sistema de "templates": quando o mesmo formato aparece de novo, reusa parser sem chamar LLM — **Sessão 2.6**
+- ✅ Tela de "revisão" das linhas extraídas antes de gravar — **com edição em lote**
+- ✅ Histórico de uploads por organização
 
 **Decisões tomadas na implementação:**
 
@@ -439,26 +439,58 @@ Esse documento especifica, pra cada uma das 11 tabelas:
   Extensível via `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`.
 
 **Tela de revisão `/upload/[id]/review`:**
-- Lista paginada de todas as linhas do staging com: data, valor, direção, descrição, status
-- **Edição individual:** inline por campo (data, valor, direção, descrição)
+- Carrega todas as linhas do staging de uma vez (client-side pagination, 50/página)
+- Polling a cada 3s enquanto `extractionStatus !== 'completed'`
+- **Edição individual:** inline por campo (data input, number input, text input); direção via badge clicável
 - **Edição em lote via checkbox:**
-  - Selecionar todos / selecionar página
-  - Aprovar selecionados
-  - Rejeitar selecionados
-  - **Inverter direção dos selecionados** (inflow ↔ outflow) — essencial para corrigir faturas de cartão e extratos com convenção invertida
-- Ao aprovar, linhas viram `transactions` definitivas
-
-**Prompt template:**
-> *"Vamos construir o pipeline de ingestão de arquivos. Quero que: (1) Tenha uma página /upload onde o usuário arrasta um arquivo Excel, CSV ou PDF. (2) O arquivo seja salvo no Supabase Storage. (3) Um job Inngest seja disparado pra processar. (4) Pra Excel/CSV, parser determinístico em Node identifica colunas e extrai linhas. (5) Pra PDF, usa Claude (Sonnet) pra extrair as linhas em JSON estruturado. (6) Cada linha extraída vira um registro candidato em uma tabela transactions_staging. (7) Uma tela /upload/[id]/review mostra os candidatos pro usuário revisar antes de virarem transactions definitivas — com edição inline e edição em lote (aprovar/rejeitar/inverter direção). (8) Quando o usuário aprova, geramos um 'template' — um objeto JSON que descreve o formato do arquivo — e salvamos em templates. (9) Próximo upload, o sistema tenta combinar com um template existente antes de chamar LLM. Trate erros explicitamente: arquivo corrompido, formato não reconhecido, etc. Logue tudo no agent_events."*
+  - Selecionar por página
+  - Aprovar / rejeitar / **inverter direção** dos selecionados
+- "Confirmar e importar": aprova pendentes → insere `approved` em `transactions`
+  - Upsert de `data_source` (provider=`upload`) por org+sourceType antes do INSERT
+  - Insere em lotes de 100; retorna `{ inserted, skipped, total }`
+- `/upload` lista 10 uploads recentes com status, contagem e link direto para revisão
 
 **Definition of Done:**
-- Você sobe um relatório de AP do Omie (Excel) e ele aparece como 200 linhas pra revisão
-- Na tela de revisão, consegue selecionar todas as linhas e inverter a direção em lote
-- Você sobe um PDF de extrato bancário e ele também aparece (mais lento)
-- Sobe o mesmo formato uma segunda vez e ele processa sem chamar LLM (verifica nos logs)
-- Erros mostram mensagem amigável
+- ✅ Sobe um Excel e aparece como linhas pra revisão
+- ✅ Consegue inverter a direção em lote e aprovar tudo de uma vez
+- ✅ Linhas aprovadas constam na tabela `transactions`
+- ✅ Erros mostram mensagem amigável
+- ⏳ Sobe um PDF de extrato bancário e ele também aparece (Sessão 2.5)
+- ⏳ Sobe o mesmo formato uma segunda vez e processa sem chamar LLM (Sessão 2.6)
 
 **Tempo:** 2-3 semanas. **Essa fase é a coluna vertebral do produto.** Investe tempo.
+
+---
+
+#### Sessão 2.5 — Parser PDF via LLM (próxima)
+
+**Objetivo:** PDFs enviados são extraídos via Claude Haiku e viram linhas no staging.
+
+**O que implementar:**
+- Novo step no `processDocument` (após o check de MIME type): para PDFs, baixa o arquivo,
+  extrai texto (biblioteca `pdf-parse` ou similar), chama Claude Haiku com prompt estruturado,
+  recebe JSON de linhas `[{ date, amount, direction, description }]`, valida e insere em staging
+- PDFs de imagem (sem texto extraível) → fallback: envia o PDF direto via Files API do Claude com
+  vision para extração (mais caro, usar com cautela)
+- `extractionMethod: 'llm'` já está sendo salvo corretamente — só falta o step processar de fato
+
+**Definition of Done:** subir um PDF de extrato bancário e ver as linhas na tela `/upload/[id]/review`
+
+---
+
+#### Sessão 2.6 — Sistema de templates (depois do PDF)
+
+**Objetivo:** reusar mapeamento de colunas aprendido em uploads anteriores do mesmo formato.
+
+**O que implementar:**
+- Após parsing bem-sucedido de Excel/CSV, salvar o `columnMap` na tabela `templates`
+  associado ao `organization_id` e a um fingerprint do arquivo (nome de colunas)
+- Na próxima execução, antes de parsear: buscar template com fingerprint compatível;
+  se encontrar, aplicar mapeamento direto sem re-detectar colunas
+- Para PDF: salvar o prompt + estrutura de resposta como template para o mesmo fornecedor
+
+**Definition of Done:** subir o mesmo Excel duas vezes e confirmar nos logs Inngest que a segunda
+execução usou template (sem etapa de detecção de colunas)
 
 ---
 

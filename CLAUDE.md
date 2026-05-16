@@ -182,16 +182,25 @@ Sessões concluídas:
   Parser determinístico em `src/lib/parsers/excel-csv.ts` (SheetJS/xlsx) com heurística de mapeamento de colunas
   (date/amount/credit/debit/description). URL assinada gerada no server action e passada no evento Inngest.
   `processDocument` atualizado: baixa arquivo via signed URL, parseia, insere em staging em lotes de 100.
-  PDFs/imagens redirecionados para `pending_llm` (Fase 2.4+). Testado: 160 linhas extraídas, 0 warnings.
+  PDFs/imagens redirecionados para `pending_llm` (Fase 2.5). Testado: 160 linhas extraídas, 0 warnings.
   **Regra de direção por source_type:** `credit_card` → força todas as linhas como `outflow`. Extensível via
   `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`. `sourceType` agora é passado no evento Inngest.
 
-Próxima sessão: **2.4 — Tela de revisão do staging**
-- Página `/upload/[id]/review` lista as linhas do staging com data, valor, direção e descrição
-- Ações individuais: editar campo inline (data, valor, direção, descrição)
-- Ações em lote via checkbox: aprovar selecionados, rejeitar selecionados, **inverter direção dos selecionados**
-- DoD: após upload de Excel, navegar para a tela de revisão, ver as linhas paginadas, conseguir corrigir
-  direção em lote e aprovar tudo de uma vez
+- ✅ **2.4** — Tela de revisão do staging: `src/server/staging.ts` com 4 server actions
+  (`getDocumentStagingRows`, `updateStagingRow`, `batchUpdateStaging`, `approveAndInsert`).
+  Página `/upload/[id]/review`: polling a cada 3s enquanto processa, tabela paginada (50 linhas/página),
+  edição inline por campo (data/valor/descrição), badge de direção clicável (inflow↔outflow individual),
+  seleção por checkbox + toolbar de ações em lote (aprovar/rejeitar/inverter direção em lote).
+  Botão "Confirmar e importar": aprova pendentes + insere em `transactions` em lotes de 100, com upsert
+  automático de `data_source` (provider=`upload`, type=sourceType) por org. Toast em todos os cenários.
+  Página `/upload` lista os 10 uploads mais recentes com status, contagem de pendentes/importadas e link
+  direto para revisão. **Testado e validado:** linhas importadas constam na tabela `transactions`.
+
+Próxima sessão: **2.5 — Parser PDF via LLM**
+- PDFs enviados ficam em `extractionStatus: 'pending'` com `extractionMethod: 'llm'` — nunca avançam
+- Implementar step no `processDocument` que, para PDFs: extrai texto, chama Claude Haiku com prompt
+  estruturado, recebe JSON de linhas, insere em `transactions_staging` igual ao fluxo Excel/CSV
+- DoD: subir um PDF de extrato bancário e ver as linhas aparecerem na tela de revisão (pode ser mais lento)
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert
