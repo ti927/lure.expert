@@ -1,28 +1,35 @@
-"use client";
+'use client'
 
-import { useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
-import { Sidebar } from "./sidebar";
-import { ExpertTrigger } from "@/components/expert/expert-trigger";
-import { Menu } from "lucide-react";
+import { useEffect, useState } from 'react'
+import { cn } from '@/lib/utils'
+import { Sidebar } from './sidebar'
+import { ExpertTrigger } from '@/components/expert/expert-trigger'
+import { Menu } from 'lucide-react'
 
-const STORAGE_KEY = "sidebar-collapsed";
+const STORAGE_KEY = 'sidebar-collapsed'
 
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+export type AppUser = { id: string; email: string }
+
+interface AppShellProps {
+  children: React.ReactNode
+  user: AppUser
+}
+
+export function AppShell({ children, user }: AppShellProps) {
+  const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored !== null) setCollapsed(stored === "true");
-  }, []);
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored !== null) setCollapsed(stored === 'true')
+  }, [])
 
   function toggleCollapsed() {
     setCollapsed((v) => {
-      const next = !v;
-      localStorage.setItem(STORAGE_KEY, String(next));
-      return next;
-    });
+      const next = !v
+      localStorage.setItem(STORAGE_KEY, String(next))
+      return next
+    })
   }
 
   return (
@@ -32,16 +39,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onToggle={toggleCollapsed}
         mobileOpen={mobileOpen}
         onMobileClose={() => setMobileOpen(false)}
+        user={user}
       />
 
-      {/* Conteúdo — desloca para acomodar sidebar no desktop */}
       <div
         className={cn(
-          "flex min-h-screen flex-col transition-all duration-200",
-          collapsed ? "md:pl-16" : "md:pl-60",
+          'flex min-h-screen flex-col transition-all duration-200',
+          collapsed ? 'md:pl-16' : 'md:pl-60',
         )}
       >
-        {/* Header mobile */}
         <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-4 md:hidden">
           <button
             onClick={() => setMobileOpen(true)}
@@ -58,5 +64,5 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <ExpertTrigger />
     </div>
-  );
+  )
 }

@@ -8,7 +8,8 @@ import { dataSources } from './data-sources'
 import { contacts } from './contacts'
 import { categories } from './categories'
 import { documents } from './documents'
-import { creditCardInvoices } from './credit-card-invoices'
+// FK para creditCardInvoices omitida aqui para evitar referência circular
+// A constraint real existe no banco via SQL migration (0004)
 
 const tz = { withTimezone: true }
 
@@ -20,8 +21,8 @@ const vector = customType<{ data: number[] }>({
   toDriver(value: number[]) {
     return `[${value.join(',')}]`
   },
-  fromDriver(value: string) {
-    return value.slice(1, -1).split(',').map(Number)
+  fromDriver(value: unknown) {
+    return (value as string).slice(1, -1).split(',').map(Number)
   },
 })
 
@@ -58,7 +59,7 @@ export const transactions = pgTable(
     // confirmed | pending | ignored | duplicate
     status: text('status').notNull().default('confirmed'),
     documentId: uuid('document_id').references(() => documents.id),
-    creditCardInvoiceId: uuid('credit_card_invoice_id').references(() => creditCardInvoices.id),
+    creditCardInvoiceId: uuid('credit_card_invoice_id'),
     rawData: jsonb('raw_data').notNull().default(sql`'{}'::jsonb`),
     // populado assincronamente após insert, não bloqueia a operação
     embedding: vector('embedding'),

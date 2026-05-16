@@ -33,7 +33,7 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { PartialDataBanner } from "@/components/states/partial-data-banner";
 import { ColumnDef } from "@tanstack/react-table";
-import { Building2, Landmark, RefreshCw } from "lucide-react";
+import { Building2, Landmark } from "lucide-react";
 
 /* ── DataTable mock ─────────────────────────────────────────────── */
 type Transaction = { date: string; description: string; category: string; value: number };

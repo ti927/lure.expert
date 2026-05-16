@@ -1,28 +1,26 @@
-export const dynamic = 'force-dynamic'
-
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { AppShell } from '@/components/layout/app-shell'
 import { db } from '@/db'
 import { memberships } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 
-export default async function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
+export default async function OnboardingLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
+  // Usuário já tem organização — vai pro dashboard
+  const [existing] = await db
+    .select({ id: memberships.id })
     .from(memberships)
     .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
     .limit(1)
 
-  if (!membership) redirect('/onboarding')
+  if (existing) redirect('/dashboard')
 
   return (
-    <AppShell user={{ id: user.id, email: user.email ?? '' }}>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
       {children}
-    </AppShell>
+    </div>
   )
 }
