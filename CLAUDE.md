@@ -122,23 +122,25 @@ o que está documentado, PARAR e me consultar.
 
 ## Fase atual
 
-**Fase 0 — Scaffolding (em andamento)**
+**Fase 0 — Scaffolding (CONCLUÍDA)**
 
-Concluído:
 - Sessão 0.1: projeto Next.js 14 + TypeScript + Tailwind + shadcn/ui inicializado
 - Sessão 0.2: `/login` (e-mail + senha), `/dashboard` protegido, middleware Supabase SSR
+- Sessão 0.3: deploy Vercel conectado ao GitHub, URL pública validada
 - README.md com instruções de setup
-- Repositório Git inicializado e publicado em https://github.com/ti927/lure.expert.git (branch `main`)
+- Repositório: https://github.com/ti927/lure.expert.git (branch `main`)
+- Produção: https://lure-expert.vercel.app
 
-Pendente na Fase 0:
-- Sessão 0.3: conectar Vercel ao repositório e validar deploy na URL pública
+---
 
-**Próximo objetivo (após deploy Vercel): Fase 0.5 — Fundações de Design e Voz**
+**Fase 0.5 — Fundações de Design e Voz (em andamento)**
+
+Pendente:
 - 0.5.1 Design Tokens: configurar `tailwind.config.ts` + criar `/style-guide`
 - 0.5.2 Biblioteca de componentes: shadcn/ui base + financeiros (CurrencyDisplay, KPICard, DataTable) + estados (EmptyState, LoadingState, ErrorState)
 - 0.5.3 Voz do expert: criar `docs/AI_VOICE.md`
 - 0.5.4 Padrões de estado: criar `docs/STATE_PATTERNS.md` + componentes em `/components/states`
-- 0.5.5 Arquitetura de informação: layout principal com sidebar + chat flutuante
+- 0.5.5 Arquitetura de informação: layout principal com sidebar + expert flutuante
 
 Detalhamento das sessões em `docs/GUIA_OPERACIONAL.md` (Parte 4).
 
