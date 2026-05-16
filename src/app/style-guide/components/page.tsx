@@ -31,6 +31,7 @@ import { DataTable } from "@/components/financial/data-table";
 import { EmptyState } from "@/components/states/empty-state";
 import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
+import { PartialDataBanner } from "@/components/states/partial-data-banner";
 import { ColumnDef } from "@tanstack/react-table";
 import { Building2, Landmark, RefreshCw } from "lucide-react";
 
@@ -74,7 +75,7 @@ export default function ComponentsStyleGuidePage() {
             Biblioteca de Componentes
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Fase 0.5.2 · 18 componentes em todas as variantes
+            Fase 0.5.4 · 19 componentes em todas as variantes
           </p>
         </header>
 
@@ -398,8 +399,34 @@ export default function ComponentsStyleGuidePage() {
           </div>
         </Section>
 
+        {/* PARTIAL DATA BANNER */}
+        <Section title="PartialDataBanner">
+          <div className="max-w-2xl space-y-3">
+            <PartialDataBanner
+              variant="warning"
+              message="Saldo do Bradesco desatualizado — última sincronização há 4 horas."
+              action={{ label: "Sincronizar agora", onClick: () => {} }}
+            />
+            <PartialDataBanner
+              variant="info"
+              message="expert está categorizando 47 transações novas. Os totais serão atualizados em instantes."
+            />
+            <PartialDataBanner
+              variant="warning"
+              message="Período incompleto: dados de maio disponíveis apenas até o dia 14."
+              dismissible
+            />
+            <PartialDataBanner
+              variant="info"
+              message="3 notas fiscais importadas ainda em processamento. O DRE de abril pode mudar."
+              action={{ label: "Ver detalhes", onClick: () => {} }}
+              dismissible
+            />
+          </div>
+        </Section>
+
         <footer className="border-t border-border pt-6 text-xs text-muted-foreground">
-          Fase 0.5.2 · Biblioteca de Componentes · 18 componentes
+          Fase 0.5.4 · Biblioteca de Componentes · 19 componentes
         </footer>
       </div>
     </TooltipProvider>

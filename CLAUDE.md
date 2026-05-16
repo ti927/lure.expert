@@ -139,9 +139,11 @@ Concluído:
 - 0.5.1 Design Tokens: `tailwind.config.ts` + `globals.css` (HSL) + `/style-guide` ✅
 - 0.5.2 Biblioteca de componentes: 18 componentes + `/style-guide/components` ✅
 
-Pendente:
+Concluído (continuação):
 - 0.5.3 Voz do expert: `docs/AI_VOICE.md` ✅
-- 0.5.4 Padrões de estado: criar `docs/STATE_PATTERNS.md` + componentes em `/components/states`
+- 0.5.4 Padrões de estado: `docs/STATE_PATTERNS.md` + `PartialDataBanner` + 19 componentes ✅
+
+Pendente:
 - 0.5.5 Arquitetura de informação: layout principal com sidebar + expert flutuante
 
 Detalhamento das sessões em `docs/GUIA_OPERACIONAL.md` (Parte 4).
