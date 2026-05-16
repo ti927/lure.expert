@@ -137,10 +137,10 @@ o que está documentado, PARAR e me consultar.
 
 Concluído:
 - 0.5.1 Design Tokens: `tailwind.config.ts` + `globals.css` (HSL) + `/style-guide` ✅
+- 0.5.2 Biblioteca de componentes: 18 componentes + `/style-guide/components` ✅
 
 Pendente:
-- 0.5.2 Biblioteca de componentes: shadcn/ui base + financeiros (CurrencyDisplay, KPICard, DataTable) + estados (EmptyState, LoadingState, ErrorState)
-- 0.5.3 Voz do expert: criar `docs/AI_VOICE.md`
+- 0.5.3 Voz do expert: `docs/AI_VOICE.md` ✅
 - 0.5.4 Padrões de estado: criar `docs/STATE_PATTERNS.md` + componentes em `/components/states`
 - 0.5.5 Arquitetura de informação: layout principal com sidebar + expert flutuante
 
