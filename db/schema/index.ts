@@ -1,3 +1,6 @@
 export * from './organizations'
 export * from './memberships'
 export * from './data-sources'
+export * from './contacts'
+export * from './categories'
+export * from './categorization-rules'
