@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, documents } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
+import { inngest } from '@/lib/inngest'
 
 const schema = z.object({
   storagePath: z.string().min(1),
@@ -68,6 +69,11 @@ export async function createDocumentRecord(
       },
     })
     .returning({ id: documents.id })
+
+  await inngest.send({
+    name: 'document/uploaded',
+    data: { documentId: doc.id, organizationId },
+  })
 
   return { success: true, documentId: doc.id }
 }

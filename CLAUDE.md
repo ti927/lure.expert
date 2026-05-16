@@ -171,9 +171,14 @@ Sessões concluídas:
   com `extraction_status: 'pending'` e metadata `{ source_type, period_start?, period_end? }`.
   Migration: `db/migrations/rls/0006_storage_documents.sql`.
 
-Próxima sessão: **2.2 — Inngest setup + pipeline base**
-- Conta Inngest, SDK configurado, primeira função dispara após upload e muda status `pending → processing → completed`
-- DoD: subir arquivo, ver status mudar; ver execução no dashboard Inngest
+- ✅ **2.2** — Inngest setup + pipeline base: SDK instalado, `src/lib/inngest.ts`, `src/app/api/inngest/route.ts`,
+  `src/jobs/process-document.ts` (função `processDocument` com 3 steps: mark-processing → sleep 3s → mark-completed).
+  `INNGEST_DEV=1` no `.env.local` para dev local. Chaves de produção comentadas no `.env.local` (adicionar no Vercel).
+  Dev Server: `npx inngest-cli@latest dev -u http://localhost:3000/api/inngest`
+
+Próxima sessão: **2.3 — Parser Excel/CSV**
+- Parser determinístico para Excel/CSV: lê arquivo do Storage, identifica colunas, extrai linhas em `transactions_staging`
+- DoD: subir Excel com transações, ver linhas na tabela de staging
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert
