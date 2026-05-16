@@ -144,26 +144,23 @@ o que está documentado, PARAR e me consultar.
 
 **Fase 1 — Schema de Dados e Multi-tenancy**
 
-> **PRÓXIMA SESSÃO A INICIAR: 1.1 — Schema Drizzle + Supabase**
+> **PRÓXIMA SESSÃO: 1.7 — Telas admin de organização**
 
-Objetivo da fase: criar as 18 tabelas do schema, configurar RLS, conectar Drizzle ORM
-e entregar as primeiras telas reais (gestão de organização/empresa).
+Sessões concluídas:
+- ✅ **1.1** — Drizzle ORM + extensões (pgcrypto, vector, pg_trgm) + `organizations`, `memberships`, `data_sources` + RLS
+- ✅ **1.2** — `contacts`, `categories`, `categorization_rules` + RLS + índice GIN trigram
+- ✅ **1.3** — `fixed_assets`, `loans`, `equity_movements`, `inventory_snapshots` + RLS
+- ✅ **1.4** — `credit_card_invoices`, `documents`, `transactions` + RLS + HNSW + FKs circulares
+- ✅ **1.5** — `templates`, `conversations`, `messages`, `organization_facts`, `agent_events` + RLS
+- ✅ **1.6** — Seed plano de contas (52 categorias DRE padrão) + trigger automático no INSERT de organizations
 
-Sessões planejadas:
-- **1.1** — Instalar Drizzle ORM + criar schema inicial no `/db` (tabelas: `organizations`,
-  `organization_members`, `users`). Rodar migrations no Supabase. Configurar RLS básico.
-- **1.2** — Tabelas de contas e transações: `accounts`, `transactions`, `transaction_categories`,
-  `category_rules`. RLS por `organization_id`. Seed de categorias padrão.
-- **1.3** — Tabelas do expert e rastreamento: `conversations`, `messages`,
-  `organization_facts`, `agent_events`. RLS completo.
-- **1.4** — Tabelas financeiras: `periods`, `dre_lines`, `cash_flow_entries`,
-  `reconciliation_queue`, `import_batches`. RLS.
-- **1.5** — Tela de onboarding: criação de organização na primeira vez que o usuário loga
-  (se `organization_id` ainda não existir). Formulário simples: nome da empresa, CNPJ, setor.
-- **1.6** — Tela de configurações real: exibir e editar dados da organização. Avatar/iniciais
-  do usuário na sidebar.
+Sessões pendentes:
+- **1.7** — Tela de onboarding (criação de organização na 1ª vez que o usuário loga) +
+  tela de configurações real + avatar/iniciais na sidebar
+- **1.8** — Teste de isolamento manual de RLS em todas as tabelas + polimento
 
-Antes de iniciar 1.1: ler `docs/SCHEMA_INICIAL.md` (fonte da verdade das 18 tabelas).
+Schema completo: 18 tabelas, migrations em `/db/migrations/`, RLS ativa em todas.
+Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
 
 Detalhamento completo em `docs/GUIA_OPERACIONAL.md` (Parte 4).
 
