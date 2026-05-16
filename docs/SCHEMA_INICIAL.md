@@ -1,7 +1,7 @@
 # Schema Inicial — Lure
 
 **Documento de especificação técnica do banco de dados.**
-**Versão:** 1.0 — corresponde à Fase 1 do plano de construção.
+**Versão:** 2.0 — corresponde à Fase 1 do plano de construção (18 tabelas).
 **Última atualização:** [data]
 
 ---
@@ -26,15 +26,23 @@ memberships ──→ organizations
         ┌───────────┼──────────────────────────────────────────┐
         ↓           ↓              ↓              ↓             ↓
    data_sources  contacts     categories    documents     conversations
-        ↓                                       │              ↓
-   transactions ←──────────────────────────────┤          messages
-        │                                       │
-        └─→ contact_id (fk)                    │
-        └─→ category_id (fk)                   │
-        └─→ document_id (fk) ───────────────────┘
+        ↓           ↓              ↓              │              ↓
+   transactions  [categorization_rules]    [credit_card_invoices]  messages
+        │                                                          ↓
+        └─→ contact_id (fk)                                organization_facts
+        └─→ category_id (fk)
+        └─→ document_id (fk)
+        └─→ credit_card_invoice_id (fk, nullable)
 
-agent_events (audit log de tudo que a IA faz, sem fk obrigatória)
-templates (parsers aprendidos, podem ser globais ou por org)
+── BP (balanço patrimonial) ──────────────────────────────────────
+   fixed_assets        (imobilizado)
+   loans               (empréstimos e financiamentos)
+   equity_movements    (movimentos de PL)
+   inventory_snapshots (snapshots de estoque)
+
+── Auditoria ─────────────────────────────────────────────────────
+   agent_events   (log auditável de tudo que o expert faz)
+   templates      (parsers aprendidos, podem ser globais ou por org)
 ```
 
 ---
@@ -385,6 +393,216 @@ Log auditável de tudo que a IA faz. Categorização automática, anomalia detec
 
 ---
 
+## Tabela 12: `categorization_rules`
+
+Regras de categorização criadas pelo usuário (manualmente) ou sugeridas pelo expert (auto-geradas após padrão repetido). São aplicadas como primeira camada da cascata.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `name` | text | NOT NULL | Nome legível da regra |
+| `conditions` | jsonb | NOT NULL | Critérios de ativação (descrição contém X, CNPJ = Y, valor entre A e B) |
+| `target_category_id` | uuid | FK categories, NOT NULL | Categoria a aplicar |
+| `target_contact_id` | uuid | FK contacts, nullable | Vincular contato quando aplicar |
+| `priority` | integer | NOT NULL, default 0 | Maior número = checado primeiro |
+| `auto_generated` | boolean | NOT NULL, default false | true = sugestão do expert, false = criada pelo usuário |
+| `confirmed_at` | timestamptz | nullable | Quando usuário confirmou regra auto-gerada |
+| `is_active` | boolean | NOT NULL, default true | |
+| `match_count` | integer | NOT NULL, default 0 | Quantas transações esta regra já categorizou |
+| `created_by_user_id` | uuid | FK auth.users, nullable | |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+| `updated_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_rules_org_active` em `(organization_id, is_active) WHERE is_active = true`
+- `idx_rules_priority` em `(organization_id, priority DESC)`
+
+**RLS:** filtrar por `organization_id` via membership.
+
+**Nota de design:** regras auto-geradas com `confirmed_at IS NULL` são "propostas" — o expert sugere, o usuário confirma. Regras confirmadas ou criadas manualmente são aplicadas imediatamente.
+
+---
+
+## Tabela 13: `fixed_assets`
+
+Imobilizado da empresa. Usado para construir o Ativo Não-Circulante do Balanço Patrimonial gerencial.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `name` | text | NOT NULL | Descrição do bem ("Veículo Honda Civic", "Computador MacBook") |
+| `description` | text | nullable | Detalhes adicionais |
+| `category_id` | uuid | FK categories, nullable | Categoria no plano de contas (tipo asset) |
+| `acquisition_date` | date | NOT NULL | Data de aquisição |
+| `acquisition_value` | numeric(15,2) | NOT NULL | Valor pago na aquisição |
+| `current_value` | numeric(15,2) | NOT NULL | Valor contábil atual (depreciado) |
+| `depreciation_method` | text | nullable | linear, accelerated, none |
+| `useful_life_months` | integer | nullable | Vida útil estimada em meses |
+| `monthly_depreciation` | numeric(15,2) | nullable | Depreciação mensal calculada |
+| `status` | text | NOT NULL, default 'active' | active, sold, written_off, disposed |
+| `disposed_at` | date | nullable | Quando foi vendido/baixado |
+| `disposal_value` | numeric(15,2) | nullable | Valor recebido na baixa |
+| `transaction_id` | uuid | FK transactions, nullable | Transação de aquisição vinculada |
+| `metadata` | jsonb | NOT NULL, default '{}' | Número de série, localização, etc. |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+| `updated_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_fixed_assets_org` em `(organization_id, status)`
+
+**RLS:** filtrar por `organization_id`.
+
+---
+
+## Tabela 14: `loans`
+
+Empréstimos e financiamentos da empresa. Compõe o Passivo Circulante (parcelas curto prazo) e Passivo Não-Circulante do BP.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `name` | text | NOT NULL | Nome ("Capital de giro Itaú — mar/2024") |
+| `lender` | text | NOT NULL | Credor ("Itaú BBA", "BNDES", "Sócio João") |
+| `type` | text | NOT NULL | working_capital, investment, payroll, partner_loan, other |
+| `original_amount` | numeric(15,2) | NOT NULL | Valor original contratado |
+| `current_balance` | numeric(15,2) | NOT NULL | Saldo devedor atual |
+| `interest_rate_annual` | numeric(8,4) | nullable | Taxa anual (ex: 0.1850 = 18,50% a.a.) |
+| `start_date` | date | NOT NULL | Data de contratação |
+| `end_date` | date | nullable | Vencimento final |
+| `installment_amount` | numeric(15,2) | nullable | Valor da parcela |
+| `installment_count_total` | integer | nullable | Total de parcelas |
+| `installment_count_paid` | integer | NOT NULL, default 0 | Parcelas já pagas |
+| `status` | text | NOT NULL, default 'active' | active, paid_off, in_default, renegotiated |
+| `category_id` | uuid | FK categories, nullable | Categoria no plano de contas (tipo liability) |
+| `metadata` | jsonb | NOT NULL, default '{}' | Número do contrato, observações |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+| `updated_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_loans_org_status` em `(organization_id, status)`
+
+**RLS:** filtrar por `organization_id`.
+
+---
+
+## Tabela 15: `equity_movements`
+
+Movimentos de Patrimônio Líquido que não passam pela DRE operacional: aportes de capital, retiradas de sócios, distribuição de lucros, reservas.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `type` | text | NOT NULL | capital_contribution, capital_withdrawal, profit_distribution, reserve_transfer, other |
+| `amount` | numeric(15,2) | NOT NULL | Valor sempre positivo |
+| `direction` | text | NOT NULL | inflow (aumento de PL), outflow (redução de PL) |
+| `date` | date | NOT NULL | Data de competência |
+| `description` | text | NOT NULL | Descrição do movimento |
+| `category_id` | uuid | FK categories, nullable | Categoria do plano de contas (tipo equity) |
+| `transaction_id` | uuid | FK transactions, nullable | Transação bancária vinculada (se houver fluxo) |
+| `metadata` | jsonb | NOT NULL, default '{}' | |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+| `updated_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_equity_movements_org_date` em `(organization_id, date DESC)`
+
+**RLS:** filtrar por `organization_id`.
+
+**Nota:** aportes e retiradas de sócios são registrados aqui, não em `transactions`, para não distorcer a DRE operacional. O link via `transaction_id` (nullable) mantém rastreabilidade com o fluxo de caixa quando há movimentação bancária correspondente.
+
+---
+
+## Tabela 16: `inventory_snapshots`
+
+Snapshots manuais ou importados do valor de estoque. Usado para compor o Ativo Circulante do BP. Não é gestão de estoque — é só o saldo financeiro do estoque em datas-chave.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `snapshot_date` | date | NOT NULL | Data de referência do saldo |
+| `total_value` | numeric(15,2) | NOT NULL | Valor total do estoque nessa data |
+| `notes` | text | nullable | Observações ("conferência física de março") |
+| `items` | jsonb | nullable | Lista de itens se fornecida (nome, qtd, valor unitário) |
+| `created_by_user_id` | uuid | FK auth.users, nullable | |
+| `metadata` | jsonb | NOT NULL, default '{}' | |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_inventory_org_date` em `(organization_id, snapshot_date DESC)`
+
+**RLS:** filtrar por `organization_id`.
+
+**Nota de design:** só guarda snapshots — sem atualização nem DELETE. Para corrigir um valor, insere novo snapshot na mesma data com valor correto; o mais recente por data é o autoritativo.
+
+---
+
+## Tabela 17: `credit_card_invoices`
+
+Faturas de cartão de crédito corporativo. Cada fatura agrupa as compras do período; as compras individuais ficam em `transactions` com FK pra cá.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `data_source_id` | uuid | FK data_sources, NOT NULL | Fonte do cartão de crédito |
+| `reference_month` | text | NOT NULL | Mês de referência no formato "YYYY-MM" |
+| `closing_date` | date | nullable | Data de fechamento da fatura |
+| `due_date` | date | nullable | Data de vencimento |
+| `total_amount` | numeric(15,2) | NOT NULL | Valor total da fatura |
+| `status` | text | NOT NULL, default 'open' | open, paid, overdue, disputed |
+| `paid_by_transaction_id` | uuid | FK transactions, nullable | Transação bancária que pagou esta fatura |
+| `paid_at` | date | nullable | Data do pagamento |
+| `document_id` | uuid | FK documents, nullable | PDF da fatura |
+| `metadata` | jsonb | NOT NULL, default '{}' | |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+| `updated_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_cc_invoices_org` em `(organization_id, status)`
+- `unique(data_source_id, reference_month)` — uma fatura por cartão por mês
+
+**RLS:** filtrar por `organization_id`.
+
+**Nota de design:** compras do cartão ficam em `transactions` com `credit_card_invoice_id` e `date` = data da compra. O pagamento da fatura no banco é uma transação com `category_id` = categoria `transfer` — não é despesa nova, evita dupla contagem na DRE.
+
+---
+
+## Tabela 18: `organization_facts`
+
+Memória curada do expert sobre a organização. Cresce só com confirmação humana. Fatos ativos são incluídos no system prompt do expert para personalizar respostas.
+
+| Coluna | Tipo | Constraint | Descrição |
+|---|---|---|---|
+| `id` | uuid | PK, default gen_random_uuid() | |
+| `organization_id` | uuid | FK organizations, NOT NULL, ON DELETE CASCADE | |
+| `type` | text | NOT NULL | person, process, preference, context, other |
+| `key` | text | NOT NULL | Rótulo curto ("responsável pelo comercial", "faturamento típico mensal") |
+| `value` | text | NOT NULL | Conteúdo do fato ("Pedro Silva cuida de toda a área comercial") |
+| `source_conversation_id` | uuid | FK conversations, nullable | Conversa onde foi mencionado |
+| `source_message_id` | uuid | FK messages, nullable | Mensagem específica |
+| `suggested_by_expert` | boolean | NOT NULL, default true | false = inserido diretamente pelo usuário |
+| `confirmed_by_user_id` | uuid | FK auth.users, nullable | Quem confirmou |
+| `confirmed_at` | timestamptz | nullable | Quando foi confirmado |
+| `archived_at` | timestamptz | nullable | Soft delete |
+| `metadata` | jsonb | NOT NULL, default '{}' | |
+| `created_at` | timestamptz | NOT NULL, default now() | |
+| `updated_at` | timestamptz | NOT NULL, default now() | |
+
+**Índices:**
+- `idx_org_facts_active` em `(organization_id, archived_at) WHERE archived_at IS NULL`
+- `idx_org_facts_type` em `(organization_id, type)`
+
+**RLS:** filtrar por `organization_id`.
+
+**Nota de design:** fatos com `confirmed_at IS NULL` são "pendentes de confirmação" — o expert detectou algo digno de lembrar e propôs ao usuário, mas ainda não foi confirmado. Só fatos confirmados entram no system prompt. Isso é o princípio 15 do CLAUDE.md: memória híbrida com confirmação humana obrigatória.
+
+---
+
 ## Políticas de Row Level Security (RLS) — Padrão
 
 Toda tabela com `organization_id` segue o mesmo padrão de RLS:
@@ -462,12 +680,8 @@ Estas tabelas existem no roadmap mas serão especificadas quando suas fases cheg
 
 | Tabela | Fase | Descrição |
 |---|---|---|
-| `categorization_rules` | Fase 3 | Regras customizadas de categorização criadas pelo usuário |
 | `invoices` | Fase 7 | NF-e estruturadas (entradas e saídas via SEFAZ) |
 | `acquirer_sales` | Fase 8 | Vendas detalhadas das adquirentes (Stone, Cielo, etc.) antes de virar transaction |
-| `credit_card_invoices` | Fase 8 | Faturas de cartão de crédito (corporativo) |
-| `fixed_assets` | Fase 6 | Imobilizado pra construir BP |
-| `loans` | Fase 6 | Empréstimos e financiamentos pra BP |
 | `forecasts` | Fase 6 | Projeções de fluxo de caixa |
 | `budgets` | Posterior | Orçamentos anuais |
 | `scenarios` | Posterior | Cenários de simulação |
@@ -481,4 +695,5 @@ Quando uma dessas fases chegar, atualizamos este documento.
 
 ## Histórico de versões
 
-- **v1.0** — schema inicial das 11 tabelas centrais (Fase 1)
+- **v1.0** — schema inicial das 11 tabelas centrais
+- **v2.0** — expandido para 18 tabelas: adicionadas `categorization_rules`, `fixed_assets`, `loans`, `equity_movements`, `inventory_snapshots`, `credit_card_invoices`, `organization_facts`. Diagrama de relações atualizado. Motivação: consolidar todas as tabelas necessárias para as Fases 1–6 num schema único antes de iniciar a implementação.
