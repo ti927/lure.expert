@@ -195,18 +195,33 @@ export default function ReviewClient({ documentId, initialData }: Props) {
     setImporting(true)
     try {
       const result = await approveAndInsert(documentId)
-      if (result.inserted > 0) {
-        toast.success(`${result.inserted} transações importadas com sucesso`)
-      }
-      if (result.skipped > 0) {
-        toast.warning(`${result.skipped} linha${result.skipped > 1 ? 's ignoradas' : ' ignorada'} por dados incompletos`)
-      }
+
       // Reflete aprovação das pendentes no estado local
       setRows(prev =>
         prev.map(r => r.status === 'pending' ? { ...r, status: 'approved' } : r),
       )
-    } catch {
-      toast.error('Erro ao importar transações')
+
+      if (result.inserted > 0) {
+        toast.success(
+          `${result.inserted} transaç${result.inserted === 1 ? 'ão importada' : 'ões importadas'} com sucesso`,
+        )
+      } else if (result.total === 0) {
+        toast.info('Todas as linhas já foram rejeitadas — nenhuma transação a importar.')
+      } else {
+        // inserted=0 mas havia linhas — provavelmente dados incompletos
+        toast.warning(
+          `Nenhuma transação importada. Verifique se as linhas têm data, valor e direção preenchidos.`,
+        )
+      }
+
+      if (result.skipped > 0) {
+        toast.warning(
+          `${result.skipped} linha${result.skipped > 1 ? 's ignoradas' : ' ignorada'} por dados incompletos (sem data, valor ou direção).`,
+        )
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Erro ao importar transações'
+      toast.error(msg)
     } finally {
       setImporting(false)
     }

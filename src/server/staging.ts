@@ -173,6 +173,8 @@ export async function approveAndInsert(documentId: string) {
       .returning()
   }
 
+  if (!dataSource) throw new Error('Não foi possível criar a fonte de dados. Tente novamente.')
+
   // Fetch all approved rows
   const approved = await db
     .select()
@@ -187,7 +189,7 @@ export async function approveAndInsert(documentId: string) {
   const valid = approved.filter(r => r.date && r.amount && r.direction)
   const skipped = approved.length - valid.length
 
-  if (valid.length === 0) return { inserted: 0, skipped }
+  if (valid.length === 0) return { inserted: 0, skipped, total: approved.length }
 
   // Insert in batches of 100
   const BATCH = 100
@@ -212,5 +214,5 @@ export async function approveAndInsert(documentId: string) {
   }
 
   revalidatePath(`/upload/${documentId}/review`)
-  return { inserted: valid.length, skipped }
+  return { inserted: valid.length, skipped, total: approved.length }
 }
