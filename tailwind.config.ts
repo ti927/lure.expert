@@ -14,7 +14,7 @@ const config: Config = {
         mono: ["var(--font-inter-mono)", "monospace"],
       },
       colors: {
-        /* shadcn/ui — CSS variables */
+        /* shadcn/ui — canais HSL sem wrapper (padrão Tailwind v3 + shadcn) */
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         card: {
@@ -56,11 +56,11 @@ const config: Config = {
           ring: "hsl(var(--sidebar-ring))",
         },
 
-        /* Cores semânticas Lure — use com text-positive, bg-negative, etc. */
-        positive: "var(--color-positive)",
-        negative: "var(--color-negative)",
-        alert: "var(--color-alert)",
-        info: "var(--color-info)",
+        /* Cores semânticas Lure — suportam /opacity: text-positive/80 */
+        positive: "hsl(var(--color-positive))",
+        negative: "hsl(var(--color-negative))",
+        alert: "hsl(var(--color-alert))",
+        info: "hsl(var(--color-info))",
 
         /* Paleta de marca completa para referência direta */
         brand: {
