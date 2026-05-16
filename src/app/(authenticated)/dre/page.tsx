@@ -9,7 +9,7 @@ export default function DrePage() {
         <p className="text-sm text-muted-foreground mt-1">Demonstrativo de Resultado do Exercício</p>
       </div>
       <EmptyState
-        icon={BarChart3}
+        icon={<BarChart3 className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
         title="DRE indisponível"
         description="Categorize suas transações para que o expert monte o demonstrativo automaticamente."
       />

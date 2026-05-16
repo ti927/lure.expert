@@ -9,7 +9,7 @@ export default function FluxoPage() {
         <p className="text-sm text-muted-foreground mt-1">Projeção e histórico de entradas e saídas</p>
       </div>
       <EmptyState
-        icon={TrendingUp}
+        icon={<TrendingUp className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
         title="Fluxo de caixa indisponível"
         description="Conecte seu banco para que o expert projete o fluxo de caixa dos próximos 90 dias."
       />

@@ -41,7 +41,7 @@ export default async function DashboardPage() {
       </div>
 
       <EmptyState
-        icon={Landmark}
+        icon={<Landmark className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
         title="Nenhuma conta conectada"
         description="Conecte seu banco para começar a ver suas movimentações automaticamente."
       />

@@ -339,7 +339,7 @@ export default function ComponentsStyleGuidePage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card className="shadow-sm">
               <EmptyState
-                icon={Landmark}
+                icon={<Landmark className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
                 title="Nenhuma conta conectada"
                 description="Conecte seu banco para começar a ver suas movimentações automaticamente."
                 action={{ label: "Conectar Banco", onClick: () => {} }}
@@ -347,7 +347,7 @@ export default function ComponentsStyleGuidePage() {
             </Card>
             <Card className="shadow-sm">
               <EmptyState
-                icon={Building2}
+                icon={<Building2 className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
                 title="Sem transações no período"
                 description="Nenhuma movimentação encontrada para o filtro selecionado."
               />

@@ -9,7 +9,7 @@ export default function ContasPage() {
         <p className="text-sm text-muted-foreground mt-1">Bancos e cartões conectados</p>
       </div>
       <EmptyState
-        icon={Landmark}
+        icon={<Landmark className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
         title="Nenhuma conta conectada"
         description="Conecte seu banco via Open Finance para sincronizar extratos automaticamente."
       />
