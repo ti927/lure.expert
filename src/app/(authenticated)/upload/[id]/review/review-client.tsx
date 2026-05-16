@@ -305,25 +305,51 @@ export default function ReviewClient({ documentId, initialData }: Props) {
         </p>
       </div>
 
-      {/* Barra de resumo */}
-      <div className="flex flex-wrap gap-6 text-sm">
-        <span>
-          <span className="font-semibold text-foreground">{rows.length}</span>{' '}
-          <span className="text-muted-foreground">linhas</span>
-        </span>
-        <span>
-          <span className="font-semibold text-amber-600">{pendingCount}</span>{' '}
-          <span className="text-muted-foreground">pendentes</span>
-        </span>
-        <span>
-          <span className="font-semibold text-emerald-600">{approvedCount}</span>{' '}
-          <span className="text-muted-foreground">aprovadas</span>
-        </span>
-        {rejectedCount > 0 && (
+      {/* Barra de resumo + paginação no topo */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap gap-6 text-sm">
           <span>
-            <span className="font-semibold text-rose-600">{rejectedCount}</span>{' '}
-            <span className="text-muted-foreground">rejeitadas</span>
+            <span className="font-semibold text-foreground">{rows.length}</span>{' '}
+            <span className="text-muted-foreground">linhas</span>
           </span>
+          <span>
+            <span className="font-semibold text-amber-600">{pendingCount}</span>{' '}
+            <span className="text-muted-foreground">pendentes</span>
+          </span>
+          <span>
+            <span className="font-semibold text-emerald-600">{approvedCount}</span>{' '}
+            <span className="text-muted-foreground">aprovadas</span>
+          </span>
+          {rejectedCount > 0 && (
+            <span>
+              <span className="font-semibold text-rose-600">{rejectedCount}</span>{' '}
+              <span className="text-muted-foreground">rejeitadas</span>
+            </span>
+          )}
+        </div>
+
+        {totalPages > 1 && (
+          <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
+            <span className="tabular-nums">
+              {currentPage}/{totalPages}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={currentPage === 1}
+              onClick={() => { setCurrentPage(p => p - 1); setSelected(new Set()) }}
+            >
+              <ChevronLeft size={14} />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={currentPage === totalPages}
+              onClick={() => { setCurrentPage(p => p + 1); setSelected(new Set()) }}
+            >
+              <ChevronRight size={14} />
+            </Button>
+          </div>
         )}
       </div>
 
