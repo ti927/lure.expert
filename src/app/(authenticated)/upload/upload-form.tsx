@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { createDocumentRecord } from '@/server/documents'
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import { UploadCloud, FileText, CheckCircle2, AlertCircle, X } from 'lucide-react'
+import { UploadCloud, FileText, CheckCircle2, AlertCircle, X, ArrowRight } from 'lucide-react'
 
 const SOURCE_TYPES = [
   { value: 'bank', label: 'Extrato bancário', docType: 'statement' },
@@ -156,16 +157,22 @@ export function UploadForm({ orgId }: { orgId: string }) {
           <div>
             <p className="font-semibold text-foreground">Arquivo enviado</p>
             <p className="text-sm text-muted-foreground mt-1">{file?.name}</p>
-            {documentId && (
-              <p className="mt-1 font-mono text-xs text-muted-foreground">ID: {documentId}</p>
-            )}
           </div>
           <p className="text-sm text-muted-foreground">
-            expert iniciará a extração em instantes.
+            expert está extraindo as linhas. Em alguns instantes você poderá revisá-las.
           </p>
-          <Button variant="outline" size="sm" onClick={reset}>
-            Enviar outro arquivo
-          </Button>
+          <div className="flex gap-3">
+            {documentId && (
+              <Button asChild>
+                <Link href={`/upload/${documentId}/review`}>
+                  Revisar linhas <ArrowRight size={15} className="ml-1" />
+                </Link>
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={reset}>
+              Enviar outro arquivo
+            </Button>
+          </div>
         </CardContent>
       </Card>
     )
