@@ -135,8 +135,10 @@ o que está documentado, PARAR e me consultar.
 
 **Fase 0.5 — Fundações de Design e Voz (em andamento)**
 
+Concluído:
+- 0.5.1 Design Tokens: `tailwind.config.ts` + `globals.css` (HSL) + `/style-guide` ✅
+
 Pendente:
-- 0.5.1 Design Tokens: configurar `tailwind.config.ts` + criar `/style-guide`
 - 0.5.2 Biblioteca de componentes: shadcn/ui base + financeiros (CurrencyDisplay, KPICard, DataTable) + estados (EmptyState, LoadingState, ErrorState)
 - 0.5.3 Voz do expert: criar `docs/AI_VOICE.md`
 - 0.5.4 Padrões de estado: criar `docs/STATE_PATTERNS.md` + componentes em `/components/states`
