@@ -121,11 +121,26 @@ o que está documentado, PARAR e me consultar.
   pra terceiro) — fora do escopo
 
 ## Fase atual
-Iniciando Fase 0 — Scaffolding. Objetivo: Next.js 14 + Supabase + login +
-dashboard básico no ar em Vercel.
 
-Subdivisão da fase em sessões está em `docs/GUIA_OPERACIONAL.md` (Parte 4).
-A primeira sessão (0.1) é a inicialização do projeto Next.js + conexão Supabase.
+**Fase 0 — Scaffolding (em andamento)**
+
+Concluído:
+- Sessão 0.1: projeto Next.js 14 + TypeScript + Tailwind + shadcn/ui inicializado
+- Sessão 0.2: `/login` (e-mail + senha), `/dashboard` protegido, middleware Supabase SSR
+- README.md com instruções de setup
+- Repositório Git inicializado e publicado em https://github.com/ti927/lure.expert.git (branch `main`)
+
+Pendente na Fase 0:
+- Sessão 0.3: conectar Vercel ao repositório e validar deploy na URL pública
+
+**Próximo objetivo (após deploy Vercel): Fase 0.5 — Fundações de Design e Voz**
+- 0.5.1 Design Tokens: configurar `tailwind.config.ts` + criar `/style-guide`
+- 0.5.2 Biblioteca de componentes: shadcn/ui base + financeiros (CurrencyDisplay, KPICard, DataTable) + estados (EmptyState, LoadingState, ErrorState)
+- 0.5.3 Voz do expert: criar `docs/AI_VOICE.md`
+- 0.5.4 Padrões de estado: criar `docs/STATE_PATTERNS.md` + componentes em `/components/states`
+- 0.5.5 Arquitetura de informação: layout principal com sidebar + chat flutuante
+
+Detalhamento das sessões em `docs/GUIA_OPERACIONAL.md` (Parte 4).
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert
