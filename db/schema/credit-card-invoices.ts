@@ -2,6 +2,8 @@ import { pgTable, uuid, text, numeric, date, jsonb, timestamp, unique } from 'dr
 import { sql } from 'drizzle-orm'
 import { organizations } from './organizations'
 import { dataSources } from './data-sources'
+import { documents } from './documents'
+import { transactions } from './transactions'
 
 const tz = { withTimezone: true }
 
@@ -22,11 +24,9 @@ export const creditCardInvoices = pgTable(
     totalAmount: numeric('total_amount', { precision: 15, scale: 2 }).notNull(),
     // open | paid | overdue | disputed
     status: text('status').notNull().default('open'),
-    // FK pra transactions adicionada via SQL após criar a tabela transactions
-    paidByTransactionId: uuid('paid_by_transaction_id'),
+    paidByTransactionId: uuid('paid_by_transaction_id').references(() => transactions.id),
     paidAt: date('paid_at'),
-    // FK pra documents adicionada via SQL após criar a tabela documents
-    documentId: uuid('document_id'),
+    documentId: uuid('document_id').references(() => documents.id),
     metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp('created_at', tz).notNull().default(sql`now()`),
     updatedAt: timestamp('updated_at', tz).notNull().default(sql`now()`),

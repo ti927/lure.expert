@@ -2,6 +2,7 @@ import { pgTable, uuid, text, numeric, date, jsonb, timestamp } from 'drizzle-or
 import { sql } from 'drizzle-orm'
 import { organizations } from './organizations'
 import { categories } from './categories'
+import { transactions } from './transactions'
 
 const tz = { withTimezone: true }
 
@@ -18,8 +19,7 @@ export const equityMovements = pgTable('equity_movements', {
   date: date('date').notNull(),
   description: text('description').notNull(),
   categoryId: uuid('category_id').references(() => categories.id),
-  // FK pra transactions adicionada na sessão 1.4
-  transactionId: uuid('transaction_id'),
+  transactionId: uuid('transaction_id').references(() => transactions.id),
   metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp('created_at', tz).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', tz).notNull().default(sql`now()`),

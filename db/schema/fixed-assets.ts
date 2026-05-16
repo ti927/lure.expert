@@ -2,6 +2,7 @@ import { pgTable, uuid, text, numeric, integer, date, jsonb, timestamp } from 'd
 import { sql } from 'drizzle-orm'
 import { organizations } from './organizations'
 import { categories } from './categories'
+import { transactions } from './transactions'
 
 const tz = { withTimezone: true }
 
@@ -23,8 +24,7 @@ export const fixedAssets = pgTable('fixed_assets', {
   status: text('status').notNull().default('active'),
   disposedAt: date('disposed_at'),
   disposalValue: numeric('disposal_value', { precision: 15, scale: 2 }),
-  // FK pra transactions adicionada na sessão 1.4 quando a tabela existir
-  transactionId: uuid('transaction_id'),
+  transactionId: uuid('transaction_id').references(() => transactions.id),
   metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp('created_at', tz).notNull().default(sql`now()`),
   updatedAt: timestamp('updated_at', tz).notNull().default(sql`now()`),

@@ -2,6 +2,7 @@ import { pgTable, uuid, text, bigint, jsonb, timestamp } from 'drizzle-orm/pg-co
 import { sql } from 'drizzle-orm'
 import { organizations } from './organizations'
 import { dataSources } from './data-sources'
+import { templates } from './templates'
 
 const tz = { withTimezone: true }
 
@@ -22,8 +23,7 @@ export const documents = pgTable('documents', {
   // template | llm | manual
   extractionMethod: text('extraction_method'),
   extractedData: jsonb('extracted_data'),
-  // FK pra templates adicionada na sessão 1.5 quando a tabela existir
-  templateId: uuid('template_id'),
+  templateId: uuid('template_id').references(() => templates.id),
   uploadedByUserId: uuid('uploaded_by_user_id'),
   metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
   // sem updated_at por design: documentos não são alterados após upload
