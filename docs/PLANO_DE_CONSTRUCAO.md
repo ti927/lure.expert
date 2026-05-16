@@ -425,14 +425,35 @@ Esse documento especifica, pra cada uma das 11 tabelas:
 - Suporte a Excel/CSV via código (parser determinístico)
 - Suporte a PDF via LLM (extrai estrutura)
 - Sistema de "templates": quando o mesmo formato aparece de novo, reusa parser sem chamar LLM
-- Tela de "revisão" das linhas extraídas antes de gravar
+- Tela de "revisão" das linhas extraídas antes de gravar — **com edição em lote**
 - Histórico de uploads por organização
 
+**Decisões tomadas na implementação:**
+
+**Parser determinístico (Excel/CSV):**
+- Biblioteca: SheetJS (`xlsx`)
+- Mapeamento de colunas por heurística de nomes (regex): data, valor, crédito, débito, descrição
+- Direção (`inflow`/`outflow`) determinada por: (a) colunas separadas crédito/débito, ou (b) sinal do valor único
+- **Regra por `source_type`:** alguns tipos têm direção conhecida independente do arquivo.
+  `credit_card` → todas as linhas são `outflow` (compras na fatura são sempre saídas).
+  Extensível via `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`.
+
+**Tela de revisão `/upload/[id]/review`:**
+- Lista paginada de todas as linhas do staging com: data, valor, direção, descrição, status
+- **Edição individual:** inline por campo (data, valor, direção, descrição)
+- **Edição em lote via checkbox:**
+  - Selecionar todos / selecionar página
+  - Aprovar selecionados
+  - Rejeitar selecionados
+  - **Inverter direção dos selecionados** (inflow ↔ outflow) — essencial para corrigir faturas de cartão e extratos com convenção invertida
+- Ao aprovar, linhas viram `transactions` definitivas
+
 **Prompt template:**
-> *"Vamos construir o pipeline de ingestão de arquivos. Quero que: (1) Tenha uma página /upload onde o usuário arrasta um arquivo Excel, CSV ou PDF. (2) O arquivo seja salvo no Supabase Storage. (3) Um job Inngest seja disparado pra processar. (4) Pra Excel/CSV, parser determinístico em Node identifica colunas e extrai linhas. (5) Pra PDF, usa Claude (Sonnet) pra extrair as linhas em JSON estruturado. (6) Cada linha extraída vira um registro candidato em uma tabela transactions_staging. (7) Uma tela /upload/[id]/review mostra os candidatos pro usuário aprovar antes de virarem transactions definitivas. (8) Quando o usuário aprova, geramos um 'template' — um objeto JSON que descreve o formato do arquivo — e salvamos em templates. (9) Próximo upload, o sistema tenta combinar com um template existente antes de chamar LLM. Trate erros explicitamente: arquivo corrompido, formato não reconhecido, etc. Logue tudo no agent_events."*
+> *"Vamos construir o pipeline de ingestão de arquivos. Quero que: (1) Tenha uma página /upload onde o usuário arrasta um arquivo Excel, CSV ou PDF. (2) O arquivo seja salvo no Supabase Storage. (3) Um job Inngest seja disparado pra processar. (4) Pra Excel/CSV, parser determinístico em Node identifica colunas e extrai linhas. (5) Pra PDF, usa Claude (Sonnet) pra extrair as linhas em JSON estruturado. (6) Cada linha extraída vira um registro candidato em uma tabela transactions_staging. (7) Uma tela /upload/[id]/review mostra os candidatos pro usuário revisar antes de virarem transactions definitivas — com edição inline e edição em lote (aprovar/rejeitar/inverter direção). (8) Quando o usuário aprova, geramos um 'template' — um objeto JSON que descreve o formato do arquivo — e salvamos em templates. (9) Próximo upload, o sistema tenta combinar com um template existente antes de chamar LLM. Trate erros explicitamente: arquivo corrompido, formato não reconhecido, etc. Logue tudo no agent_events."*
 
 **Definition of Done:**
 - Você sobe um relatório de AP do Omie (Excel) e ele aparece como 200 linhas pra revisão
+- Na tela de revisão, consegue selecionar todas as linhas e inverter a direção em lote
 - Você sobe um PDF de extrato bancário e ele também aparece (mais lento)
 - Sobe o mesmo formato uma segunda vez e ele processa sem chamar LLM (verifica nos logs)
 - Erros mostram mensagem amigável

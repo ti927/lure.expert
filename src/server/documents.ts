@@ -82,6 +82,7 @@ export async function createDocumentRecord(
       organizationId,
       storagePath,
       mimeType,
+      sourceType,
       signedUrl: signedData?.signedUrl ?? null,
     },
   })

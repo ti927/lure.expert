@@ -181,11 +181,15 @@ Sessões concluídas:
   (date/amount/credit/debit/description). URL assinada gerada no server action e passada no evento Inngest.
   `processDocument` atualizado: baixa arquivo via signed URL, parseia, insere em staging em lotes de 100.
   PDFs/imagens redirecionados para `pending_llm` (Fase 2.4+). Testado: 160 linhas extraídas, 0 warnings.
+  **Regra de direção por source_type:** `credit_card` → força todas as linhas como `outflow`. Extensível via
+  `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`. `sourceType` agora é passado no evento Inngest.
 
 Próxima sessão: **2.4 — Tela de revisão do staging**
 - Página `/upload/[id]/review` lista as linhas do staging com data, valor, direção e descrição
-- Usuário aprova/rejeita linhas individualmente ou em lote
-- DoD: após upload de Excel, navegar para a tela de revisão e ver as 160 linhas paginadas
+- Ações individuais: editar campo inline (data, valor, direção, descrição)
+- Ações em lote via checkbox: aprovar selecionados, rejeitar selecionados, **inverter direção dos selecionados**
+- DoD: após upload de Excel, navegar para a tela de revisão, ver as linhas paginadas, conseguir corrigir
+  direção em lote e aprovar tudo de uma vez
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert

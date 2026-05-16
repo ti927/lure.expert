@@ -18,13 +18,17 @@ export const processDocument = inngest.createFunction(
     triggers: [{ event: 'document/uploaded' }],
   },
   async ({ event, step }) => {
-    const { documentId, organizationId, mimeType, signedUrl } = event.data as {
+    const { documentId, organizationId, mimeType, sourceType, signedUrl } = event.data as {
       documentId: string
       organizationId: string
       storagePath: string
       mimeType: string
+      sourceType: string
       signedUrl: string | null
     }
+
+    // source types onde toda linha é saída por definição
+    const FORCE_OUTFLOW_SOURCES = new Set(['credit_card'])
 
     await step.run('mark-processing', async () => {
       await db
@@ -79,7 +83,9 @@ export const processDocument = inngest.createFunction(
             rawData: row.rawData,
             date: row.date,
             amount: row.amount !== null ? String(row.amount) : null,
-            direction: row.direction,
+            direction: FORCE_OUTFLOW_SOURCES.has(sourceType)
+              ? 'outflow'
+              : row.direction,
             description: row.description,
             status: 'pending' as const,
           })),
