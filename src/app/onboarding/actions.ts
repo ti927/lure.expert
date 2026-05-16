@@ -61,24 +61,37 @@ export async function createOrganization(
 
   const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
 
-  const [org] = await db
-    .insert(organizations)
-    .values({
-      name,
-      cnpj: cnpj || null,
-      slug,
-      settings: { sector: sector || null },
-      subscriptionStatus: 'trial',
-      trialEndsAt,
-    })
-    .returning()
+  try {
+    await db.transaction(async (tx) => {
+      const [org] = await tx
+        .insert(organizations)
+        .values({
+          name,
+          cnpj: cnpj || null,
+          slug,
+          settings: { sector: sector || null },
+          subscriptionStatus: 'trial',
+          trialEndsAt,
+        })
+        .returning()
 
-  await db.insert(memberships).values({
-    userId: user.id,
-    organizationId: org.id,
-    role: 'owner',
-    acceptedAt: new Date(),
-  })
+      await tx.insert(memberships).values({
+        userId: user.id,
+        organizationId: org.id,
+        role: 'owner',
+        acceptedAt: new Date(),
+      })
+    })
+  } catch (err) {
+    const pg = err as { code?: string; constraint?: string }
+    if (pg.code === '23505') {
+      if (pg.constraint?.includes('cnpj')) {
+        return { error: 'Este CNPJ já está cadastrado.' }
+      }
+      return { error: 'Nome de empresa já utilizado. Tente outro.' }
+    }
+    return { error: 'Erro ao criar empresa. Tente novamente.' }
+  }
 
   redirect('/dashboard')
 }

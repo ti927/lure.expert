@@ -144,7 +144,7 @@ o que está documentado, PARAR e me consultar.
 
 **Fase 1 — Schema de Dados e Multi-tenancy**
 
-> **PRÓXIMA SESSÃO: 1.8 — Teste de isolamento manual de RLS**
+> **PRÓXIMA SESSÃO: 1.8 — Teste de isolamento manual de RLS em todas as tabelas + polimento**
 
 Sessões concluídas:
 - ✅ **1.1** — Drizzle ORM + extensões (pgcrypto, vector, pg_trgm) + `organizations`, `memberships`, `data_sources` + RLS
@@ -153,11 +153,13 @@ Sessões concluídas:
 - ✅ **1.4** — `credit_card_invoices`, `documents`, `transactions` + RLS + HNSW + FKs circulares
 - ✅ **1.5** — `templates`, `conversations`, `messages`, `organization_facts`, `agent_events` + RLS
 - ✅ **1.6** — Seed plano de contas (52 categorias DRE padrão) + trigger automático no INSERT de organizations
-- ✅ **1.7** — Onboarding (`/onboarding`): cria org + membership; layout autenticado checa
-  membership via Drizzle; AppShell/Sidebar com prop `user`; avatar + dropdown
-  (Configurações / Sair); `/configuracoes` real com OrgForm editável.
+- ✅ **1.7** — Onboarding (`/onboarding`): cria org + membership (transação atômica com
+  tratamento de constraint único); layout autenticado checa membership via Drizzle;
+  AppShell/Sidebar com prop `user`; avatar + dropdown (Configurações / Sair);
+  `/configuracoes` real com OrgForm editável.
   Extras: zod instalado, path alias `@/db` no tsconfig, referências circulares
-  TypeScript corrigidas nos schemas, `dynamic = 'force-dynamic'` no layout
+  TypeScript corrigidas nos schemas, `dynamic = 'force-dynamic'` no layout,
+  `EmptyState.icon` trocado de `LucideIcon` para `React.ReactNode` (fix RSC boundary)
 
 Sessões pendentes:
 - **1.8** — Teste de isolamento manual de RLS em todas as tabelas + polimento
