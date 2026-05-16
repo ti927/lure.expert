@@ -176,9 +176,16 @@ Sessões concluídas:
   `INNGEST_DEV=1` no `.env.local` para dev local. Chaves de produção comentadas no `.env.local` (adicionar no Vercel).
   Dev Server: `npx inngest-cli@latest dev -u http://localhost:3000/api/inngest`
 
-Próxima sessão: **2.3 — Parser Excel/CSV**
-- Parser determinístico para Excel/CSV: lê arquivo do Storage, identifica colunas, extrai linhas em `transactions_staging`
-- DoD: subir Excel com transações, ver linhas na tabela de staging
+- ✅ **2.3** — Parser Excel/CSV: tabela `transactions_staging` criada (Drizzle + migration `0007_transactions_staging.sql` + RLS).
+  Parser determinístico em `src/lib/parsers/excel-csv.ts` (SheetJS/xlsx) com heurística de mapeamento de colunas
+  (date/amount/credit/debit/description). URL assinada gerada no server action e passada no evento Inngest.
+  `processDocument` atualizado: baixa arquivo via signed URL, parseia, insere em staging em lotes de 100.
+  PDFs/imagens redirecionados para `pending_llm` (Fase 2.4+). Testado: 160 linhas extraídas, 0 warnings.
+
+Próxima sessão: **2.4 — Tela de revisão do staging**
+- Página `/upload/[id]/review` lista as linhas do staging com data, valor, direção e descrição
+- Usuário aprova/rejeita linhas individualmente ou em lote
+- DoD: após upload de Excel, navegar para a tela de revisão e ver as 160 linhas paginadas
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert

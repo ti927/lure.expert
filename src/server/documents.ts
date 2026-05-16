@@ -70,9 +70,20 @@ export async function createDocumentRecord(
     })
     .returning({ id: documents.id })
 
+  // URL assinada válida por 1h — permite que o job Inngest baixe o arquivo sem service role
+  const { data: signedData } = await supabase.storage
+    .from('documents')
+    .createSignedUrl(storagePath, 3600)
+
   await inngest.send({
     name: 'document/uploaded',
-    data: { documentId: doc.id, organizationId },
+    data: {
+      documentId: doc.id,
+      organizationId,
+      storagePath,
+      mimeType,
+      signedUrl: signedData?.signedUrl ?? null,
+    },
   })
 
   return { success: true, documentId: doc.id }
