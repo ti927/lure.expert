@@ -74,3 +74,33 @@ icon={<Landmark className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
 - `src/app/(authenticated)/dre/page.tsx`
 - `src/app/(authenticated)/fluxo/page.tsx`
 - `src/app/style-guide/components/page.tsx`
+
+---
+
+## Decisão 4 — Policy SELECT de memberships sem auto-referência (Sessão 1.8)
+
+**Contexto:** A policy SELECT original de `memberships` continha uma subquery na própria tabela:
+```sql
+-- ERRADO — causa recursão infinita
+USING (
+  user_id = auth.uid()
+  OR organization_id IN (
+    SELECT organization_id FROM memberships   -- ← lê memberships dentro de policy de memberships
+    WHERE user_id = auth.uid() AND role IN ('owner', 'admin') ...
+  )
+);
+```
+Quando qualquer outra policy (ex: `organizations`) fazia subquery em `memberships`, o Postgres
+entrava em loop infinito avaliando a policy de `memberships` que por sua vez lia `memberships`.
+
+**Decisão:** Simplificar para apenas `user_id = auth.uid()`:
+```sql
+-- CORRETO — sem auto-referência
+USING (user_id = auth.uid());
+```
+
+**Impacto:** Cada usuário vê somente suas próprias memberships. Admins que precisam ver
+memberships de outros usuários da org devem usar a conexão service_role (que bypassa RLS) —
+o que já é o caso em todas as server actions via Drizzle.
+
+**Arquivo:** `db/migrations/rls/` (aplicado diretamente no Supabase Studio na sessão 1.8)
