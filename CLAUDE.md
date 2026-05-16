@@ -142,9 +142,7 @@ o que está documentado, PARAR e me consultar.
 
 ## Fase atual
 
-**Fase 1 — Schema de Dados e Multi-tenancy**
-
-> **PRÓXIMA SESSÃO: 1.8 — Teste de isolamento manual de RLS em todas as tabelas + polimento**
+**✅ Fase 1 — Schema de Dados e Multi-tenancy (CONCLUÍDA)**
 
 Sessões concluídas:
 - ✅ **1.1** — Drizzle ORM + extensões (pgcrypto, vector, pg_trgm) + `organizations`, `memberships`, `data_sources` + RLS
@@ -157,15 +155,21 @@ Sessões concluídas:
   tratamento de constraint único); layout autenticado checa membership via Drizzle;
   AppShell/Sidebar com prop `user`; avatar + dropdown (Configurações / Sair);
   `/configuracoes` real com OrgForm editável.
-  Extras: zod instalado, path alias `@/db` no tsconfig, referências circulares
-  TypeScript corrigidas nos schemas, `dynamic = 'force-dynamic'` no layout,
-  `EmptyState.icon` trocado de `LucideIcon` para `React.ReactNode` (fix RSC boundary)
+- ✅ **1.8** — Teste de isolamento RLS: 18/18 tabelas passaram. Policies faltantes das sessões
+  1.4+1.5 criadas em `db/migrations/rls/0005_rls_*.sql`. Fix de recursão infinita na policy
+  SELECT de `memberships` (removida auto-referência, simplificada para `user_id = auth.uid()`).
 
-Sessões pendentes:
-- **1.8** — Teste de isolamento manual de RLS em todas as tabelas + polimento
-
-Schema completo: 18 tabelas, migrations em `/db/migrations/`, RLS ativa em todas.
+Schema completo: 18 tabelas, migrations em `/db/migrations/`, RLS ativa e testada em todas.
 Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
+
+---
+
+## Próxima fase
+
+**Fase 2 — Pipeline de Ingestão de Arquivos**
+
+Ver detalhamento completo em `docs/GUIA_OPERACIONAL.md` (Parte 4, Fase 2).
+Primeira sessão: **2.1 — Upload + Storage** (página `/upload`, drag-and-drop, registro em `documents`).
 
 Detalhamento completo em `docs/GUIA_OPERACIONAL.md` (Parte 4).
 
