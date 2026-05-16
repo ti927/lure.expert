@@ -144,7 +144,7 @@ o que está documentado, PARAR e me consultar.
 
 **Fase 1 — Schema de Dados e Multi-tenancy**
 
-> **PRÓXIMA SESSÃO: 1.7 — Telas admin de organização**
+> **PRÓXIMA SESSÃO: 1.8 — Teste de isolamento manual de RLS**
 
 Sessões concluídas:
 - ✅ **1.1** — Drizzle ORM + extensões (pgcrypto, vector, pg_trgm) + `organizations`, `memberships`, `data_sources` + RLS
@@ -153,10 +153,13 @@ Sessões concluídas:
 - ✅ **1.4** — `credit_card_invoices`, `documents`, `transactions` + RLS + HNSW + FKs circulares
 - ✅ **1.5** — `templates`, `conversations`, `messages`, `organization_facts`, `agent_events` + RLS
 - ✅ **1.6** — Seed plano de contas (52 categorias DRE padrão) + trigger automático no INSERT de organizations
+- ✅ **1.7** — Onboarding (`/onboarding`): cria org + membership; layout autenticado checa
+  membership via Drizzle; AppShell/Sidebar com prop `user`; avatar + dropdown
+  (Configurações / Sair); `/configuracoes` real com OrgForm editável.
+  Extras: zod instalado, path alias `@/db` no tsconfig, referências circulares
+  TypeScript corrigidas nos schemas, `dynamic = 'force-dynamic'` no layout
 
 Sessões pendentes:
-- **1.7** — Tela de onboarding (criação de organização na 1ª vez que o usuário loga) +
-  tela de configurações real + avatar/iniciais na sidebar
 - **1.8** — Teste de isolamento manual de RLS em todas as tabelas + polimento
 
 Schema completo: 18 tabelas, migrations em `/db/migrations/`, RLS ativa em todas.
