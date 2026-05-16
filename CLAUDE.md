@@ -90,7 +90,7 @@ o que está documentado, PARAR e me consultar.
 - NUNCA expor `service_role` key pro client
 
 ## Estrutura de pastas
-- `/app/(authenticated)` — rotas protegidas (dashboard, transacoes, dre, fluxo, contas, configuracoes)
+- `/app/(authenticated)` — rotas protegidas (dashboard, transacoes, dre, fluxo, contas, configuracoes, upload)
 - `/app/(public)` — rotas públicas (login — ainda em `/app/login` por ora)
 - `/components/ui` — base shadcn/ui (Button, Card, Input, etc.)
 - `/components/financial` — CurrencyDisplay, PercentageDelta, KPICard, DataTable
@@ -138,40 +138,42 @@ o que está documentado, PARAR e me consultar.
   `ExpertTrigger` (FAB + drawer placeholder), route group `(authenticated)`,
   6 rotas placeholder: `/dashboard`, `/transacoes`, `/dre`, `/fluxo`, `/contas`, `/configuracoes`
 
+**Fase 1 — Schema de Dados e Multi-tenancy (CONCLUÍDA)**
+- 1.1: Drizzle ORM + extensões (pgcrypto, vector, pg_trgm) + `organizations`, `memberships`, `data_sources` + RLS
+- 1.2: `contacts`, `categories`, `categorization_rules` + RLS + índice GIN trigram
+- 1.3: `fixed_assets`, `loans`, `equity_movements`, `inventory_snapshots` + RLS
+- 1.4: `credit_card_invoices`, `documents`, `transactions` + RLS + HNSW + FKs circulares
+- 1.5: `templates`, `conversations`, `messages`, `organization_facts`, `agent_events` + RLS
+- 1.6: Seed plano de contas (52 categorias DRE padrão) + trigger automático no INSERT de organizations
+- 1.7: Onboarding (`/onboarding`): cria org + membership (transação atômica); AppShell/Sidebar com
+  prop `user`; avatar + dropdown; `/configuracoes` real com OrgForm editável.
+- 1.8: Teste de isolamento RLS 18/18 tabelas. Fix de recursão infinita na policy SELECT de
+  `memberships`. Migrations em `db/migrations/rls/0005_rls_*.sql`.
+
+Schema completo: 18 tabelas, RLS ativa e testada. Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
+
 ---
 
 ## Fase atual
 
-**✅ Fase 1 — Schema de Dados e Multi-tenancy (CONCLUÍDA)**
+**Fase 2 — Pipeline de Ingestão de Arquivos (EM ANDAMENTO)**
+
+> Pipeline completo de upload → parsing → staging → revisão → inserção em transactions.
+> 5 áreas (ERP, banco, adquirente, cartão de crédito corporativo, SEFAZ-placeholder),
+> formato livre (PDF/Excel/CSV), templates híbridos global/específico, deduplicação em
+> duas camadas, reconciliação automática AP×banco.
 
 Sessões concluídas:
-- ✅ **1.1** — Drizzle ORM + extensões (pgcrypto, vector, pg_trgm) + `organizations`, `memberships`, `data_sources` + RLS
-- ✅ **1.2** — `contacts`, `categories`, `categorization_rules` + RLS + índice GIN trigram
-- ✅ **1.3** — `fixed_assets`, `loans`, `equity_movements`, `inventory_snapshots` + RLS
-- ✅ **1.4** — `credit_card_invoices`, `documents`, `transactions` + RLS + HNSW + FKs circulares
-- ✅ **1.5** — `templates`, `conversations`, `messages`, `organization_facts`, `agent_events` + RLS
-- ✅ **1.6** — Seed plano de contas (52 categorias DRE padrão) + trigger automático no INSERT de organizations
-- ✅ **1.7** — Onboarding (`/onboarding`): cria org + membership (transação atômica com
-  tratamento de constraint único); layout autenticado checa membership via Drizzle;
-  AppShell/Sidebar com prop `user`; avatar + dropdown (Configurações / Sair);
-  `/configuracoes` real com OrgForm editável.
-- ✅ **1.8** — Teste de isolamento RLS: 18/18 tabelas passaram. Policies faltantes das sessões
-  1.4+1.5 criadas em `db/migrations/rls/0005_rls_*.sql`. Fix de recursão infinita na policy
-  SELECT de `memberships` (removida auto-referência, simplificada para `user_id = auth.uid()`).
+- ✅ **2.1** — Upload + Storage: página `/upload`, drag-and-drop, seletor de 6 origens
+  (banco/ERP/adquirente/cartão/SEFAZ/outro), período opcional, upload direto ao Supabase Storage
+  (bucket `documents`, privado, 50 MB, RLS por org via path `{org_id}/{uuid}-{filename}`),
+  server action `createDocumentRecord` com validação Zod + assert de path, registro em `documents`
+  com `extraction_status: 'pending'` e metadata `{ source_type, period_start?, period_end? }`.
+  Migration: `db/migrations/rls/0006_storage_documents.sql`.
 
-Schema completo: 18 tabelas, migrations em `/db/migrations/`, RLS ativa e testada em todas.
-Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
-
----
-
-## Próxima fase
-
-**Fase 2 — Pipeline de Ingestão de Arquivos**
-
-Ver detalhamento completo em `docs/GUIA_OPERACIONAL.md` (Parte 4, Fase 2).
-Primeira sessão: **2.1 — Upload + Storage** (página `/upload`, drag-and-drop, registro em `documents`).
-
-Detalhamento completo em `docs/GUIA_OPERACIONAL.md` (Parte 4).
+Próxima sessão: **2.2 — Inngest setup + pipeline base**
+- Conta Inngest, SDK configurado, primeira função dispara após upload e muda status `pending → processing → completed`
+- DoD: subir arquivo, ver status mudar; ver execução no dashboard Inngest
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert

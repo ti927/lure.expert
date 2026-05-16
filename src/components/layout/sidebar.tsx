@@ -9,6 +9,7 @@ import {
   BarChart3,
   TrendingUp,
   Landmark,
+  UploadCloud,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -32,6 +33,7 @@ const NAV = [
   { href: '/dre', icon: BarChart3, label: 'DRE' },
   { href: '/fluxo', icon: TrendingUp, label: 'Fluxo de Caixa' },
   { href: '/contas', icon: Landmark, label: 'Contas' },
+  { href: '/upload', icon: UploadCloud, label: 'Enviar arquivo' },
 ]
 
 const BOTTOM_NAV = [{ href: '/configuracoes', icon: Settings, label: 'Configurações' }]
