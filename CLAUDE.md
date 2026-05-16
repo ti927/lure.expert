@@ -72,11 +72,12 @@ o que está documentado, PARAR e me consultar.
 - Anthropic SDK (Claude Haiku 4.5 + Sonnet 4.6)
 - Vercel deploy
 
-## Identidade visual (ver `docs/DESIGN_TOKENS.md` quando criado na Fase 0.5)
+## Identidade visual (ver `docs/DESIGN_TOKENS.md`)
 - Cor primária: emerald-700 (verde-floresta)
 - Tipografia: Inter (com tabular-nums em números)
 - Paleta neutra: slate
 - Semânticas: emerald-600 (+), rose-600 (−), amber-500 (alerta), sky-600 (info)
+- CSS: variáveis HSL bare channels (ex: `161 96% 24%`) — NÃO usar oklch com hsl(var())
 
 ## Convenções de código
 - Tabelas em snake_case plural (`transactions`, `contacts`,
@@ -89,18 +90,18 @@ o que está documentado, PARAR e me consultar.
 - NUNCA expor `service_role` key pro client
 
 ## Estrutura de pastas
-- `/app` — rotas Next.js (com group `(authenticated)` e `(public)`)
-- `/components/ui` — base (Button, Card, Input, etc.)
-- `/components/financial` — específicos (CurrencyDisplay, KPICard, etc.)
-- `/components/states` — EmptyState, LoadingState, ErrorState,
-  PartialDataBanner
-- `/components/expert` — ExpertDrawer, ReportCanvas, InlineChart, DiffPreview
+- `/app/(authenticated)` — rotas protegidas (dashboard, transacoes, dre, fluxo, contas, configuracoes)
+- `/app/(public)` — rotas públicas (login — ainda em `/app/login` por ora)
+- `/components/ui` — base shadcn/ui (Button, Card, Input, etc.)
+- `/components/financial` — CurrencyDisplay, PercentageDelta, KPICard, DataTable
+- `/components/states` — EmptyState, LoadingState, ErrorState, PartialDataBanner
+- `/components/layout` — AppShell, Sidebar (criados na Fase 0.5)
+- `/components/expert` — ExpertTrigger (criado); futuros: ReportCanvas, InlineChart, DiffPreview
 - `/lib` — utilitários, clientes (supabase, anthropic, inngest)
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
-- `/prompts` — prompts pro expert (system prompts, tools), separados em
-  arquivos
+- `/prompts` — prompts pro expert (system prompts, tools), separados em arquivos
 - `/docs` — todos os documentos de planejamento e referência
 
 ## O que NÃO fazer
@@ -120,42 +121,58 @@ o que está documentado, PARAR e me consultar.
 - NÃO implementar Tipo C (mutações autônomas — pagar, enviar mensagem
   pra terceiro) — fora do escopo
 
-## Fase atual
+## Histórico de fases concluídas
 
 **Fase 0 — Scaffolding (CONCLUÍDA)**
-
-- Sessão 0.1: projeto Next.js 14 + TypeScript + Tailwind + shadcn/ui inicializado
-- Sessão 0.2: `/login` (e-mail + senha), `/dashboard` protegido, middleware Supabase SSR
-- Sessão 0.3: deploy Vercel conectado ao GitHub, URL pública validada
-- README.md com instruções de setup
+- 0.1: Next.js 14 + TypeScript + Tailwind + shadcn/ui
+- 0.2: `/login` (e-mail + senha) + middleware Supabase SSR
+- 0.3: deploy Vercel → https://lure-expert.vercel.app
 - Repositório: https://github.com/ti927/lure.expert.git (branch `main`)
-- Produção: https://lure-expert.vercel.app
+
+**Fase 0.5 — Fundações de Design e Voz (CONCLUÍDA)**
+- 0.5.1: Design tokens — `tailwind.config.ts` + `globals.css` (HSL bare channels) + `/style-guide`
+- 0.5.2: Biblioteca de 19 componentes — `/style-guide/components`
+- 0.5.3: Voz do expert — `docs/AI_VOICE.md`
+- 0.5.4: Padrões de estado — `docs/STATE_PATTERNS.md` + `PartialDataBanner`
+- 0.5.5: Arquitetura de informação — `AppShell`, `Sidebar` colapsável (localStorage),
+  `ExpertTrigger` (FAB + drawer placeholder), route group `(authenticated)`,
+  6 rotas placeholder: `/dashboard`, `/transacoes`, `/dre`, `/fluxo`, `/contas`, `/configuracoes`
 
 ---
 
-**Fase 0.5 — Fundações de Design e Voz (em andamento)**
+## Fase atual
 
-Concluído:
-- 0.5.1 Design Tokens: `tailwind.config.ts` + `globals.css` (HSL) + `/style-guide` ✅
-- 0.5.2 Biblioteca de componentes: 18 componentes + `/style-guide/components` ✅
+**Fase 1 — Schema de Dados e Multi-tenancy**
 
-Concluído (continuação):
-- 0.5.3 Voz do expert: `docs/AI_VOICE.md` ✅
-- 0.5.4 Padrões de estado: `docs/STATE_PATTERNS.md` + `PartialDataBanner` + 19 componentes ✅
+> **PRÓXIMA SESSÃO A INICIAR: 1.1 — Schema Drizzle + Supabase**
 
-- 0.5.5 Arquitetura de informação: AppShell + Sidebar colapsável + ExpertTrigger + 6 rotas ✅
+Objetivo da fase: criar as 18 tabelas do schema, configurar RLS, conectar Drizzle ORM
+e entregar as primeiras telas reais (gestão de organização/empresa).
 
-**Fase 0.5 — CONCLUÍDA**
+Sessões planejadas:
+- **1.1** — Instalar Drizzle ORM + criar schema inicial no `/db` (tabelas: `organizations`,
+  `organization_members`, `users`). Rodar migrations no Supabase. Configurar RLS básico.
+- **1.2** — Tabelas de contas e transações: `accounts`, `transactions`, `transaction_categories`,
+  `category_rules`. RLS por `organization_id`. Seed de categorias padrão.
+- **1.3** — Tabelas do expert e rastreamento: `conversations`, `messages`,
+  `organization_facts`, `agent_events`. RLS completo.
+- **1.4** — Tabelas financeiras: `periods`, `dre_lines`, `cash_flow_entries`,
+  `reconciliation_queue`, `import_batches`. RLS.
+- **1.5** — Tela de onboarding: criação de organização na primeira vez que o usuário loga
+  (se `organization_id` ainda não existir). Formulário simples: nome da empresa, CNPJ, setor.
+- **1.6** — Tela de configurações real: exibir e editar dados da organização. Avatar/iniciais
+  do usuário na sidebar.
 
-Detalhamento das sessões em `docs/GUIA_OPERACIONAL.md` (Parte 4).
+Antes de iniciar 1.1: ler `docs/SCHEMA_INICIAL.md` (fonte da verdade das 18 tabelas).
+
+Detalhamento completo em `docs/GUIA_OPERACIONAL.md` (Parte 4).
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert
 - Agentes chamados: **expert**
 - Cor primária: emerald-700
 - Tipografia: Inter
-- Voz do expert: especialista calmo, direto, sem firulas (`docs/AI_VOICE.md`
-  a ser criado na Fase 0.5)
+- Voz do expert: especialista calmo, direto, sem firulas — definido em `docs/AI_VOICE.md`
 - Layout: sidebar esquerda colapsável + expert flutuante canto inferior
   direito (drawer)
 - Idioma: PT-BR only
