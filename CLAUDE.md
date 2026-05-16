@@ -143,8 +143,9 @@ Concluído (continuação):
 - 0.5.3 Voz do expert: `docs/AI_VOICE.md` ✅
 - 0.5.4 Padrões de estado: `docs/STATE_PATTERNS.md` + `PartialDataBanner` + 19 componentes ✅
 
-Pendente:
-- 0.5.5 Arquitetura de informação: layout principal com sidebar + expert flutuante
+- 0.5.5 Arquitetura de informação: AppShell + Sidebar colapsável + ExpertTrigger + 6 rotas ✅
+
+**Fase 0.5 — CONCLUÍDA**
 
 Detalhamento das sessões em `docs/GUIA_OPERACIONAL.md` (Parte 4).
 
