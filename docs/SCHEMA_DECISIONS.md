@@ -77,6 +77,33 @@ icon={<Landmark className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
 
 ---
 
+## Decisão 5 — Tabela `transactions_staging` adicionada na Fase 2 (Sessão 2.3)
+
+**Contexto:** O `SCHEMA_INICIAL.md` v2.0 cobre as 18 tabelas da Fase 1. A Fase 2 adicionou
+uma tabela de staging fora do schema original.
+
+**Tabela:** `transactions_staging`
+
+**Função:** armazena linhas extraídas de arquivos (Excel/CSV/PDF) antes da revisão humana.
+Linhas ficam aqui até o usuário aprovar (→ viram `transactions`) ou rejeitar (→ descartadas).
+
+**Colunas principais:**
+- `organization_id`, `document_id` (FKs com CASCADE)
+- `row_index` — posição original no arquivo
+- `raw_data` (jsonb) — linha completa como veio do arquivo
+- `date`, `amount`, `direction`, `description` — campos mapeados pela heurística do parser
+- `status` — `pending` | `approved` | `rejected`
+
+**Regra de direção por source_type:**
+- `credit_card` → todas as linhas forçadas como `outflow`
+- Outros tipos → direção inferida por heurística (sinal do valor ou colunas crédito/débito)
+- Extensível via `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`
+
+**Migration:** `db/migrations/rls/0007_transactions_staging.sql`
+**Schema Drizzle:** `db/schema/transactions-staging.ts`
+
+---
+
 ## Decisão 4 — Policy SELECT de memberships sem auto-referência (Sessão 1.8)
 
 **Contexto:** A policy SELECT original de `memberships` continha uma subquery na própria tabela:

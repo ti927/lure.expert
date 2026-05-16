@@ -98,6 +98,7 @@ o que está documentado, PARAR e me consultar.
 - `/components/layout` — AppShell, Sidebar (criados na Fase 0.5)
 - `/components/expert` — ExpertTrigger (criado); futuros: ReportCanvas, InlineChart, DiffPreview
 - `/lib` — utilitários, clientes (supabase, anthropic, inngest)
+- `/lib/parsers` — parsers determinísticos por formato (excel-csv.ts; futuros: pdf.ts, ofx.ts)
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -150,7 +151,8 @@ o que está documentado, PARAR e me consultar.
 - 1.8: Teste de isolamento RLS 18/18 tabelas. Fix de recursão infinita na policy SELECT de
   `memberships`. Migrations em `db/migrations/rls/0005_rls_*.sql`.
 
-Schema completo: 18 tabelas, RLS ativa e testada. Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
+Schema original: 18 tabelas (Fase 1), RLS ativa e testada. Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
+Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — ver `docs/SCHEMA_DECISIONS.md`.
 
 ---
 
