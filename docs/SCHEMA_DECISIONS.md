@@ -104,6 +104,42 @@ Linhas ficam aqui até o usuário aprovar (→ viram `transactions`) ou rejeitar
 
 ---
 
+## Decisão 6 — Dimensões analíticas em transactions e categorization_rules (Sessão 3.0)
+
+**Contexto:** A Fase 3 expande o modelo de categorização de uma dimensão (plano de contas) para
+quatro dimensões analíticas independentes, todas configuráveis por organização.
+
+**Tabelas novas:**
+- `cost_centers` — centros de custo (departamentos/setores)
+- `business_units` — unidades de negócio (ex: hotel → UHs, restaurante, eventos)
+- `legal_entities` — entidades jurídicas (matrizes/filiais por CNPJ)
+
+Estrutura comum: `id, organization_id, name, code (nullable), is_active, created_at`. Sem hierarquia. RLS por `organization_id`.
+
+**Colunas adicionadas em `transactions`:**
+- `cost_center_id` — FK → `cost_centers.id`, nullable, `ON DELETE SET NULL`
+- `business_unit_id` — FK → `business_units.id`, nullable, `ON DELETE SET NULL`
+- `legal_entity_id` — FK → `legal_entities.id`, nullable, `ON DELETE SET NULL`
+
+**Colunas adicionadas em `categorization_rules`:**
+- `target_cost_center_id`, `target_business_unit_id`, `target_legal_entity_id` — mesmas FKs nullable
+- `target_category_id` tornou-se **nullable** (era NOT NULL): uma regra pode definir dimensões sem alterar a categoria financeira
+
+**Por que `SET NULL` e não `RESTRICT` no DELETE?**
+Se o cliente deletar um centro de custo, as transações históricas não devem quebrar — ficam sem
+classificação nessa dimensão, o que é aceitável. `RESTRICT` bloquearia o delete e pioraria a UX.
+
+**Decisões de design das dimensões:**
+- Uma classificação por dimensão por lançamento — sem rateio
+- Entidades jurídicas são classificação simples (como CC), não determinam isolamento entre orgs
+- Todas as dimensões sempre visíveis na UI, vazias até o cliente configurar
+- Motor de IA (3B) sugere todas as 4 dimensões com confidence score por dimensão
+
+**Migration:** `db/migrations/rls/0008_dimensions.sql`
+**Schemas Drizzle:** `db/schema/cost-centers.ts`, `db/schema/business-units.ts`, `db/schema/legal-entities.ts`
+
+---
+
 ## Decisão 4 — Policy SELECT de memberships sem auto-referência (Sessão 1.8)
 
 **Contexto:** A policy SELECT original de `memberships` continha uma subquery na própria tabela:

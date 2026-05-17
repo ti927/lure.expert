@@ -98,7 +98,7 @@ o que está documentado, PARAR e me consultar.
 - `/components/layout` — AppShell, Sidebar (criados na Fase 0.5)
 - `/components/expert` — ExpertTrigger (criado); futuros: ReportCanvas, InlineChart, DiffPreview
 - `/lib` — utilitários, clientes (supabase, anthropic, inngest)
-- `/lib/parsers` — parsers determinísticos por formato (excel-csv.ts; futuros: pdf.ts, ofx.ts)
+- `/lib/parsers` — parsers via LLM: `excel-csv.ts` (Excel/CSV/TXT → Claude Haiku), `pdf.ts` (PDF → Claude Haiku document API)
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -158,12 +158,20 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Fase 2 — Pipeline de Ingestão de Arquivos (EM ANDAMENTO)**
+**Fase 3 — Dimensões Analíticas + Categorização com IA (EM ANDAMENTO)**
+> Sessões concluídas: 3.0 (schema) + 3A (gestão de dimensões e categorias) + 3C (classificação pós-importação + melhorias de UX em `/transacoes`) + **parser Excel/CSV/TXT migrado para Claude Haiku**.
+> **Próxima sessão: 3B** — motor de categorização com IA (job Inngest `categorize-transaction`).
+> Ver detalhamento completo na seção de Fase 3 abaixo.
+
+---
+
+## Histórico — Fase 2 (CONCLUÍDA ✅)
+
+**Fase 2 — Pipeline de Ingestão de Arquivos**
 
 > Pipeline completo de upload → parsing → staging → revisão → inserção em transactions.
-> 5 áreas (ERP, banco, adquirente, cartão de crédito corporativo, SEFAZ-placeholder),
-> formato livre (PDF/Excel/CSV), templates híbridos global/específico, deduplicação em
-> duas camadas, reconciliação automática AP×banco.
+> Suporta Excel/CSV/TXT e PDF via Claude Haiku (LLM-first — zero heurística, zero templates).
+> Tela de revisão com edição inline, lote, totalizador e read-only lock pós-importação.
 
 Sessões concluídas:
 - ✅ **2.1** — Upload + Storage: página `/upload`, drag-and-drop, seletor de 6 origens
@@ -182,7 +190,7 @@ Sessões concluídas:
   Parser determinístico em `src/lib/parsers/excel-csv.ts` (SheetJS/xlsx) com heurística de mapeamento de colunas
   (date/amount/credit/debit/description). URL assinada gerada no server action e passada no evento Inngest.
   `processDocument` atualizado: baixa arquivo via signed URL, parseia, insere em staging em lotes de 100.
-  PDFs/imagens redirecionados para `pending_llm` (Fase 2.5). Testado: 160 linhas extraídas, 0 warnings.
+  PDFs são processados pelo step `parse-pdf-llm` (implementado na Sessão 2.5). Testado: 160 linhas extraídas, 0 warnings.
   **Regra de direção por source_type:** `credit_card` → força todas as linhas como `outflow`. Extensível via
   `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`. `sourceType` agora é passado no evento Inngest.
 
@@ -195,12 +203,203 @@ Sessões concluídas:
   automático de `data_source` (provider=`upload`, type=sourceType) por org. Toast em todos os cenários.
   Página `/upload` lista os 10 uploads mais recentes com status, contagem de pendentes/importadas e link
   direto para revisão. **Testado e validado:** linhas importadas constam na tabela `transactions`.
+  **Integridade pós-importação (Opção A):** após importação bem-sucedida, a página torna-se
+  read-only — checkboxes, edição inline, badge de direção, toolbar em lote e botão de importação
+  são ocultados. Banner emerald exibe contagem de transações importadas e CTA "Ver Transações"
+  (link para `/transacoes`). Estado controlado por `isImported` (inicializado via `importedCount > 0`
+  retornado pelo server action). TypeScript check: 0 erros.
 
-Próxima sessão: **2.5 — Parser PDF via LLM**
-- PDFs enviados ficam em `extractionStatus: 'pending'` com `extractionMethod: 'llm'` — nunca avançam
-- Implementar step no `processDocument` que, para PDFs: extrai texto, chama Claude Haiku com prompt
-  estruturado, recebe JSON de linhas, insere em `transactions_staging` igual ao fluxo Excel/CSV
-- DoD: subir um PDF de extrato bancário e ver as linhas aparecerem na tela de revisão (pode ser mais lento)
+- ✅ **2.5** — Parser PDF via Claude document API: `src/lib/parsers/pdf.ts` + `src/lib/anthropic.ts`.
+  Arquitetura: `pdf-parse` usado APENAS para detectar senha (não para extração de texto — fontes
+  customizadas de PDFs bancários brasileiros corrompem o texto extraído, ex: `$` → `5` no Itaú).
+  Extração sempre via `extractViaDocument()`: PDF enviado como `DocumentBlockParam` (base64) ao
+  Claude Haiku, que renderiza com motor próprio e retorna JSON estruturado.
+  `processDocument` atualizado com step `parse-pdf-llm` (try/catch — falha marca `extractionStatus: 'failed'`
+  com mensagem amigável). `inngest.send()` envolto em try/catch (upload não falha se Inngest offline).
+  **Tela de revisão melhorias (feitas nesta sessão):**
+  - Polling timeout de 2 minutos com banner de aviso e botão "Verificar novamente"
+  - Estado `failed` exibe a mensagem de erro do `extractedData.error`
+  - **Totalizador financeiro:** barra acima da tabela com Entradas / Saídas / Líquido
+    (soma das linhas não-rejeitadas, reatualiza ao mudar direção ou rejeitar)
+  - **Correção FORCE_OUTFLOW:** `credit_card` agora respeita `inflow` detectado pelo LLM
+    (estornos/reembolsos com valor negativo na fatura). Antes forçava ALL para `outflow`.
+    Nova lógica: `row.direction ?? 'outflow'` (só usa default se LLM retornou null).
+  **Problema em aberto:** PDFs de fatura com colunas multi-moeda (ex: Fatura Itaú com moeda
+  estrangeira + cotação + valor BRL) ainda extraem valores incorretos em alguns casos
+  (o campo "cotação" influencia o campo "valor" na resposta do LLM). Não bloqueador para 2.6.
+  Testado: PDF Fatura Itaú sem senha → 13 linhas extraídas, direção = outflow, importação OK.
+  `next.config.mjs`: `experimental.serverComponentsExternalPackages: ['pdf-parse']` (Next.js 14.2.x).
+
+- ✅ **2.6** — Sistema de templates para Excel/CSV *(depois substituído pela migração LLM)*:
+  Fingerprint SHA-256 dos headers, lookup de template salvo por org, `columnMap` reutilizado sem detecção.
+  **⚠️ Removido na migração LLM (Fase 3):** todo esse bloco foi descartado — o `excel-csv.ts` foi reescrito
+  e a tabela `templates` não é mais alimentada. Detalhe histórico, não mais relevante para o código atual.
+
+- ✅ **Remoção de uploads**: botão de lixeira em cada linha de "Uploads recentes" em `/upload`.
+  Server action `deleteDocument` em `src/server/documents.ts`: anula `document_id` em `transactions`
+  já importadas (FK sem cascade), remove arquivo do Storage, deleta registro em `documents`
+  (staging em cascade pelo banco). Componente `DeleteDocumentButton` com AlertDialog + toast.
+
+**Próxima fase: Fase 3 — Dimensões Analíticas + Categorização com IA**
+
+> A Fase 3 expande o conceito de "categorização" para um sistema de **4 dimensões analíticas**
+> independentes, todas configuráveis pela org. A categoria financeira (plano de contas) é apenas
+> uma das dimensões. As outras 3 têm estrutura CRUD simples e o motor de IA sugere todas elas.
+>
+> Plano de contas padrão (52 categorias) já semeado em toda nova org (Fase 1.6).
+
+### Decisões de design das dimensões
+
+- **Uma classificação por lançamento** — sem rateio entre dimensões (ex: 60% CC-A, 40% CC-B).
+  Rateio é feature futura.
+- **Entidades jurídicas são mera classificação** — CNPJs (matrizes/filiais) são tratados como
+  um centro de custo adicional, sem hierarquia e sem impacto no isolamento entre orgs.
+- **Todas as dimensões sempre visíveis na UI** — campos aparecem mesmo se a org ainda não
+  cadastrou itens. Ficam vazios até o cliente configurar em `/configuracoes`.
+- **Motor de IA sugere todas as 4 dimensões** — confidence score por dimensão; threshold
+  >90 → auto; 50–90 → `needs_review`; <50 → sem sugestão.
+- **Classificação pós-import como caso de uso principal** — dimensões são atribuídas em
+  `/transacoes` após importação. DRE filtrado por dimensão vem na Fase 6.
+
+### Tabelas novas (Sessão 3.0 — schema)
+
+| Tabela | Dimensão | Estrutura |
+|---|---|---|
+| `cost_centers` | Centros de custo | `id, organization_id, name, code?, is_active, created_at` |
+| `business_units` | Unidades de negócio | `id, organization_id, name, code?, is_active, created_at` |
+| `legal_entities` | Entidades jurídicas (matrizes/filiais) | `id, organization_id, name, cnpj?, is_active, created_at` |
+
+RLS por `organization_id` em todas. Soft delete via `is_active`.
+
+### Alterações em tabelas existentes (Sessão 3.0)
+
+**`transactions`** — 3 colunas FK novas, todas nullable, `ON DELETE SET NULL`:
+- `cost_center_id` → `cost_centers.id`
+- `business_unit_id` → `business_units.id`
+- `legal_entity_id` → `legal_entities.id`
+
+**`categorization_rules`** — mesmos 3 FKs nullable:
+- Uma regra pode definir categoria + centro de custo + unidade de negócio + entidade simultaneamente.
+
+### ✅ Sessão 3.0 — Schema das dimensões *(concluída)*
+- 3 novas tabelas: `cost_centers`, `business_units`, `legal_entities` + RLS
+- `transactions`: colunas `cost_center_id`, `business_unit_id`, `legal_entity_id` (FK nullable, SET NULL)
+- `categorization_rules`: mesmas 3 FKs + `target_category_id` tornou-se nullable
+- Schemas Drizzle: `db/schema/cost-centers.ts`, `business-units.ts`, `legal-entities.ts`
+- Migration aplicada: `db/migrations/rls/0008_dimensions.sql`
+- TypeScript: 0 erros
+
+### ✅ Sessão 3A — Gestão de categorias e dimensões *(concluída)*
+
+**Páginas criadas:**
+- `/configuracoes/categorias` — árvore hierárquica por tipo (revenue/cost/expense/...), inline rename, create dialog, archive/reactivate, delete com verificação de filhos e transações vinculadas
+- `/configuracoes/centros-de-custo` — CRUD flat via `DimensionManager`
+- `/configuracoes/unidades-de-negocio` — CRUD flat via `DimensionManager`
+- `/configuracoes/entidades-juridicas` — CRUD flat via `DimensionManager` (campo CNPJ extra)
+- `/configuracoes` atualizado com cards de navegação para as 4 seções analíticas
+
+**Componentes criados:**
+- `src/components/settings/dimension-manager.tsx` — CRUD genérico para as 3 dimensões flat
+- `src/components/settings/category-manager.tsx` — árvore recursiva com grupos por tipo
+
+**Server actions:**
+- `src/server/dimensions.ts` — getCostCenters/create/update/toggleActive/delete/getLinkedCount × 3 dimensões
+- `src/server/categories.ts` — getCategoriesWithTxCount, createCategory, updateCategory, toggleCategoryActive, deleteCategory
+
+**Comportamento de delete:**
+- Dimensões flat: ON DELETE SET NULL — avisa contagem de transações, permite delete
+- Categorias: bloqueia se há filhos (RESTRICT no banco); bloqueia se há transações vinculadas
+
+**Pendente para sessões futuras:** CSV import de categorias, templates pré-definidos (DRE Padrão/Serviços/etc.)
+TypeScript: 0 erros
+
+### Sessão 3B — Motor de categorização com IA
+
+- Job Inngest `categorize-transaction` disparado por INSERT em `transactions`
+- 4 camadas em ordem, sugerindo **todas as dimensões**:
+  1. Regra explícita (`categorization_rules`) — aplica categoria + CC + UN + entidade da regra
+  2. Recorrência: mesmo `contact_id` + valor próximo → herda as 4 classificações da última ocorrência
+  3. Embedding similarity via pgvector (limitado à org) → maioria de cada dimensão nos 5 vizinhos
+  4. Claude Haiku: recebe descrição + plano de contas + centros de custo + UNs + entidades da org → retorna sugestão por dimensão com confidence 0–100
+- Threshold por dimensão: >90 → auto; 50–90 → `needs_review: true`; <50 → sem sugestão
+- `needs_review = true` se qualquer dimensão ficou abaixo de 90
+- Página `/transacoes/revisao`: fila de `needs_review = true` ou `status = 'pending'`
+- Aprovação com 1 clique → vira `categorization_rule` automática
+- Custo LLM alvo: < US$ 0,50 por 1.000 transações
+
+### ✅ Sessão 3C — Classificação pós-importação em `/transacoes` *(concluída)*
+
+**Arquivos principais:**
+- `src/app/(authenticated)/transacoes/page.tsx` — server component com filtros via searchParams
+- `src/app/(authenticated)/transacoes/transacoes-client.tsx` — client component com tabela + comboboxes
+- `src/server/transactions.ts` — `getTransactions` (com filtros), `classifyTransaction`, `batchClassifyTransactions`, `upsertRule`
+- `src/server/documents.ts` — `getDocumentsWithTransactions` (lista documentos com contagem de transações)
+- `src/components/ui/command.tsx` — componente Command (cmdk) criado nesta sessão
+
+**O que foi implementado (entrega inicial):**
+- Tabela com as 4 dimensões sempre visíveis como **comboboxes pesquisáveis** em cada linha (sem expandir)
+  - `CellCombobox` (CC, UN, Entidade) e `CategoryCellCombobox` (agrupada por tipo) — baseados em Popover + Command (cmdk)
+  - Trigger com borda transparente que revela ao hover/focus
+  - Busca por código ou nome dentro de cada dropdown
+- FilterBar em 2 linhas com filtragem server-side via URL searchParams
+  - Debounce de 400ms no campo de busca
+- Classificação manual → cria ou atualiza `categorization_rule` automaticamente (`upsertRule`)
+- Seleção em lote com dialog de classificação em massa (comboboxes pesquisáveis)
+- Atualização otimista (revert em caso de erro) + `router.refresh()` para re-fetch server
+- Paginação (25 transações/página) com estado "N encontradas" vs "N no total"
+- Dependência adicionada: `cmdk`
+
+**Melhorias de UX/funcionalidade (sessão seguinte):**
+- **Filtro por importação (origem):** multi-select pesquisável como **linha 0** da FilterBar — lista cada arquivo importado com label `Tipo · mês/aa (N lançamentos)`. Multi-select permite filtrar 2 documentos simultaneamente (ex: 2 extratos para identificar transferências entre contas, ou extrato + fatura para ver pagamento de cartão). Implementado via `getDocumentsWithTransactions` em `documents.ts` + `documentId` param em `getTransactions`.
+- **Filtros de dimensão viram multi-select pesquisáveis:** os 4 Selects simples (categoria, CC, UN, entidade) substituídos por `MultiSelectFilter` e `CategoryMultiSelectFilter` (Popover + Command com checkbox). URL: `?category=id1,id2`. Server action usa `inArray` + `or(isNull, inArray)` para combinar `__none__` com IDs reais.
+- **X por filtro individual:** cada campo tem botão X próprio; data inputs via `DateInput` com estado local; direção com X sobreposto; multi-selects com X dentro do trigger. Botão "Limpar tudo" continua disponível.
+- **Totalizador:** barra acima da tabela com Entradas / Saídas / Líquido calculados sobre **todos** os resultados filtrados (query SUM paralela no server action). Mostra contagem de lançamentos.
+- **Coluna "Dt Lançamento":** header renomeado (era "Data"); formato `DD/MM/AA` com ano. Campo é `transactions.date` = data de competência do extrato/fatura. Data do período de importação (`documents.period_start/end`) é metadata do documento, não do lançamento — não exibida na tabela.
+- **Ordenação:** headers "Dt Lançamento" e "Valor" clicáveis com ícones ↑ ↓ ↕. Parâmetro `?sort=date_asc|date_desc|amount_asc|amount_desc`.
+- **Fix: campo de data não capturava o ano ao digitar.** Causa: input controlado disparava `onChange` com ano parcial (ex: `0002-01-15`), `router.push()` causava re-render e resetava o campo. Solução: componente `DateInput` com estado local — URL só atualiza quando ano ≥ 2000.
+- TypeScript: 0 erros
+
+### ✅ Melhorias em `/transacoes` (sessão pré-3B)
+
+- **Fix label filtro por importação** (`transacoes-client.tsx`): label agora sempre exibe o nome do arquivo (`Tipo · nome-do-arquivo (N)`), nunca o período. Resolve o bug onde dois documentos do mesmo mês e tipo geravam labels idênticos e pareciam ser um só.
+- **Delete de lançamentos**: ícone de lixeira por linha (hover) + botão "Apagar selecionados" na toolbar de seleção em lote. AlertDialog de confirmação em ambos os casos. Server action `deleteTransactions(ids[])` em `src/server/transactions.ts` — deleta só dentro da `organization_id` do usuário, limite 500 por operação.
+- TypeScript: 0 erros.
+
+### ✅ Parser Excel/CSV/TXT — Migrado para Claude Haiku *(concluído)*
+
+O parser determinístico (`excel-csv.ts`) foi **substituído por parsing via LLM**, mesmo padrão já usado para PDF.
+
+**Problema que motivou a mudança:** heurísticas de detecção de colunas falhavam sistematicamente em formatos reais BR:
+- CSVs sem cabeçalho (ex: Bradesco/BB/Itaú extrato): `02/12/2024;PIX TRANSF;-410,00` → tudo null
+- Cabeçalho com BOM + texto de acessibilidade (Nubank/Azul Itaucard) → header não reconhecido
+- Excel com 20+ linhas de metadata antes dos dados (Itaú fatura XLS) → `findHeaderRow` limitado a 10 linhas
+- Datas `"31 jul."` e valores com câmbio inline → parser não suportava
+
+**Implementação:**
+- `src/lib/parsers/excel-csv.ts` reescrito: ~350 linhas → ~107 linhas
+  - `fileToText(buffer, mimeType)`: CSV/TXT → `buffer.toString('utf-8')` direto; Excel → SheetJS lê binário + `sheet_to_csv()` → texto puro
+  - `parseExcelOrCsv(buffer, mimeType)` agora async: envia texto ao Claude Haiku como `content: [{ type: 'text', text }]`
+  - Mesmo system prompt e funções de parsing JSON do `pdf.ts`
+- `src/jobs/process-document.ts` simplificado: ~228 linhas → ~112 linhas
+  - Template system removido (fingerprint, lookup, save, increment)
+  - `INVERT_DIRECTION_SOURCES` removido — unificado em `DEFAULT_OUTFLOW_SOURCES` para ambos os formatos
+  - Step `parse-excel-csv` e `parse-pdf-llm` unificados em lógica idêntica
+- Tabela `templates` mantida no schema mas não mais alimentada pelo pipeline de upload
+
+**Custo:** US$ 0,001–0,012 por upload (dentro do target de US$ 0,50/1.000 transações).
+TypeScript: 0 erros. Testado: CSV sem cabeçalho + CSV com BOM/acessibilidade + XLS com metadata → extração correta.
+
+### Ordem de implementação
+
+```
+✅ 3.0 (schema) → ✅ 3A (configurar dimensões) → ✅ 3C (classificar pós-import) → ✅ parser LLM → ⏳ 3B (automatizar)
+```
+
+> **Impacto futuro no DRE (Fase 6):** as dimensões viram filtros e agrupadores nativos
+> do DRE — "DRE do Restaurante", "DRE do Centro de Custo Comercial". A estrutura definida
+> aqui suporta isso sem retrabalho.
+
+---
 
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert
