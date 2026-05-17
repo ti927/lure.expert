@@ -3,6 +3,9 @@ import { sql } from 'drizzle-orm'
 import { organizations } from './organizations'
 import { categories } from './categories'
 import { contacts } from './contacts'
+import { costCenters } from './cost-centers'
+import { businessUnits } from './business-units'
+import { legalEntities } from './legal-entities'
 
 const tz = { withTimezone: true }
 
@@ -16,10 +19,12 @@ export const categorizationRules = pgTable(
     name: text('name').notNull(),
     // condições de ativação: { field: 'description', op: 'contains', value: 'ALUGUEL' }
     conditions: jsonb('conditions').notNull(),
-    targetCategoryId: uuid('target_category_id')
-      .notNull()
-      .references(() => categories.id),
+    // nullable: uma regra pode focar só em dimensões sem alterar a categoria
+    targetCategoryId: uuid('target_category_id').references(() => categories.id),
     targetContactId: uuid('target_contact_id').references(() => contacts.id),
+    targetCostCenterId: uuid('target_cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
+    targetBusinessUnitId: uuid('target_business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
+    targetLegalEntityId: uuid('target_legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
     // prioridade: maior número = checado primeiro
     priority: integer('priority').notNull().default(0),
     // true = sugestão do expert aguardando confirmação; false = criada pelo usuário

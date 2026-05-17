@@ -8,6 +8,9 @@ import { dataSources } from './data-sources'
 import { contacts } from './contacts'
 import { categories } from './categories'
 import { documents } from './documents'
+import { costCenters } from './cost-centers'
+import { businessUnits } from './business-units'
+import { legalEntities } from './legal-entities'
 // FK para creditCardInvoices omitida aqui para evitar referência circular
 // A constraint real existe no banco via SQL migration (0004)
 
@@ -60,6 +63,9 @@ export const transactions = pgTable(
     status: text('status').notNull().default('confirmed'),
     documentId: uuid('document_id').references(() => documents.id),
     creditCardInvoiceId: uuid('credit_card_invoice_id'),
+    costCenterId: uuid('cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
+    businessUnitId: uuid('business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
+    legalEntityId: uuid('legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
     rawData: jsonb('raw_data').notNull().default(sql`'{}'::jsonb`),
     // populado assincronamente após insert, não bloqueia a operação
     embedding: vector('embedding'),
