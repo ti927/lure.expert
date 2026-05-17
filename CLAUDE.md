@@ -105,6 +105,11 @@ o que está documentado, PARAR e me consultar.
 - `/prompts` — prompts pro expert (system prompts, tools), separados em arquivos
 - `/docs` — todos os documentos de planejamento e referência
 
+## Regra de backup obrigatória
+
+**Sempre executar `git push origin main` após qualquer commit ou atualização de status do projeto.**
+Nunca encerrar uma sessão de trabalho sem confirmar que o GitHub está atualizado com os commits locais.
+
 ## O que NÃO fazer
 - NÃO criar features fora do escopo da fase atual
 - NÃO criar componente novo sem checar se já existe na biblioteca
