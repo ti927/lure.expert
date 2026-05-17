@@ -3,7 +3,7 @@
 import { useState, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, ArrowUpDown, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, ChevronLeft, ChevronRight, Loader2, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -46,6 +46,7 @@ interface Props {
   initialData: {
     document: Document
     rows: TransactionStaging[]
+    importedCount: number
   }
 }
 
@@ -81,6 +82,8 @@ export default function ReviewClient({ documentId, initialData }: Props) {
   const [editCell, setEditCell] = useState<EditCell | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [importing, setImporting] = useState(false)
+  const [isImported, setIsImported] = useState(initialData.importedCount > 0)
+  const [pollingTimedOut, setPollingTimedOut] = useState(false)
   const [, startTransition] = useTransition()
 
   // Atualiza linhas quando initialData muda (após router.refresh)
@@ -98,11 +101,16 @@ export default function ReviewClient({ documentId, initialData }: Props) {
     )
   }, [initialData.rows])
 
-  // Polling enquanto o documento está sendo processado
+  // Polling enquanto o documento está sendo processado (timeout: 2 minutos)
   useEffect(() => {
     if (!isProcessing) return
-    const timer = setInterval(() => router.refresh(), 3000)
-    return () => clearInterval(timer)
+    setPollingTimedOut(false)
+    const poll = setInterval(() => router.refresh(), 3000)
+    const timeout = setTimeout(() => {
+      clearInterval(poll)
+      setPollingTimedOut(true)
+    }, 120_000)
+    return () => { clearInterval(poll); clearTimeout(timeout) }
   }, [isProcessing, router])
 
   // ─── Derivados ────────────────────────────────────────────────────────────
@@ -117,6 +125,14 @@ export default function ReviewClient({ documentId, initialData }: Props) {
 
   const sourceType = (doc.metadata as Record<string, unknown>)?.source_type as string
 
+  const totalInflow = rows
+    .filter(r => r.status !== 'rejected' && r.direction === 'inflow' && r.amount)
+    .reduce((sum, r) => sum + Number(r.amount), 0)
+  const totalOutflow = rows
+    .filter(r => r.status !== 'rejected' && r.direction === 'outflow' && r.amount)
+    .reduce((sum, r) => sum + Number(r.amount), 0)
+  const netBalance = totalInflow - totalOutflow
+
   // ─── Helpers de estado ────────────────────────────────────────────────────
   function patchRow(id: string, patch: Partial<Row>) {
     setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
@@ -125,7 +141,7 @@ export default function ReviewClient({ documentId, initialData }: Props) {
   function toggleSelect(id: string) {
     setSelected(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) { next.delete(id) } else { next.add(id) }
       return next
     })
   }
@@ -200,6 +216,7 @@ export default function ReviewClient({ documentId, initialData }: Props) {
       setRows(prev =>
         prev.map(r => r.status === 'pending' ? { ...r, status: 'approved' } : r),
       )
+      if (result.inserted > 0) setIsImported(true)
 
       if (result.inserted > 0) {
         toast.success(
@@ -239,10 +256,22 @@ export default function ReviewClient({ documentId, initialData }: Props) {
         </Link>
         <h1 className="text-2xl font-semibold text-foreground">Revisão de linhas</h1>
         <p className="text-sm text-muted-foreground">{doc.filename}</p>
-        <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-8 justify-center">
-          <Loader2 size={20} className="animate-spin text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">expert está processando o arquivo...</p>
-        </div>
+        {pollingTimedOut ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-8 text-center space-y-2">
+            <p className="text-sm font-medium text-amber-800">O processamento está demorando mais do que o esperado.</p>
+            <p className="text-xs text-amber-700">
+              O expert continua trabalhando em segundo plano. Você pode voltar a esta página em alguns minutos.
+            </p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => { setPollingTimedOut(false); router.refresh() }}>
+              Verificar novamente
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-8 justify-center">
+            <Loader2 size={20} className="animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">expert está processando o arquivo...</p>
+          </div>
+        )}
       </div>
     )
   }
@@ -258,8 +287,13 @@ export default function ReviewClient({ documentId, initialData }: Props) {
           <ArrowLeft size={14} /> Novo upload
         </Link>
         <h1 className="text-2xl font-semibold text-foreground">Revisão de linhas</h1>
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-6 text-sm text-destructive">
-          Não foi possível extrair dados deste arquivo. Verifique se o formato é suportado e tente novamente.
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-6 text-sm text-destructive space-y-1">
+          <p className="font-medium">Não foi possível extrair dados deste arquivo.</p>
+          {Boolean((doc.extractedData as Record<string, unknown>)?.error) && (
+            <p className="text-xs opacity-80 font-mono break-all">
+              {String((doc.extractedData as Record<string, unknown>).error)}
+            </p>
+          )}
         </div>
         <Button variant="outline" asChild>
           <Link href="/upload">Tentar outro arquivo</Link>
@@ -304,6 +338,22 @@ export default function ReviewClient({ documentId, initialData }: Props) {
           {sourceType && SOURCE_LABELS[sourceType] ? ` · ${SOURCE_LABELS[sourceType]}` : ''}
         </p>
       </div>
+
+      {/* Banner: importação encerrada */}
+      {isImported && (
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-emerald-700">
+            <CheckCircle2 size={16} className="shrink-0" />
+            <span>
+              <span className="font-medium">{approvedCount} transaç{approvedCount === 1 ? 'ão importada' : 'ões importadas'}.</span>
+              {' '}Esta revisão está encerrada. Para remover lançamentos individuais, use a tela de Transações.
+            </span>
+          </div>
+          <Button size="sm" variant="outline" className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-100" asChild>
+            <Link href="/transacoes">Ver Transações</Link>
+          </Button>
+        </div>
+      )}
 
       {/* Barra de resumo + paginação no topo */}
       <div className="flex items-center justify-between gap-4">
@@ -353,8 +403,30 @@ export default function ReviewClient({ documentId, initialData }: Props) {
         )}
       </div>
 
+      {/* Totalizador financeiro */}
+      <div className="flex flex-wrap gap-6 rounded-lg border bg-muted/20 px-4 py-3 text-sm tabular-nums">
+        <span>
+          <span className="text-xs text-muted-foreground mr-1.5">Entradas</span>
+          <span className="font-semibold text-emerald-600">
+            {totalInflow.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </span>
+        </span>
+        <span>
+          <span className="text-xs text-muted-foreground mr-1.5">Saídas</span>
+          <span className="font-semibold text-rose-600">
+            {totalOutflow.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </span>
+        </span>
+        <span className="border-l pl-6">
+          <span className="text-xs text-muted-foreground mr-1.5">Líquido</span>
+          <span className={cn('font-semibold', netBalance >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
+            {netBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </span>
+        </span>
+      </div>
+
       {/* Toolbar de ações em lote */}
-      {selectedCount > 0 && (
+      {!isImported && selectedCount > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-4 py-2.5">
           <span className="text-sm font-medium">
             {selectedCount} selecionada{selectedCount > 1 ? 's' : ''}
@@ -387,15 +459,17 @@ export default function ReviewClient({ documentId, initialData }: Props) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-muted/40">
-              <th className="w-10 px-3 py-3">
-                <input
-                  type="checkbox"
-                  checked={allPageSelected}
-                  onChange={togglePageSelect}
-                  className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
-                  aria-label="Selecionar página"
-                />
-              </th>
+              {!isImported && (
+                <th className="w-10 px-3 py-3">
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={togglePageSelect}
+                    className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                    aria-label="Selecionar página"
+                  />
+                </th>
+              )}
               <th className="px-3 py-3 text-left font-medium text-muted-foreground w-10">#</th>
               <th className="px-3 py-3 text-left font-medium text-muted-foreground">Data</th>
               <th className="px-3 py-3 text-right font-medium text-muted-foreground">Valor</th>
@@ -414,15 +488,17 @@ export default function ReviewClient({ documentId, initialData }: Props) {
                 )}
               >
                 {/* Checkbox */}
-                <td className="px-3 py-2.5">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(row.id)}
-                    onChange={() => toggleSelect(row.id)}
-                    className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
-                    aria-label={`Selecionar linha ${row.rowIndex + 1}`}
-                  />
-                </td>
+                {!isImported && (
+                  <td className="px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(row.id)}
+                      onChange={() => toggleSelect(row.id)}
+                      className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                      aria-label={`Selecionar linha ${row.rowIndex + 1}`}
+                    />
+                  </td>
+                )}
 
                 {/* Índice */}
                 <td className="px-3 py-2.5 text-muted-foreground tabular-nums">
@@ -431,7 +507,7 @@ export default function ReviewClient({ documentId, initialData }: Props) {
 
                 {/* Data */}
                 <td className="px-3 py-2.5">
-                  {editCell?.rowId === row.id && editCell.field === 'date' ? (
+                  {!isImported && editCell?.rowId === row.id && editCell.field === 'date' ? (
                     <Input
                       type="date"
                       value={editCell.value}
@@ -449,9 +525,12 @@ export default function ReviewClient({ documentId, initialData }: Props) {
                   ) : (
                     <button
                       onClick={() =>
-                        setEditCell({ rowId: row.id, field: 'date', value: row.date ?? '' })
+                        !isImported && setEditCell({ rowId: row.id, field: 'date', value: row.date ?? '' })
                       }
-                      className="tabular-nums text-left hover:text-primary transition-colors"
+                      className={cn(
+                        'tabular-nums text-left',
+                        !isImported && 'hover:text-primary transition-colors',
+                      )}
                     >
                       {formatDate(row.date)}
                     </button>
@@ -460,7 +539,7 @@ export default function ReviewClient({ documentId, initialData }: Props) {
 
                 {/* Valor */}
                 <td className="px-3 py-2.5 text-right">
-                  {editCell?.rowId === row.id && editCell.field === 'amount' ? (
+                  {!isImported && editCell?.rowId === row.id && editCell.field === 'amount' ? (
                     <Input
                       type="number"
                       value={editCell.value}
@@ -480,45 +559,45 @@ export default function ReviewClient({ documentId, initialData }: Props) {
                   ) : (
                     <button
                       onClick={() =>
-                        setEditCell({
-                          rowId: row.id,
-                          field: 'amount',
-                          value: row.amount ?? '',
-                        })
+                        !isImported && setEditCell({ rowId: row.id, field: 'amount', value: row.amount ?? '' })
                       }
-                      className="tabular-nums hover:text-primary transition-colors"
+                      className={cn(
+                        'tabular-nums',
+                        !isImported && 'hover:text-primary transition-colors',
+                      )}
                     >
                       {formatAmount(row.amount)}
                     </button>
                   )}
                 </td>
 
-                {/* Direção — clique inverte */}
+                {/* Direção */}
                 <td className="px-3 py-2.5">
-                  <button
-                    onClick={() => flipDirection(row.id)}
-                    title="Clique para inverter"
+                  <span
+                    onClick={() => !isImported && flipDirection(row.id)}
+                    title={isImported ? undefined : 'Clique para inverter'}
+                    role={isImported ? undefined : 'button'}
                     className={cn(
-                      'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors',
+                      'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium',
                       row.direction === 'inflow'
-                        ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                        ? cn('bg-emerald-100 text-emerald-700', !isImported && 'hover:bg-emerald-200 cursor-pointer')
                         : row.direction === 'outflow'
-                          ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                          ? cn('bg-rose-100 text-rose-700', !isImported && 'hover:bg-rose-200 cursor-pointer')
                           : 'bg-muted text-muted-foreground',
                     )}
                   >
-                    <ArrowUpDown size={10} />
+                    {!isImported && <ArrowUpDown size={10} />}
                     {row.direction === 'inflow'
                       ? 'Entrada'
                       : row.direction === 'outflow'
                         ? 'Saída'
                         : '—'}
-                  </button>
+                  </span>
                 </td>
 
                 {/* Descrição */}
                 <td className="px-3 py-2.5 max-w-xs">
-                  {editCell?.rowId === row.id && editCell.field === 'description' ? (
+                  {!isImported && editCell?.rowId === row.id && editCell.field === 'description' ? (
                     <Input
                       value={editCell.value}
                       onChange={e =>
@@ -535,13 +614,12 @@ export default function ReviewClient({ documentId, initialData }: Props) {
                   ) : (
                     <button
                       onClick={() =>
-                        setEditCell({
-                          rowId: row.id,
-                          field: 'description',
-                          value: row.description ?? '',
-                        })
+                        !isImported && setEditCell({ rowId: row.id, field: 'description', value: row.description ?? '' })
                       }
-                      className="text-left max-w-xs truncate hover:text-primary transition-colors"
+                      className={cn(
+                        'text-left max-w-xs truncate',
+                        !isImported && 'hover:text-primary transition-colors',
+                      )}
                       title={row.description ?? ''}
                     >
                       {row.description || (
@@ -602,27 +680,29 @@ export default function ReviewClient({ documentId, initialData }: Props) {
       )}
 
       {/* Botão de importação */}
-      <div className="flex items-center justify-between border-t pt-4">
-        <p className="text-sm text-muted-foreground">
-          {rejectedCount > 0
-            ? `${rejectedCount} linha${rejectedCount > 1 ? 's rejeitadas' : ' rejeitada'} serão ignoradas.`
-            : 'Rejeite linhas indesejadas antes de confirmar.'}
-        </p>
-        <Button
-          onClick={handleImport}
-          disabled={importing || toImportCount === 0}
-          size="lg"
-        >
-          {importing ? (
-            <span className="flex items-center gap-2">
-              <Loader2 size={16} className="animate-spin" />
-              Importando...
-            </span>
-          ) : (
-            `Confirmar e importar ${toImportCount} transaç${toImportCount === 1 ? 'ão' : 'ões'}`
-          )}
-        </Button>
-      </div>
+      {!isImported && (
+        <div className="flex items-center justify-between border-t pt-4">
+          <p className="text-sm text-muted-foreground">
+            {rejectedCount > 0
+              ? `${rejectedCount} linha${rejectedCount > 1 ? 's rejeitadas' : ' rejeitada'} serão ignoradas.`
+              : 'Rejeite linhas indesejadas antes de confirmar.'}
+          </p>
+          <Button
+            onClick={handleImport}
+            disabled={importing || toImportCount === 0}
+            size="lg"
+          >
+            {importing ? (
+              <span className="flex items-center gap-2">
+                <Loader2 size={16} className="animate-spin" />
+                Importando...
+              </span>
+            ) : (
+              `Confirmar e importar ${toImportCount} transaç${toImportCount === 1 ? 'ão' : 'ões'}`
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

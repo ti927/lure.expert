@@ -5,6 +5,7 @@ import { db } from '@/db'
 import { memberships, documents, transactionsStaging } from '@/db/schema'
 import { eq, and, isNotNull, inArray, desc, sql } from 'drizzle-orm'
 import { UploadForm } from './upload-form'
+import { DeleteDocumentButton } from './delete-document-button'
 import { ArrowRight, Loader2, AlertCircle } from 'lucide-react'
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -116,7 +117,7 @@ export default async function UploadPage() {
                     </p>
                   </div>
 
-                  {/* Status + ação */}
+                  {/* Status + ação + apagar */}
                   <div className="flex shrink-0 items-center gap-3 text-sm">
                     {isProcessing ? (
                       <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
@@ -151,6 +152,7 @@ export default async function UploadPage() {
                         </Link>
                       </>
                     )}
+                    <DeleteDocumentButton documentId={doc.id} />
                   </div>
                 </div>
               )

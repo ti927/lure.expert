@@ -52,16 +52,24 @@ export async function getDocumentStagingRows(documentId: string) {
 
   if (!doc) throw new Error('Documento não encontrado')
 
-  const rows = await db
-    .select()
-    .from(transactionsStaging)
-    .where(and(
-      eq(transactionsStaging.documentId, documentId),
-      eq(transactionsStaging.organizationId, organizationId),
-    ))
-    .orderBy(transactionsStaging.rowIndex)
+  const [rows, txResult] = await Promise.all([
+    db
+      .select()
+      .from(transactionsStaging)
+      .where(and(
+        eq(transactionsStaging.documentId, documentId),
+        eq(transactionsStaging.organizationId, organizationId),
+      ))
+      .orderBy(transactionsStaging.rowIndex),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(transactions)
+      .where(eq(transactions.documentId, documentId)),
+  ])
 
-  return { document: doc, rows }
+  const importedCount = Number(txResult[0]?.count ?? 0)
+
+  return { document: doc, rows, importedCount }
 }
 
 // ─── Update single staging row (inline edit) ─────────────────────────────────

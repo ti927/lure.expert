@@ -27,12 +27,9 @@ const ACCEPTED_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'text/csv',
   'text/plain',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
 ]
 
-const ACCEPTED_EXTENSIONS = '.pdf,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.webp'
+const ACCEPTED_EXTENSIONS = '.pdf,.xls,.xlsx,.csv,.txt'
 const MAX_SIZE_MB = 50
 
 type UploadStatus = 'idle' | 'uploading' | 'success' | 'error'
@@ -51,7 +48,10 @@ export function UploadForm({ orgId }: { orgId: string }) {
   const [status, setStatus] = useState<UploadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [documentId, setDocumentId] = useState<string | null>(null)
+  const [pdfPassword, setPdfPassword] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const isPdf = file?.type === 'application/pdf'
 
   function validateFile(f: File): string | null {
     if (!ACCEPTED_MIME_TYPES.includes(f.type)) {
@@ -63,20 +63,22 @@ export function UploadForm({ orgId }: { orgId: string }) {
     return null
   }
 
-  function selectFile(f: File) {
+  const selectFile = useCallback((f: File) => {
     const err = validateFile(f)
     if (err) { setError(err); return }
     setFile(f)
     setError(null)
     setStatus('idle')
-  }
+  // validateFile, setFile, setError, setStatus são estáveis — deps vazia é segura
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
     const dropped = e.dataTransfer.files[0]
     if (dropped) selectFile(dropped)
-  }, [])
+  }, [selectFile])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -124,6 +126,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
       sourceType,
       periodStart: periodStart || undefined,
       periodEnd: periodEnd || undefined,
+      pdfPassword: pdfPassword || undefined,
     })
 
     if (result.error || !result.success) {
@@ -142,6 +145,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
     setSourceType('')
     setPeriodStart('')
     setPeriodEnd('')
+    setPdfPassword('')
     setStatus('idle')
     setError(null)
     setDocumentId(null)
@@ -262,12 +266,18 @@ export function UploadForm({ orgId }: { orgId: string }) {
               <UploadCloud size={32} className="mb-3 text-muted-foreground" />
               <p className="text-sm font-medium text-foreground">Arraste ou clique para selecionar</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                PDF, Excel, CSV, imagem — máx. {MAX_SIZE_MB} MB
+                PDF, Excel (.xls/.xlsx), CSV, TXT — máx. {MAX_SIZE_MB} MB
               </p>
             </>
           )}
         </div>
       </div>
+
+      {isPdf && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+          PDFs protegidos por senha não são suportados diretamente. Se o arquivo pedir senha, abra no Chrome → Ctrl+P → Salvar como PDF e envie o novo arquivo.
+        </div>
+      )}
 
       {status === 'uploading' && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
