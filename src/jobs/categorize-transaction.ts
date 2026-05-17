@@ -1,0 +1,100 @@
+import { inngest } from '@/lib/inngest'
+import { db } from '@/db'
+import { transactions } from '@/db/schema'
+import { eq, and, inArray } from 'drizzle-orm'
+import {
+  loadOrgContext,
+  categorizeTransaction,
+  logCategorizationEvent,
+} from '@/lib/categorizer'
+
+export const categorizeTransactions = inngest.createFunction(
+  {
+    id: 'categorize-transactions',
+    name: 'Categorizar transações',
+    triggers: [{ event: 'transaction/batch-inserted' }],
+    concurrency: { limit: 1, key: 'event.data.organizationId' },
+  },
+  async ({ event, step }) => {
+    const { transactionIds, organizationId } = event.data as {
+      transactionIds: string[]
+      organizationId: string
+    }
+
+    if (transactionIds.length === 0) return { categorized: 0, needsReview: 0, skipped: 0 }
+
+    const results = await step.run('categorize-all', async () => {
+      const ctx = await loadOrgContext(organizationId)
+
+      const txList = await db
+        .select({
+          id: transactions.id,
+          organizationId: transactions.organizationId,
+          description: transactions.description,
+          amount: transactions.amount,
+          direction: transactions.direction,
+        })
+        .from(transactions)
+        .where(and(
+          eq(transactions.organizationId, organizationId),
+          inArray(transactions.id, transactionIds),
+        ))
+
+      let categorized = 0
+      let needsReview = 0
+      let skipped = 0
+      const agentEventPromises: Promise<void>[] = []
+
+      for (const tx of txList) {
+        const { result, llmCost } = await categorizeTransaction(tx, ctx)
+
+        const hasAnyDimension = result && (
+          result.categoryId || result.costCenterId ||
+          result.businessUnitId || result.legalEntityId
+        )
+
+        if (!hasAnyDimension) {
+          skipped++
+          continue
+        }
+
+        await db
+          .update(transactions)
+          .set({
+            categoryId: result!.categoryId,
+            costCenterId: result!.costCenterId,
+            businessUnitId: result!.businessUnitId,
+            legalEntityId: result!.legalEntityId,
+            categorizationConfidence: String(result!.confidence),
+            categorizationMethod: result!.method,
+            needsReview: result!.needsReview,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(transactions.id, tx.id),
+            eq(transactions.organizationId, organizationId),
+          ))
+
+        if (llmCost) {
+          agentEventPromises.push(
+            logCategorizationEvent({
+              organizationId,
+              transactionId: tx.id,
+              result: result!,
+              llmCost,
+            })
+          )
+        }
+
+        if (result!.needsReview) needsReview++
+        else categorized++
+      }
+
+      await Promise.allSettled(agentEventPromises)
+
+      return { categorized, needsReview, skipped, total: txList.length }
+    })
+
+    return results
+  },
+)

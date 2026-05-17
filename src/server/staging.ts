@@ -12,6 +12,7 @@ import {
   dataSources,
 } from '@/db/schema'
 import { eq, and, isNotNull, inArray, sql } from 'drizzle-orm'
+import { inngest } from '@/lib/inngest'
 
 const SOURCE_LABELS: Record<string, string> = {
   bank: 'Extrato bancário',
@@ -199,11 +200,13 @@ export async function approveAndInsert(documentId: string) {
 
   if (valid.length === 0) return { inserted: 0, skipped, total: approved.length }
 
-  // Insert in batches of 100
+  // Insert in batches of 100 and collect IDs for categorization
   const BATCH = 100
+  const insertedIds: string[] = []
+
   for (let i = 0; i < valid.length; i += BATCH) {
     const batch = valid.slice(i, i + BATCH)
-    await db.insert(transactions).values(
+    const rows = await db.insert(transactions).values(
       batch.map(r => ({
         organizationId,
         dataSourceId: dataSource.id,
@@ -218,7 +221,20 @@ export async function approveAndInsert(documentId: string) {
         needsReview: false,
         status: 'confirmed',
       })),
-    )
+    ).returning({ id: transactions.id })
+    insertedIds.push(...rows.map(r => r.id))
+  }
+
+  // Dispara categorização assíncrona via Inngest (não bloqueia a resposta)
+  if (insertedIds.length > 0) {
+    try {
+      await inngest.send({
+        name: 'transaction/batch-inserted',
+        data: { transactionIds: insertedIds, organizationId },
+      })
+    } catch {
+      // Não bloqueia a importação se o Inngest estiver offline
+    }
   }
 
   revalidatePath(`/upload/${documentId}/review`)
