@@ -1,0 +1,484 @@
+'use client'
+
+import { useState, useTransition, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
+import {
+  Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, X,
+  ChevronDown, ChevronRight, Tags,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { EmptyState } from '@/components/states/empty-state'
+
+export type CategoryItem = {
+  id: string
+  code: string
+  name: string
+  type: string
+  parentId: string | null
+  isActive: boolean
+  txCount: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  revenue: 'Receita',
+  cost: 'Custo',
+  expense: 'Despesa',
+  asset: 'Ativo',
+  liability: 'Passivo',
+  equity: 'Patrimônio Líquido',
+  transfer: 'Transferência',
+}
+
+const TYPE_ORDER = ['revenue', 'cost', 'expense', 'asset', 'liability', 'equity', 'transfer']
+
+interface CategoryManagerProps {
+  categories: CategoryItem[]
+  onCreate: (formData: FormData) => Promise<{ success?: boolean; error?: string }>
+  onUpdate: (id: string, formData: FormData) => Promise<{ success?: boolean; error?: string }>
+  onToggleActive: (id: string, isActive: boolean) => Promise<{ success?: boolean; error?: string }>
+  onDelete: (id: string) => Promise<{ success?: boolean; error?: string }>
+}
+
+type TreeNode = CategoryItem & { children: TreeNode[] }
+
+function buildTree(flat: CategoryItem[], parentId: string | null = null): TreeNode[] {
+  return flat
+    .filter((c) => c.parentId === parentId)
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((c) => ({ ...c, children: buildTree(flat, c.id) }))
+}
+
+export function CategoryManager({
+  categories,
+  onCreate,
+  onUpdate,
+  onToggleActive,
+  onDelete,
+}: CategoryManagerProps) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+
+  const [showArchived, setShowArchived] = useState(false)
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set())
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CategoryItem | null>(null)
+
+  const visibleCategories = showArchived ? categories : categories.filter((c) => c.isActive)
+  const archivedCount = categories.filter((c) => !c.isActive).length
+
+  const byType: Record<string, TreeNode[]> = {}
+  for (const type of TYPE_ORDER) {
+    const typeItems = visibleCategories.filter((c) => c.type === type)
+    byType[type] = buildTree(typeItems)
+  }
+
+  function toggleTypeCollapse(type: string) {
+    setCollapsedTypes((prev) => {
+      const next = new Set(prev)
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
+      return next
+    })
+  }
+
+  function handleCreate(formData: FormData) {
+    startTransition(async () => {
+      const result = await onCreate(formData)
+      if (result.error) {
+        toast.error(result.error)
+      } else {
+        toast.success('Categoria criada.')
+        setShowCreateDialog(false)
+        router.refresh()
+      }
+    })
+  }
+
+  function handleUpdate(id: string, formData: FormData) {
+    startTransition(async () => {
+      const result = await onUpdate(id, formData)
+      if (result.error) {
+        toast.error(result.error)
+      } else {
+        setEditingId(null)
+        router.refresh()
+      }
+    })
+  }
+
+  function handleToggleActive(item: CategoryItem) {
+    startTransition(async () => {
+      const result = await onToggleActive(item.id, !item.isActive)
+      if (result.error) {
+        toast.error(result.error)
+      } else {
+        toast.success(item.isActive ? 'Arquivada.' : 'Reativada.')
+        router.refresh()
+      }
+    })
+  }
+
+  function handleDeleteConfirm() {
+    if (!deleteTarget) return
+    startTransition(async () => {
+      const result = await onDelete(deleteTarget.id)
+      if (result.error) {
+        toast.error(result.error)
+        setDeleteTarget(null)
+      } else {
+        toast.success('Categoria deletada.')
+        setDeleteTarget(null)
+        router.refresh()
+      }
+    })
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between">
+        <Button size="sm" onClick={() => setShowCreateDialog(true)} disabled={isPending}>
+          <Plus className="h-4 w-4 mr-1" />
+          Nova categoria
+        </Button>
+
+        {archivedCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowArchived((v) => !v)}
+          >
+            <Archive className="h-4 w-4 mr-1" />
+            {showArchived ? 'Ocultar arquivadas' : `Mostrar arquivadas (${archivedCount})`}
+          </Button>
+        )}
+      </div>
+
+      {/* Árvore por tipo */}
+      {categories.length === 0 ? (
+        <EmptyState
+          icon={<Tags className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
+          title="Nenhuma categoria cadastrada"
+          description='Clique em "Nova categoria" para começar.'
+        />
+      ) : (
+        <div className="space-y-2">
+          {TYPE_ORDER.map((type) => {
+            const nodes = byType[type]
+            if (nodes.length === 0) return null
+            const isCollapsed = collapsedTypes.has(type)
+
+            return (
+              <div key={type} className="border rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  className="w-full flex items-center gap-2 px-3 py-2 bg-muted/40 hover:bg-muted/60 text-left transition-colors"
+                  onClick={() => toggleTypeCollapse(type)}
+                >
+                  {isCollapsed ? (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )}
+                  <span className="text-sm font-semibold text-foreground">
+                    {TYPE_LABELS[type] ?? type}
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
+                </button>
+
+                {!isCollapsed && (
+                  <div className="divide-y">
+                    {nodes.map((node) => (
+                      <CategoryNodeRow
+                        key={node.id}
+                        node={node}
+                        depth={0}
+                        editingId={editingId}
+                        isPending={isPending}
+                        onEditRequest={setEditingId}
+                        onCancelEdit={() => setEditingId(null)}
+                        onUpdateRequest={handleUpdate}
+                        onToggleActiveRequest={handleToggleActive}
+                        onDeleteRequest={setDeleteTarget}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <CreateCategoryDialog
+        open={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+        categories={categories}
+        onSubmit={handleCreate}
+        isPending={isPending}
+      />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deletar categoria?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja deletar <strong>{deleteTarget?.name}</strong>?{' '}
+              {deleteTarget?.txCount && deleteTarget.txCount > 0 ? (
+                <>
+                  Esta categoria possui <strong>{deleteTarget.txCount} transação(ões)</strong>{' '}
+                  vinculadas e não pode ser deletada. Archive-a em vez disso.
+                </>
+              ) : (
+                'Esta ação não pode ser desfeita.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            {(!deleteTarget?.txCount || deleteTarget.txCount === 0) && (
+              <AlertDialogAction
+                onClick={handleDeleteConfirm}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Deletar
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// ─── Node recursivo ──────────────────────────────────────────────────────────
+
+interface NodeRowProps {
+  node: TreeNode
+  depth: number
+  editingId: string | null
+  isPending: boolean
+  onEditRequest: (id: string) => void
+  onCancelEdit: () => void
+  onUpdateRequest: (id: string, formData: FormData) => void
+  onToggleActiveRequest: (item: CategoryItem) => void
+  onDeleteRequest: (item: CategoryItem) => void
+}
+
+function CategoryNodeRow({
+  node,
+  depth,
+  editingId,
+  isPending,
+  onEditRequest,
+  onCancelEdit,
+  onUpdateRequest,
+  onToggleActiveRequest,
+  onDeleteRequest,
+}: NodeRowProps) {
+  const isEditing = editingId === node.id
+  const indent = depth * 20
+
+  return (
+    <>
+      {isEditing ? (
+        <form
+          action={(fd) => onUpdateRequest(node.id, fd)}
+          className="flex gap-2 items-center px-3 py-2 bg-muted/20"
+          style={{ paddingLeft: `${12 + indent}px` }}
+        >
+          <Input name="name" defaultValue={node.name} className="h-8 flex-1" autoFocus required />
+          <Input name="code" defaultValue={node.code} className="h-8 w-24" required />
+          <Button type="submit" size="sm" variant="ghost" disabled={isPending}>
+            <Check className="h-4 w-4 text-emerald-600" />
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancelEdit}>
+            <X className="h-4 w-4" />
+          </Button>
+        </form>
+      ) : (
+        <div
+          className={`flex items-center gap-3 px-3 py-2 ${!node.isActive ? 'opacity-60' : ''}`}
+          style={{ paddingLeft: `${12 + indent}px` }}
+        >
+          {depth > 0 && (
+            <span className="text-muted-foreground/40 text-xs select-none">└</span>
+          )}
+          <span className="font-mono text-xs text-muted-foreground w-16 shrink-0">{node.code}</span>
+          <span className="flex-1 text-sm text-foreground truncate">{node.name}</span>
+
+          {node.txCount > 0 && (
+            <span className="text-xs text-muted-foreground shrink-0">{node.txCount} tx</span>
+          )}
+          {!node.isActive && (
+            <Badge variant="secondary" className="text-xs shrink-0">Arquivada</Badge>
+          )}
+
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              size="sm" variant="ghost" className="h-7 w-7 p-0"
+              onClick={() => onEditRequest(node.id)}
+              title="Editar"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm" variant="ghost" className="h-7 w-7 p-0"
+              onClick={() => onToggleActiveRequest(node)}
+              title={node.isActive ? 'Arquivar' : 'Reativar'}
+              disabled={isPending}
+            >
+              {node.isActive ? <Archive className="h-3.5 w-3.5" /> : <ArchiveRestore className="h-3.5 w-3.5" />}
+            </Button>
+            <Button
+              size="sm" variant="ghost"
+              className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+              onClick={() => onDeleteRequest(node)}
+              title="Deletar"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {node.children.map((child) => (
+        <CategoryNodeRow
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          editingId={editingId}
+          isPending={isPending}
+          onEditRequest={onEditRequest}
+          onCancelEdit={onCancelEdit}
+          onUpdateRequest={onUpdateRequest}
+          onToggleActiveRequest={onToggleActiveRequest}
+          onDeleteRequest={onDeleteRequest}
+        />
+      ))}
+    </>
+  )
+}
+
+// ─── Dialog criar categoria ──────────────────────────────────────────────────
+
+function CreateCategoryDialog({
+  open,
+  onClose,
+  categories,
+  onSubmit,
+  isPending,
+}: {
+  open: boolean
+  onClose: () => void
+  categories: CategoryItem[]
+  onSubmit: (formData: FormData) => void
+  isPending: boolean
+}) {
+  const [selectedType, setSelectedType] = useState<string>('')
+  const formRef = useRef<HTMLFormElement>(null)
+
+  const parentOptions = selectedType
+    ? categories.filter((c) => c.type === selectedType && c.isActive)
+    : []
+
+  function handleSubmit(formData: FormData) {
+    onSubmit(formData)
+    formRef.current?.reset()
+    setSelectedType('')
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Nova categoria</DialogTitle>
+        </DialogHeader>
+        <form ref={formRef} action={handleSubmit} className="space-y-4 mt-2">
+          <div>
+            <Label htmlFor="cat-type">Tipo</Label>
+            <Select
+              name="type"
+              value={selectedType}
+              onValueChange={setSelectedType}
+              required
+            >
+              <SelectTrigger id="cat-type" className="mt-1">
+                <SelectValue placeholder="Selecione o tipo" />
+              </SelectTrigger>
+              <SelectContent>
+                {TYPE_ORDER.map((t) => (
+                  <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <Label htmlFor="cat-name">Nome</Label>
+              <Input id="cat-name" name="name" className="mt-1" placeholder="Ex: Despesas com RH" required />
+            </div>
+            <div>
+              <Label htmlFor="cat-code">Código</Label>
+              <Input id="cat-code" name="code" className="mt-1" placeholder="Ex: 5.2.01" required />
+            </div>
+          </div>
+
+          {parentOptions.length > 0 && (
+            <div>
+              <Label htmlFor="cat-parent">Categoria pai (opcional)</Label>
+              <Select name="parentId">
+                <SelectTrigger id="cat-parent" className="mt-1">
+                  <SelectValue placeholder="Nenhuma (raiz)" />
+                </SelectTrigger>
+                <SelectContent>
+                  {parentOptions.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.code} — {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button type="submit" disabled={isPending || !selectedType}>Criar categoria</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
