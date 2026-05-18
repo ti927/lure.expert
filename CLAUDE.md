@@ -163,11 +163,11 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 4 — Open Finance via **Pluggy** *em andamento* (4.0 + 4.A concluídas).
+**Status:** Fase 4 — Open Finance via **Pluggy** *em andamento* (4.0, 4.A, 4.B e 4.C concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próximas sub-fases:** 4.B (sync inicial das transações do item via Inngest + pipeline de categorização) → 4.C (webhooks Pluggy + cron diário) → 4.D (reconciliação com transações importadas manualmente).
+**Próxima sub-fase:** 4.D (reconciliação entre transações Pluggy e transações importadas manualmente).
 
 ---
 
@@ -209,6 +209,47 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - `PERSONAL_BANK` / `BUSINESS_BANK` → `data_sources.type = 'bank'`
 - `CREDIT_CARD` → `'credit_card'`
 - `INVESTMENT` → `'investment'`
+
+---
+
+### ✅ Sessão 4.C — Webhooks Pluggy + cron diário de sync *(concluída)*
+
+**O que mudou:**
+- **`src/app/api/webhooks/pluggy/route.ts`** (novo) — endpoint `POST /api/webhooks/pluggy`:
+  - Eventos suportados: `item/updated` → despacha `pluggy/item.connected` com `fromDate` incremental (1 dia antes do `lastTransactionFetchedAt`, ou 7 dias se nunca sincronizado); `item/error` → atualiza `data_sources.status = 'error'` + `lastSyncError`.
+  - Segurança sem HMAC: lookup do `itemId` em `data_sources.external_item_id` — ignora eventos de itens não cadastrados na plataforma.
+  - Falha do Inngest não bloqueia resposta ao Pluggy (try/catch silencioso).
+- **`src/jobs/sync-all-pluggy-items.ts`** (novo) — cron Inngest `syncAllPluggyItems`:
+  - Schedule: `0 6 * * *` (03h BRT, Brasil sem horário de verão).
+  - Busca todos os `data_sources` com `provider='pluggy'`, `status='active'` e `external_item_id IS NOT NULL`.
+  - Despacha `pluggy/item.connected` para cada um com `fromDate = daysAgoISO(7)` (janela de segurança).
+- **`src/jobs/sync-pluggy-item.ts`** — `fromDate` agora é parâmetro opcional no evento (retrocompatível).
+- **`src/app/api/inngest/route.ts`** — `syncAllPluggyItems` registrado no `serve()`.
+
+---
+
+### ✅ Sessão 4.B — Job Inngest sync inicial Pluggy *(concluída)*
+
+**O que mudou:**
+- **`src/jobs/sync-pluggy-item.ts`** (novo) — função Inngest `syncPluggyItem` acionada pelo evento `pluggy/item.connected`:
+  - Concurrency: `limit: 1` por `dataSourceId` (evita sobreposição de syncs do mesmo item).
+  - Busca todas as contas do item via `client.fetchAccounts(itemId)`.
+  - Para cada conta: `client.fetchAllTransactions(accountId, { dateFrom })` (janela padrão 90 dias ou `fromDate` do evento).
+  - Insere em `transactions` em lotes de 100 com `onConflictDoNothing` (dedup por `external_id`).
+  - Atualiza `data_sources.lastSyncAt`, `lastSyncStatus = 'SUCCESS'` e `metadata.lastTransactionFetchedAt`.
+  - Dispara `transaction/batch-inserted` para categorização automática das novas transações.
+- **`src/server/connections.ts`** — `registerPluggyItem` passou a disparar o evento `pluggy/item.connected` após o upsert em `data_sources`.
+- **`src/app/api/inngest/route.ts`** — `syncPluggyItem` registrado no `serve()`.
+
+**Campos mapeados do Pluggy para `transactions`:**
+- `externalId` ← `tx.id` (chave de dedup)
+- `date` ← `tx.date` (ISO date)
+- `amount` ← `Math.abs(tx.amount)` (sempre positivo)
+- `direction` ← `tx.type === 'CREDIT' ? 'inflow' : 'outflow'`
+- `description` ← `tx.description`
+- `rawData` ← objeto `tx` completo
+- `metadata` ← `{ accountId, accountName, pluggyDate }`
+- `status = 'confirmed'`, `needsReview = false` (transações Open Finance não passam por staging)
 
 ---
 
