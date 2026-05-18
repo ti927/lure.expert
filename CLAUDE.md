@@ -172,6 +172,27 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 - Nova server action `moveCategory` em `src/server/categories.ts`.
 - Componentes refatorados: `PaiSection` (useDroppable), `PaiRow`, `DraggableFilhoRow` (useDraggable), `RowActions`, `MultiFilter`.
 
+### ✅ Fixes pós-3F *(concluídos)*
+
+**Renomeação de tipo:**
+- Label `'Transferências'` → `'Transitórios'` no `TYPE_LABELS` de `category-manager.tsx` e `transacoes-client.tsx`. Valor no banco (`transfer`) não muda.
+
+**Fix: deleteCategory com FK violations:**
+- `deleteCategory` em `src/server/categories.ts` verificava apenas filhos e transações. Outras 4 tabelas têm FK `ON DELETE NO ACTION` para `categories.id` e bloqueavam o DELETE silenciosamente.
+- Estratégia por tabela: `fixed_assets`, `loans`, `equity_movements` → bloqueia com mensagem; `categorization_rules` → deleta em cascata (metadados automáticos).
+- Novos imports: `categorizationRules`, `fixedAssets`, `loans`, `equityMovements`.
+
+**Fix: build Vercel com erros de ESLint:**
+- Todos os deploys estavam falhando por 5 erros de ESLint tratados como fatais no build de produção.
+- `transacoes-client.tsx`: ternário como statement (`a ? b() : c()`) → `if/else` (3 ocorrências)
+- `category-manager.tsx`: variável `parentOptions` declarada mas nunca usada → removida
+- `excel-csv.ts`: `let cleaned` → `const cleaned` (variável não reatribuída)
+- `documents.ts`: import `transactionsStaging` não utilizado → removido
+
+**Fix: parent_id de orgs existentes:**
+- Migration `0010_fix_category_parent_ids.sql` criada — seta `parent_id` para categorias com código X.Y.Z em orgs criadas antes da migration 0009.
+- Aplicar manualmente no Supabase Studio (SQL Editor).
+
 ---
 
 **Sessão 3D — Import CSV de dimensões (PRÓXIMA)**
