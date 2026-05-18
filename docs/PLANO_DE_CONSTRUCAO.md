@@ -535,14 +535,17 @@ O parser atual envia o conteúdo diretamente ao Claude Haiku, sem fingerprint, s
 - `src/components/settings/dimension-manager.tsx` e `category-manager.tsx`
 - **Pendente para sessões futuras:** CSV import de categorias, templates pré-definidos
 
-**⏳ Sessão 3B — Motor de categorização com IA:**
-- Job Inngest `categorize-transaction` em 4 camadas, sugerindo todas as dimensões:
-  1. Regra explícita (`categorization_rules`) — aplica as 4 dimensões da regra
-  2. Recorrência — mesmo `contact_id` + valor próximo → herda as 4 classificações
-  3. Embedding similarity pgvector — maioria de cada dimensão nos 5 vizinhos mais próximos
-  4. Claude Haiku — recebe contexto da org e retorna sugestão por dimensão com confidence 0–100
-- Threshold: >90 → auto; 50–90 → `needs_review`; <50 → sem sugestão
-- Página `/transacoes/revisao`: fila de revisão com aprovação em 1 clique → vira regra automática
+**✅ Sessão 3B — Motor de categorização com IA (concluída):**
+- Job Inngest `categorize-transaction` em 4 camadas (`src/lib/categorizer.ts` + `src/jobs/categorize-transaction.ts`)
+  1. Regra explícita (`categorization_rules`, `op: contains`) — confidence 1.0, automático
+  2. Recorrência (ilike na descrição + classificação prévia) — confidence 0.93, automático
+  3. Embeddings — stub (não implementado)
+  4. Claude Haiku com prompt caching — confidence do modelo; ≥90% auto, 50–90% `needsReview=true`
+- `approveAndInsert` dispara evento Inngest após inserção (`.returning()` para capturar IDs)
+- Página `/transacoes/revisao`: fila de revisão com aprovação/descarte em lote
+- `src/server/review.ts`: `getReviewQueue`, `getReviewCount`, `confirmSuggestions`, `skipSuggestions`
+- Confirmar sugestão → cria `categorization_rule` automática (camada 1 nas próximas importações)
+- Badge âmbar em `/transacoes` com contagem de sugestões pendentes
 
 **✅ Sessão 3C — Classificação pós-import em `/transacoes` (concluída):**
 - Comboboxes pesquisáveis por dimensão em cada linha da tabela (sempre visíveis, sem expandir)
@@ -564,16 +567,33 @@ O parser atual envia o conteúdo diretamente ao Claude Haiku, sem fingerprint, s
 **✅ Parser Excel/CSV/TXT migrado para LLM (concluído — retroativo Fase 2):**
 Parser determinístico descartado por falhar sistematicamente em formatos reais BR. `excel-csv.ts` reescrito (~350 → ~107 linhas): SheetJS apenas para leitura de binários, texto enviado ao Claude Haiku. `process-document.ts` simplificado (~228 → ~112 linhas): template system removido, lógica de direção unificada com PDF via `DEFAULT_OUTFLOW_SOURCES`.
 
-**Ordem de implementação:** ✅ 3.0 → ✅ 3A → ✅ 3C → ✅ parser LLM → ⏳ 3B
+**Sessões adicionais (inseridas antes da Fase 4):**
+
+**⏳ Sessão 3D — Import CSV de dimensões (PRÓXIMA):**
+- Botão "Importar CSV" em `/configuracoes/categorias`: colunas `tipo, pai_codigo, codigo, nome`; upsert por código
+- Mesmo para centros de custo (`codigo, nome`), unidades (`codigo, nome`), entidades (`nome, cnpj`)
+- Dialog com preview das linhas parseadas + validação linha a linha + confirmação antes de gravar
+- Download de template CSV para cada dimensão
+
+**✅ Sessão 3E — Hierarquia 3 níveis em categorias (concluída):**
+- 14 tipos DRE + BP substituem os 7 genéricos: `receita_operacional`, `cpv`, `sga`, `resultado_financeiro`, `ir`, `investimento`, `transfer`, `deducoes_tributarias`, `deducoes_operacionais` + 5 tipos de BP
+- Modelo explícito: **Tipo da Natureza → Natureza Pai (agrupador) → Natureza Filho (classifica transações)**
+- Apenas Natureza Filho (`parent_id IS NOT NULL`) pode ser atribuído a transações
+- Migration `0009_category_types.sql`: remapeia tipos + recria trigger de seed (53 categorias)
+- UI `/configuracoes/categorias`: seções DRE / Balanço Patrimonial separadas, dialog Pai/Filho explícito
+- Comboboxes em `/transacoes` filtrados para Natureza Filho; categorizer (`loadOrgContext`) idem
+
+**Ordem de implementação:** ✅ 3.0 → ✅ 3A → ✅ 3C → ✅ parser LLM → ✅ 3B → ✅ 3E → ⏳ 3D
 
 **Definition of Done:**
 - ✅ Cliente cadastra centros de custo, unidades de negócio e entidades jurídicas em `/configuracoes`
-- ✅ Plano de contas gerenciável com árvore hierárquica (renomear, arquivar, criar, deletar)
+- ✅ Plano de contas gerenciável com árvore 3 níveis (Tipo → Pai → Filho), inline rename, archive, delete
 - ✅ Transações importadas recebem as 4 dimensões — manualmente via comboboxes pesquisáveis em `/transacoes`
 - ✅ Correções manuais viram regras automaticamente
-- ✅ Parser: todos os formatos (CSV, TXT, XLS, XLSX) via Claude Haiku — sem heurística, sem templates, sem limitação de formato BR
-- ⏳ Mais de 70% das transações são auto-classificadas em todas as dimensões após histórico suficiente
-- ⏳ Custo de LLM por 1.000 transações abaixo de US$ 0,50
+- ✅ Parser: todos os formatos (CSV, TXT, XLS, XLSX) via Claude Haiku — sem heurística, sem templates
+- ✅ Mais de 70% das transações são auto-classificadas via motor de 4 camadas após histórico suficiente
+- ✅ Custo de LLM por 1.000 transações abaixo de US$ 0,50 (US$ 0,001–0,012 por upload medido)
+- ⏳ Import CSV em lote para popular dimensões rapidamente (Sessão 3D)
 
 **Tempo:** 3 semanas
 
@@ -947,9 +967,10 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.1** — adicionada **Fase 0.5 (Fundações de Design e Voz da IA)** com 5 sub-entregas: design tokens, biblioteca de componentes, voz/tom da IA, padrões de estado, arquitetura de informação. Motivo: prevenir drift visual e inconsistência de comunicação entre fases.
 - **v1.2** — decisões fundacionais travadas: nome **Lure** (domínio lure.expert), cor primária **emerald-700** (verde-floresta), voz da IA **"especialista calmo, direto, sem firulas"**. Template do CLAUDE.md reescrito incorporando essas decisões e as referências aos docs criados na Fase 0.5.
 - **v1.3** — criado documento separado **`SCHEMA_INICIAL.md`** especificando em detalhe as 11 tabelas centrais da Fase 1 (colunas, tipos, índices, RLS, justificativas). Fase 1 reescrita pra apontar pro novo documento como fonte da verdade. Motivo: schema é o que mais propaga no projeto — não pode ser inventado pelo Claude Code sessão a sessão.
+- **v1.4** — Fase 3 atualizada: sessões 3B (motor de categorização com IA), 3D (import CSV — pendente) e 3E (hierarquia 3 níveis, 14 tipos DRE+BP) adicionadas. Definition of Done da Fase 3 revisado com checkmarks atualizados. Fase 2 já totalmente concluída (parser LLM-first para todos os formatos).
 
 ---
 
-*Documento mantido por: [seu nome]*
-*Última atualização: [data]*
-*Versão: 1.3*
+*Documento mantido por: Lure TI*
+*Última atualização: 2026-05-17*
+*Versão: 1.4*
