@@ -163,10 +163,11 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Fase 3 — Dimensões Analíticas + Categorização com IA (EM ANDAMENTO)**
-> Sessões concluídas: 3.0 (schema) + 3A (gestão de dimensões e categorias) + 3C (classificação pós-importação + melhorias de UX em `/transacoes`) + **parser Excel/CSV/TXT migrado para Claude Haiku**.
-> **Próxima sessão: 3B** — motor de categorização com IA (job Inngest `categorize-transaction`).
-> Ver detalhamento completo na seção de Fase 3 abaixo.
+**Fase 4 — Integração Open Finance (PRÓXIMA)**
+> Fase 3 concluída integralmente. Próximo passo: escolher provedor Open Finance
+> (Belvo ou Pluggy), implementar fluxo de autorização OAuth, job diário de sync e
+> conciliação automática com transações existentes.
+> Ver detalhamento na seção FASE 4 do `docs/PLANO_DE_CONSTRUCAO.md`.
 
 ---
 
@@ -318,19 +319,25 @@ RLS por `organization_id` em todas. Soft delete via `is_active`.
 **Pendente para sessões futuras:** CSV import de categorias, templates pré-definidos (DRE Padrão/Serviços/etc.)
 TypeScript: 0 erros
 
-### Sessão 3B — Motor de categorização com IA
+### ✅ Sessão 3B — Motor de categorização com IA *(concluída)*
 
-- Job Inngest `categorize-transaction` disparado por INSERT em `transactions`
-- 4 camadas em ordem, sugerindo **todas as dimensões**:
-  1. Regra explícita (`categorization_rules`) — aplica categoria + CC + UN + entidade da regra
-  2. Recorrência: mesmo `contact_id` + valor próximo → herda as 4 classificações da última ocorrência
-  3. Embedding similarity via pgvector (limitado à org) → maioria de cada dimensão nos 5 vizinhos
-  4. Claude Haiku: recebe descrição + plano de contas + centros de custo + UNs + entidades da org → retorna sugestão por dimensão com confidence 0–100
-- Threshold por dimensão: >90 → auto; 50–90 → `needs_review: true`; <50 → sem sugestão
-- `needs_review = true` se qualquer dimensão ficou abaixo de 90
-- Página `/transacoes/revisao`: fila de `needs_review = true` ou `status = 'pending'`
-- Aprovação com 1 clique → vira `categorization_rule` automática
-- Custo LLM alvo: < US$ 0,50 por 1.000 transações
+**Arquivos principais:**
+- `src/lib/categorizer.ts` — motor em 4 camadas: regra → recorrência → embeddings (stub) → Claude Haiku
+- `src/jobs/categorize-transaction.ts` — job Inngest `transaction/batch-inserted`, concurrency 1 por org
+- `src/server/staging.ts` — `approveAndInsert` dispara evento Inngest após inserção (retorna IDs via `.returning()`)
+- `src/server/review.ts` — `getReviewQueue`, `getReviewCount`, `confirmSuggestions`, `skipSuggestions`
+- `src/app/(authenticated)/transacoes/revisao/` — página de fila de revisão com aprovação/descarte em lote
+- `src/app/(authenticated)/transacoes/page.tsx` — badge âmbar com contagem de sugestões pendentes
+
+**Camadas implementadas:**
+1. Regra explícita (`categorization_rules`, `op: contains`) → confidence 1.0, auto
+2. Recorrência (ilike na descrição + classificação prévia na org) → confidence 0.93, auto
+3. Embeddings → stub (requer API externa, não implementado)
+4. Claude Haiku com prompt caching → confidence do modelo /100; ≥90% auto, 50–90% `needsReview=true`
+
+**Comportamento pós-confirmação:** aceitar sugestão em `/transacoes/revisao` cria `categorization_rule` automática (camada 1 nas próximas importações).
+
+**Fix complementar:** página `/upload` com polling `force-dynamic` + `router.refresh()` a cada 3s enquanto há documento processando.
 
 ### ✅ Sessão 3C — Classificação pós-importação em `/transacoes` *(concluída)*
 
@@ -397,7 +404,7 @@ TypeScript: 0 erros. Testado: CSV sem cabeçalho + CSV com BOM/acessibilidade + 
 ### Ordem de implementação
 
 ```
-✅ 3.0 (schema) → ✅ 3A (configurar dimensões) → ✅ 3C (classificar pós-import) → ✅ parser LLM → ⏳ 3B (automatizar)
+✅ 3.0 (schema) → ✅ 3A (configurar dimensões) → ✅ 3C (classificar pós-import) → ✅ parser LLM → ✅ 3B (automatizar)
 ```
 
 > **Impacto futuro no DRE (Fase 6):** as dimensões viram filtros e agrupadores nativos
