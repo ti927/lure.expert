@@ -4,7 +4,7 @@ import { transactions, dataSources } from '@/db/schema'
 import { eq, and } from 'drizzle-orm'
 import { getPluggyClient } from '@/lib/pluggy'
 
-const DAYS_BACK = 90
+const DAYS_BACK = 365
 const BATCH_SIZE = 100
 
 export function daysAgoISO(days: number): string {
@@ -76,7 +76,7 @@ export const syncPluggyItem = inngest.createFunction(
           after = nextAfter
         }
 
-        if (txList.length === 0) return []
+        if (txList.length === 0) return { fetched: 0, ids: [] }
 
         const ids: string[] = []
 
@@ -113,10 +113,10 @@ export const syncPluggyItem = inngest.createFunction(
           ids.push(...rows.map(r => r.id))
         }
 
-        return ids
+        return { fetched: txList.length, ids }
       })
 
-      allInsertedIds.push(...insertedIds)
+      allInsertedIds.push(...insertedIds.ids)
     }
 
     // Atualiza data_sources com lastSyncAt e lastTransactionFetchedAt no metadata
@@ -173,6 +173,6 @@ export const syncPluggyItem = inngest.createFunction(
       })
     }
 
-    return { synced: allInsertedIds.length, accounts: accountIds.length }
+    return { synced: allInsertedIds.length, accounts: accountIds.length, dateFrom }
   },
 )
