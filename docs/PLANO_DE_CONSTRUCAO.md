@@ -608,24 +608,70 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 4 — Integração Open Finance (Semanas 9-10)
+### FASE 4 — Integração Open Finance via Pluggy (Semanas 9-10)
 
-**Objetivo:** cliente conecta banco e o extrato vem automático todo dia.
+**Objetivo:** cliente conecta banco/cartão pelo widget Pluggy e o extrato vem automático todo dia, passando pelo pipeline de categorização da Fase 3.
 
-**Deliverables:**
-- Integração com provedor Open Finance (provavelmente Belvo ou Pluggy — escolher na hora)
-- Fluxo de autorização do cliente
-- Job diário que puxa novas transações e ingere
-- Conciliação automática com transações já no sistema
+**Decisão travada (2026-05-18):** provedor = **Pluggy**. Motivos: cobertura ampla de bancos PJ brasileiros, documentação e suporte em PT, pricing por conexão (mais previsível pra MVP), widget React `@pluggy/connect` reduz superfície de UI a manter.
 
-**Prompt template:**
-> *"Vamos integrar Open Finance via [Belvo ou Pluggy — pesquisar qual tem melhor cobertura brasileira nesse momento]. Cliente entra em /connections, clica 'Conectar Banco', é redirecionado pro fluxo OAuth do provedor, autoriza acesso a conta corrente e cartão. Salvamos as credenciais (tokens criptografados) na tabela accounts. Um job Inngest agendado pra rodar diariamente: pra cada account ativa, puxa transações desde a última sincronização, deduplica contra transactions já existentes, e ingere as novas (passando pelo pipeline de categorização da Fase 3). Tela /connections lista contas conectadas, mostra última sincronização, e permite forçar sync manual."*
+**Deliverables (alto nível):**
+- Widget Pluggy embutido em `/contas` (botão "Conectar banco")
+- Fluxo de autorização do cliente via `connect_token` server-side
+- Persistência da conexão em `data_sources` (`provider='pluggy'`, `external_item_id` único)
+- Sync inicial (primeira ingestão) + cron diário Inngest
+- Webhooks Pluggy → atualização incremental
+- Reconciliação contra transações importadas manualmente (upload)
+
+**Sub-plano (sessões):**
+
+**✅ 4.0 — Scaffolding (concluída):**
+- SDK `pluggy-sdk` instalado; singleton em `src/lib/pluggy.ts`
+- `data_sources.external_item_id` adicionado via migration `0013_pluggy_data_sources.sql` (índice único parcial por `(provider, external_item_id)` + lookup por `(organization_id, provider)`)
+- Drizzle schema atualizado; `.env.example` reescrito com Anthropic/Inngest/Pluggy
+- `/contas` com banner "em construção" + EmptyState
+- Convenções para `metadata` jsonb (connectorId, institutionName, products, executionStatus, etc.)
+
+**4.A — Fluxo de Connect (widget):**
+- Instalar `@pluggy/connect` (React) e renderizar atrás de um botão em `/contas`
+- Server action `createPluggyConnectToken()` que chama `pluggy.createConnectToken()`
+  e devolve o `accessToken` pro client (não persiste — token de curta duração)
+- Callback `onSuccess` do widget → server action `registerPluggyItem(itemId, connectorMeta)`
+  → insere `data_sources` (provider='pluggy', external_item_id=itemId, type derivado do `connector.type`, status='active')
+- Lista de conexões em `/contas` mostrando institutionName, status, última sync
+- Tratamento dos 5 estados (loading widget / sucesso / erro / login_error / waiting_user_input)
+
+**4.B — Sync inicial:**
+- Job Inngest `pluggy/item.connected` (disparado pelo `registerPluggyItem`)
+- Para cada `account` do `item`: busca transações via `pluggy.fetchTransactions(accountId, { from, to })`
+  com paginação por cursor (Pluggy retorna até 90d / 500 itens por página)
+- Mapeia para `transactions_staging` reusando o pipeline existente; em seguida `transactions`
+- Disparar `transaction/batch-inserted` (Fase 3B) para categorização automática rodar
+- `metadata.lastTransactionFetchedAt` atualizado a cada batch
+
+**4.C — Webhooks + cron diário:**
+- Rota `/api/webhooks/pluggy` validando HMAC com `PLUGGY_WEBHOOK_SECRET`
+- Evento `item/updated` → enfileira sync incremental (transações desde `lastTransactionFetchedAt`)
+- Cron Inngest 03:00 BRT: para cada `data_source` com `provider='pluggy'` e `status='active'`, fallback de polling caso o webhook tenha falhado
+- UI de erro: badge "Atenção" em `/contas` quando `executionStatus` for `LOGIN_ERROR` ou `USER_INPUT_TIMEOUT`, com CTA "Reautenticar" (gera novo connect_token apontando para o itemId existente)
+
+**4.D — Reconciliação:**
+- Para cada transação ingerida via Pluggy, procurar match em `transactions` já importadas via upload manual (chave: org + valor + ±2 dias + descrição similaridade trigram > 0.6)
+- Match >85% → automático (marca a manual como duplicata, mantém a Pluggy como fonte da verdade); 50-85% → fila de revisão; <50% → mantém ambas
+- Política espelha a regra 11 do CLAUDE.md
+
+**Pré-requisitos de conta (cliente):**
+- Conta no [dashboard.pluggy.ai](https://dashboard.pluggy.ai) (sandbox)
+- Credenciais `PLUGGY_CLIENT_ID` e `PLUGGY_CLIENT_SECRET` no `.env.local`
+- Para produção: contratar plano, gerar credenciais de produção e migrar `PLUGGY_ENVIRONMENT=production`
 
 **Definition of Done:**
-- Você conecta sua conta PJ real e o extrato dos últimos 30 dias aparece
-- Próximo dia, o sistema puxa as novas movimentações sozinho
+- Cliente conecta uma conta PJ real (sandbox primeiro) pelo widget
+- Transações dos últimos 30 dias aparecem em `/transacoes` já com categorização IA aplicada
+- Próximo dia (via webhook ou cron), novas movimentações entram sozinhas
+- Reconciliação com upload manual evita duplicatas
+- Status de erro do item é visível em `/contas` com fluxo de reautenticação
 
-**Tempo:** 2 semanas (depende muito da qualidade da API do provedor)
+**Tempo:** 2-3 semanas (4.A em 3-4 dias; 4.B em 4-5 dias; 4.C em 3 dias; 4.D em 3-4 dias)
 
 ---
 
@@ -977,9 +1023,10 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.2** — decisões fundacionais travadas: nome **Lure** (domínio lure.expert), cor primária **emerald-700** (verde-floresta), voz da IA **"especialista calmo, direto, sem firulas"**. Template do CLAUDE.md reescrito incorporando essas decisões e as referências aos docs criados na Fase 0.5.
 - **v1.3** — criado documento separado **`SCHEMA_INICIAL.md`** especificando em detalhe as 11 tabelas centrais da Fase 1 (colunas, tipos, índices, RLS, justificativas). Fase 1 reescrita pra apontar pro novo documento como fonte da verdade. Motivo: schema é o que mais propaga no projeto — não pode ser inventado pelo Claude Code sessão a sessão.
 - **v1.4** — Fase 3 atualizada: sessões 3B (motor de categorização com IA), 3D (import CSV — pendente) e 3E (hierarquia 3 níveis, 14 tipos DRE+BP) adicionadas. Definition of Done da Fase 3 revisado com checkmarks atualizados. Fase 2 já totalmente concluída (parser LLM-first para todos os formatos).
+- **v1.5** — Fase 3 fechada (3D/3E/3F + migrations 0009–0012 + fixes pós-3F). Fase 4 reescrita com **Pluggy** travado como provedor de Open Finance (decisão de 2026-05-18). Sub-plano detalhado em sessões 4.0 (scaffolding — ✅ concluída), 4.A (widget), 4.B (sync inicial), 4.C (webhooks + cron), 4.D (reconciliação). Belvo removido como alternativa.
 
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-05-17*
-*Versão: 1.4*
+*Última atualização: 2026-05-18*
+*Versão: 1.5*

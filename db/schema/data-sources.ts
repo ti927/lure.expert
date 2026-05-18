@@ -12,6 +12,8 @@ export const dataSources = pgTable('data_sources', {
   type: text('type').notNull(),
   provider: text('provider').notNull(),
   name: text('name').notNull(),
+  // externalItemId: chave do recurso no provedor (ex: itemId do Pluggy). Único por provider.
+  externalItemId: text('external_item_id'),
   // credentialsEncrypted: bytea cifrado, armazenado como base64 — nunca expor ao cliente
   credentialsEncrypted: text('credentials_encrypted'),
   lastSyncAt: timestamp('last_sync_at', tz),

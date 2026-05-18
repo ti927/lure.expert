@@ -163,9 +163,32 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
+**Status:** Fase 4 — Open Finance via **Pluggy** *em andamento* (Sessão 4.0 concluída — scaffolding).
 
-**Próxima:** Fase 4 — Open Finance (decisão pendente: Belvo vs Pluggy).
+Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
+
+**Próximas sub-fases:** 4.A (fluxo de Connect via widget + callback) → 4.B (sync inicial + reaproveitamento do pipeline de categorização) → 4.C (webhooks + cron diário) → 4.D (reconciliação com transações importadas manualmente).
+
+---
+
+### ✅ Sessão 4.0 — Scaffolding Pluggy *(concluída)*
+
+**Decisão travada:** provedor de Open Finance = **Pluggy** (cobertura BR, docs/suporte PT). Belvo descartado para o MVP.
+
+**O que mudou:**
+- **SDK:** `pluggy-sdk` instalado (`^x.y.z`, ver `package.json`). Singleton em `src/lib/pluggy.ts` com `getPluggyClient()` (lazy, falha se faltar env) e `createConnectToken(itemId?, options?)` para o widget no browser.
+- **Schema:** `data_sources.external_item_id` (text, nullable) adicionado — chave do `itemId` do Pluggy. Índice único parcial por `(provider, external_item_id)` quando preenchido + índice de lookup por `(organization_id, provider)`. Migration `db/migrations/rls/0013_pluggy_data_sources.sql` (aplicar manualmente no Supabase Studio antes da 4.A).
+- **Drizzle schema** `db/schema/data-sources.ts` atualizado com `externalItemId`.
+- **`.env.example`** reescrito incluindo: Supabase service role, DATABASE_URL, Anthropic, Inngest (dev + prod), e bloco Pluggy (`PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`, `PLUGGY_ENVIRONMENT=sandbox|production`, `PLUGGY_WEBHOOK_SECRET`).
+- **`/contas`:** banner âmbar "em construção" sinalizando que a integração Pluggy ainda não está pronta. EmptyState mantido para quando não há conexões.
+
+**Convenções estabelecidas para a Fase 4:**
+- `data_sources.provider = 'pluggy'` (constante)
+- `data_sources.type` espelha `connector.type` do Pluggy: `bank` | `credit_card` | `investment`
+- `metadata` jsonb guarda o que não justifica coluna: `connectorId`, `institutionName`, `institutionImageUrl`, `products`, `accountsCount`, `executionStatus`, `nextAutoSyncAt`, `lastTransactionFetchedAt`
+- `credentialsEncrypted` continua sendo o canal único para qualquer token de longo prazo (cifrado, nunca exposto ao cliente)
+
+**Próximo passo (Sessão 4.A):** integrar o `@pluggy/connect` (widget React) atrás de um botão "Conectar banco" em `/contas`, gerar `connect_token` via server action, persistir o `itemId` retornado em `data_sources`, e refletir o status do item na UI. Webhook listener fica para 4.C.
 
 ---
 
@@ -559,7 +582,7 @@ TypeScript: 0 erros. Testado: CSV sem cabeçalho + CSV com BOM/acessibilidade + 
 - Idioma: PT-BR only
 - Moeda: BRL only
 - Plano gratuito: não — só trial de 14 dias
-- Open Finance via: [Belvo ou Pluggy — definir antes da Fase 4 amplificadora]
+- Open Finance via: **Pluggy** (travado em 2026-05-18 — cobertura BR, docs e suporte em PT)
 - SEFAZ via: [provedor — definir antes da Fase 7 amplificadora]
 - Custo de IA: interno (Lure paga, embutido no pricing). Sem BYO API key.
 - Provedor de IA: Anthropic apenas. Multi-LLM diferido.
