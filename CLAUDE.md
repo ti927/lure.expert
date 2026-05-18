@@ -163,6 +163,12 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
+**Status:** Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
+
+**Próxima:** Fase 4 — Open Finance (decisão pendente: Belvo vs Pluggy).
+
+---
+
 ### ✅ Sessão 3F — UX Plano de Contas: filtros + drag-and-drop *(concluída)*
 
 **O que mudou:**
@@ -229,7 +235,7 @@ TypeScript: 0 erros. ESLint: 0 warnings.
 - Total: **15 tipos** (10 DRE + 5 BP), antes 14.
 - **Transferências renumeradas: código 9 → 10** (Pai + filho `9.1` → `10.1`) para liberar o `9` ao novo tipo `investimentos_retiradas`.
 
-**Migration `db/migrations/rls/0011_emprestimos_e_investimentos.sql` (aplicar manualmente no Supabase Studio):**
+**Migration `db/migrations/rls/0011_emprestimos_e_investimentos.sql` (✅ aplicada no Supabase Studio):**
 1. UPDATE Transferências: code `9` → `10`, `9.1` → `10.1`
 2. UPDATE Pai investimento (code `8` → `9`, nome → "Investimentos e Retiradas", type → `investimentos_retiradas`)
 3. UPDATE filhos `8.x` → `9.x` + type → `investimentos_retiradas`
@@ -262,7 +268,7 @@ TypeScript: 0 erros. ESLint: 0 warnings.
 - Em vez de backfill cirúrgico, **wipe total + reseed** em todas as orgs. Autorização explícita do usuário: dados eram todos de teste.
 - **Refactor permanente:** extraído o corpo do seed numa função reusável `seed_categories_for_org(uuid)`. A trigger function `seed_default_categories()` virou um delegate. Dali em diante, qualquer reseed manual vira `SELECT seed_categories_for_org('<org_uuid>');` no SQL Editor.
 
-**Migration `db/migrations/rls/0012_reset_categorias_total.sql` (aplicar manualmente no Supabase Studio):**
+**Migration `db/migrations/rls/0012_reset_categorias_total.sql` (✅ aplicada no Supabase Studio):**
 1. `CREATE OR REPLACE FUNCTION seed_categories_for_org(uuid)` com o corpo idêntico ao seed da 0011 (~140 linhas — 1 a 10 com filhos default)
 2. `CREATE OR REPLACE FUNCTION seed_default_categories()` reescrita só com `PERFORM seed_categories_for_org(NEW.id)`
 3. `DELETE FROM categorization_rules / transactions / fixed_assets / loans / equity_movements / categories` (sem WHERE — limpa tudo)
