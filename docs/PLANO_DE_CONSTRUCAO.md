@@ -626,19 +626,15 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 **✅ 4.0 — Scaffolding (concluída):**
 - SDK `pluggy-sdk` instalado; singleton em `src/lib/pluggy.ts`
-- `data_sources.external_item_id` adicionado via migration `0013_pluggy_data_sources.sql` (índice único parcial por `(provider, external_item_id)` + lookup por `(organization_id, provider)`)
-- Drizzle schema atualizado; `.env.example` reescrito com Anthropic/Inngest/Pluggy
-- `/contas` com banner "em construção" + EmptyState
+- `data_sources.external_item_id` adicionado via migration `0013_pluggy_data_sources.sql` ✅ aplicada
+- Drizzle schema atualizado; `.env.example` reescrito com Anthropic/Inngest/Pluggy; `.env.local` configurado com credenciais sandbox
 - Convenções para `metadata` jsonb (connectorId, institutionName, products, executionStatus, etc.)
 
-**4.A — Fluxo de Connect (widget):**
-- Instalar `@pluggy/connect` (React) e renderizar atrás de um botão em `/contas`
-- Server action `createPluggyConnectToken()` que chama `pluggy.createConnectToken()`
-  e devolve o `accessToken` pro client (não persiste — token de curta duração)
-- Callback `onSuccess` do widget → server action `registerPluggyItem(itemId, connectorMeta)`
-  → insere `data_sources` (provider='pluggy', external_item_id=itemId, type derivado do `connector.type`, status='active')
-- Lista de conexões em `/contas` mostrando institutionName, status, última sync
-- Tratamento dos 5 estados (loading widget / sucesso / erro / login_error / waiting_user_input)
+**✅ 4.A — Fluxo de Connect (widget) (concluída):**
+- `react-pluggy-connect@2.12.0` instalado; carregado com `ssr: false` via `next/dynamic`
+- `src/server/connections.ts`: `generateConnectToken(itemId?)`, `registerPluggyItem(itemId)`, `getOrgConnections()`
+- `/contas` refatorado: server component (busca conexões + `includeSandbox`) + `contas-client.tsx` (botão, widget, lista com logo/status/syncedAt, reautenticação)
+- Mapeamento: `PERSONAL_BANK|BUSINESS_BANK` → `bank`; `CREDIT_CARD` → `credit_card`; `INVESTMENT` → `investment`
 
 **4.B — Sync inicial:**
 - Job Inngest `pluggy/item.connected` (disparado pelo `registerPluggyItem`)
@@ -1024,9 +1020,10 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.3** — criado documento separado **`SCHEMA_INICIAL.md`** especificando em detalhe as 11 tabelas centrais da Fase 1 (colunas, tipos, índices, RLS, justificativas). Fase 1 reescrita pra apontar pro novo documento como fonte da verdade. Motivo: schema é o que mais propaga no projeto — não pode ser inventado pelo Claude Code sessão a sessão.
 - **v1.4** — Fase 3 atualizada: sessões 3B (motor de categorização com IA), 3D (import CSV — pendente) e 3E (hierarquia 3 níveis, 14 tipos DRE+BP) adicionadas. Definition of Done da Fase 3 revisado com checkmarks atualizados. Fase 2 já totalmente concluída (parser LLM-first para todos os formatos).
 - **v1.5** — Fase 3 fechada (3D/3E/3F + migrations 0009–0012 + fixes pós-3F). Fase 4 reescrita com **Pluggy** travado como provedor de Open Finance (decisão de 2026-05-18). Sub-plano detalhado em sessões 4.0 (scaffolding — ✅ concluída), 4.A (widget), 4.B (sync inicial), 4.C (webhooks + cron), 4.D (reconciliação). Belvo removido como alternativa.
+- **v1.6** — Sessão 4.A concluída: `react-pluggy-connect` integrado em `/contas`, fluxo de connect token → widget → `onSuccess` → upsert em `data_sources` funcionando em sandbox. Lista de conexões com reautenticação.
 
 ---
 
 *Documento mantido por: Lure TI*
 *Última atualização: 2026-05-18*
-*Versão: 1.5*
+*Versão: 1.6*

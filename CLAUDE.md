@@ -163,11 +163,11 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 4 — Open Finance via **Pluggy** *em andamento* (Sessão 4.0 concluída — scaffolding).
+**Status:** Fase 4 — Open Finance via **Pluggy** *em andamento* (4.0 + 4.A concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próximas sub-fases:** 4.A (fluxo de Connect via widget + callback) → 4.B (sync inicial + reaproveitamento do pipeline de categorização) → 4.C (webhooks + cron diário) → 4.D (reconciliação com transações importadas manualmente).
+**Próximas sub-fases:** 4.B (sync inicial das transações do item via Inngest + pipeline de categorização) → 4.C (webhooks Pluggy + cron diário) → 4.D (reconciliação com transações importadas manualmente).
 
 ---
 
@@ -177,18 +177,38 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 
 **O que mudou:**
 - **SDK:** `pluggy-sdk` instalado (`^x.y.z`, ver `package.json`). Singleton em `src/lib/pluggy.ts` com `getPluggyClient()` (lazy, falha se faltar env) e `createConnectToken(itemId?, options?)` para o widget no browser.
-- **Schema:** `data_sources.external_item_id` (text, nullable) adicionado — chave do `itemId` do Pluggy. Índice único parcial por `(provider, external_item_id)` quando preenchido + índice de lookup por `(organization_id, provider)`. Migration `db/migrations/rls/0013_pluggy_data_sources.sql` (aplicar manualmente no Supabase Studio antes da 4.A).
+- **Schema:** `data_sources.external_item_id` (text, nullable) adicionado — chave do `itemId` do Pluggy. Índice único parcial por `(provider, external_item_id)` + lookup por `(organization_id, provider)`. Migration `db/migrations/rls/0013_pluggy_data_sources.sql` ✅ aplicada.
 - **Drizzle schema** `db/schema/data-sources.ts` atualizado com `externalItemId`.
-- **`.env.example`** reescrito incluindo: Supabase service role, DATABASE_URL, Anthropic, Inngest (dev + prod), e bloco Pluggy (`PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`, `PLUGGY_ENVIRONMENT=sandbox|production`, `PLUGGY_WEBHOOK_SECRET`).
-- **`/contas`:** banner âmbar "em construção" sinalizando que a integração Pluggy ainda não está pronta. EmptyState mantido para quando não há conexões.
+- **`.env.example`** reescrito com bloco Pluggy. `.env.local` configurado com `PLUGGY_CLIENT_ID` e `PLUGGY_CLIENT_SECRET` (sandbox).
+- **`/contas`:** banner âmbar removido (Sessão 4.A entregou a tela real).
 
 **Convenções estabelecidas para a Fase 4:**
 - `data_sources.provider = 'pluggy'` (constante)
 - `data_sources.type` espelha `connector.type` do Pluggy: `bank` | `credit_card` | `investment`
-- `metadata` jsonb guarda o que não justifica coluna: `connectorId`, `institutionName`, `institutionImageUrl`, `products`, `accountsCount`, `executionStatus`, `nextAutoSyncAt`, `lastTransactionFetchedAt`
+- `metadata` jsonb guarda o que não justifica coluna: `connectorId`, `institutionName`, `institutionImageUrl`, `products`, `executionStatus`, `nextAutoSyncAt`, `lastTransactionFetchedAt`
 - `credentialsEncrypted` continua sendo o canal único para qualquer token de longo prazo (cifrado, nunca exposto ao cliente)
 
-**Próximo passo (Sessão 4.A):** integrar o `@pluggy/connect` (widget React) atrás de um botão "Conectar banco" em `/contas`, gerar `connect_token` via server action, persistir o `itemId` retornado em `data_sources`, e refletir o status do item na UI. Webhook listener fica para 4.C.
+**Próximo passo (Sessão 4.B):** job Inngest `pluggy/item.connected` disparado pelo `registerPluggyItem` — busca accounts do item, busca transações dos últimos 90d via `fetchTransactions`, insere em `transactions_staging` e dispara categorização automática.
+
+---
+
+### ✅ Sessão 4.A — Widget Pluggy Connect + persistência de item *(concluída)*
+
+**O que mudou:**
+- `react-pluggy-connect@2.12.0` instalado. Carregado com `ssr: false` via `next/dynamic` (usa iframe/zoid — incompatível com SSR).
+- **`src/server/connections.ts`** (novo) — 3 server actions:
+  - `generateConnectToken(itemId?)` — gera `accessToken` server-side com `clientUserId` para rastreabilidade. `itemId` opcional: quando passado, abre widget em modo "atualizar item" (reautenticação).
+  - `registerPluggyItem(itemId)` — `client.fetchItem(itemId)` → mapeia `connector.type` → upsert em `data_sources` (verifica `external_item_id` antes de inserir para suportar reconexão). Salva `institutionName`, `imageUrl`, `products`, `executionStatus` em `metadata`.
+  - `getOrgConnections()` — lista `data_sources` onde `provider='pluggy'` da org, ordenado por `created_at`.
+- **`/contas` refatorado:**
+  - `page.tsx` virou server component: busca conexões + deriva `includeSandbox` do env, passa como props.
+  - `contas-client.tsx` (novo): botão "Conectar banco" com loading, widget `<PluggyConnect>` montado só com token ativo, lista de conexões com logo/nome/syncedAt, badge "Atenção" + botão "Reautenticar" para itens com `status='error'`.
+- Migration 0013 aplicada no Supabase ✅. `.env.local` com credenciais sandbox ✅.
+
+**Mapeamento de tipo do conector:**
+- `PERSONAL_BANK` / `BUSINESS_BANK` → `data_sources.type = 'bank'`
+- `CREDIT_CARD` → `'credit_card'`
+- `INVESTMENT` → `'investment'`
 
 ---
 
