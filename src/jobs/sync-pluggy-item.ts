@@ -120,11 +120,18 @@ export const syncPluggyItem = inngest.createFunction(
         ))
     })
 
-    // Dispara categorização automática das transações novas
+    // Dispara categorização automática e reconciliação das transações novas
     if (allInsertedIds.length > 0) {
       await step.run('trigger-categorization', async () => {
         await inngest.send({
           name: 'transaction/batch-inserted',
+          data: { transactionIds: allInsertedIds, organizationId },
+        })
+      })
+
+      await step.run('trigger-reconciliation', async () => {
+        await inngest.send({
+          name: 'pluggy/reconcile.requested',
           data: { transactionIds: allInsertedIds, organizationId },
         })
       })

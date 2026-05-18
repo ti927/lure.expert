@@ -1,6 +1,7 @@
 import {
   pgTable, uuid, text, numeric, boolean, jsonb,
   timestamp, date, index, uniqueIndex, customType,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import { organizations } from './organizations'
@@ -66,6 +67,8 @@ export const transactions = pgTable(
     costCenterId: uuid('cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
     businessUnitId: uuid('business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
     legalEntityId: uuid('legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
+    // FK para a transação canônica (Pluggy) quando esta é marcada como duplicata de upload
+    duplicateOf: uuid('duplicate_of').references((): AnyPgColumn => transactions.id, { onDelete: 'set null' }),
     rawData: jsonb('raw_data').notNull().default(sql`'{}'::jsonb`),
     // populado assincronamente após insert, não bloqueia a operação
     embedding: vector('embedding'),
