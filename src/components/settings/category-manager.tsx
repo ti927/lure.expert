@@ -72,26 +72,28 @@ export type CategoryItem = {
 
 const TYPE_LABELS: Record<string, string> = {
   // DRE
-  receita_operacional:    'Receita Operacional',
-  deducoes_tributarias:   'Deduções Tributárias',
-  deducoes_operacionais:  'Deduções Operacionais',
-  cpv:                    'CPV / CMV / CSP',
-  sga:                    'SG&A',
-  resultado_financeiro:   'Receitas & Despesas Financeiras',
-  ir:                     'Impostos Sobre Renda',
-  investimento:           'Investimentos & Amortizações',
-  transfer:               'Transitórios',
+  receita_operacional:       'Receita Operacional',
+  deducoes_tributarias:      'Deduções Tributárias',
+  deducoes_operacionais:     'Deduções Operacionais',
+  cpv:                       'CPV / CMV / CSP',
+  sga:                       'SG&A',
+  resultado_financeiro:      'Receitas & Despesas Financeiras',
+  ir:                        'Impostos Sobre Renda',
+  emprestimos_amortizacoes:  'Empréstimos & Amortizações',
+  investimentos_retiradas:   'Investimentos & Retiradas',
+  transfer:                  'Transitórios',
   // BP
-  ativo_circulante:       'Ativo Circulante',
-  ativo_nao_circulante:   'Ativo Não-Circulante',
-  passivo_circulante:     'Passivo Circulante',
-  passivo_nao_circulante: 'Passivo Não-Circulante',
-  patrimonio_liquido:     'Patrimônio Líquido',
+  ativo_circulante:          'Ativo Circulante',
+  ativo_nao_circulante:      'Ativo Não-Circulante',
+  passivo_circulante:        'Passivo Circulante',
+  passivo_nao_circulante:    'Passivo Não-Circulante',
+  patrimonio_liquido:        'Patrimônio Líquido',
 }
 
 const DRE_TYPES = [
   'receita_operacional', 'deducoes_tributarias', 'deducoes_operacionais',
-  'cpv', 'sga', 'resultado_financeiro', 'ir', 'investimento', 'transfer',
+  'cpv', 'sga', 'resultado_financeiro', 'ir',
+  'emprestimos_amortizacoes', 'investimentos_retiradas', 'transfer',
 ]
 const BP_TYPES = [
   'ativo_circulante', 'ativo_nao_circulante',

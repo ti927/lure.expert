@@ -214,7 +214,42 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 - **All-or-nothing:** "Confirmar e importar" só habilita com zero erros. Cliente corrige o CSV e tenta de novo.
 - **Upsert:** categorias por `code` (atualiza nome+tipo, mas **não move** entre Pais via CSV — proteção contra acidente); flat por `code → cnpj → name` (na ordem).
 - **Pai já existente:** reusa o id (case-insensitive em `name` + igualdade em `type`); não cria duplicado.
-- **Validação:** tipo deve ser um dos 14; campos obrigatórios não vazios; CNPJ 14 dígitos quando preenchido; código duplicado dentro do mesmo arquivo é erro.
+- **Validação:** tipo deve ser um dos 15 (ver 0011 abaixo); campos obrigatórios não vazios; CNPJ 14 dígitos quando preenchido; código duplicado dentro do mesmo arquivo é erro.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
+
+---
+
+### ✅ Split do tipo `investimento` em dois — migration 0011 *(concluída)*
+
+**O que mudou:**
+- O tipo `investimento` (label "Investimentos & Amortizações") misturava CAPEX e empréstimos no mesmo agrupador. Foi separado em dois tipos novos:
+  - `emprestimos_amortizacoes` — **"Empréstimos & Amortizações"** — empréstimos tomados, pagamento de principal, juros
+  - `investimentos_retiradas` — **"Investimentos & Retiradas"** — CAPEX, intangíveis, depreciação (recebeu os 3 filhos antigos)
+- Total: **15 tipos** (10 DRE + 5 BP), antes 14.
+- **Transferências renumeradas: código 9 → 10** (Pai + filho `9.1` → `10.1`) para liberar o `9` ao novo tipo `investimentos_retiradas`.
+
+**Migration `db/migrations/rls/0011_emprestimos_e_investimentos.sql` (aplicar manualmente no Supabase Studio):**
+1. UPDATE Transferências: code `9` → `10`, `9.1` → `10.1`
+2. UPDATE Pai investimento (code `8` → `9`, nome → "Investimentos e Retiradas", type → `investimentos_retiradas`)
+3. UPDATE filhos `8.x` → `9.x` + type → `investimentos_retiradas`
+4. Salvaguarda: qualquer outra categoria com `type='investimento'` (custom do cliente) também muda — mantém código original
+5. INSERT idempotente: Pai novo "Empréstimos e Amortizações" (code `8`, type `emprestimos_amortizacoes`, sem filhos) em orgs existentes
+6. DROP e RECREATE da função `seed_default_categories()` com novos códigos 8/9/10 + filhos default
+
+**Estrutura final do plano de contas (após migration):**
+- `8 Empréstimos e Amortizações` + filhos `8.1 Empréstimos Tomados`, `8.2 Pagamento de Principal`, `8.3 Juros e Encargos de Empréstimo` (criados só no seed para orgs novas; vazio em orgs existentes)
+- `9 Investimentos e Retiradas` + filhos `9.1 Compra de Imobilizado`, `9.2 Depreciação e Amortização`, `9.3 Investimentos em Intangíveis`
+- `10 Transferências` + filho `10.1 Transferências entre Contas`
+
+**Arquivos de código atualizados (slugs novos + label novo):**
+- `db/schema/categories.ts` (comentário)
+- `src/server/categories.ts` (CATEGORY_TYPES)
+- `src/server/imports.ts` (CATEGORY_TYPES set)
+- `src/components/settings/category-manager.tsx` (TYPE_LABELS + DRE_TYPES)
+- `src/app/(authenticated)/transacoes/transacoes-client.tsx` (CATEGORY_TYPE_LABELS)
+
+CSV import rejeita o slug antigo `investimento` no preview (status "erro"); cliente deve usar `emprestimos_amortizacoes` ou `investimentos_retiradas`.
 
 TypeScript: 0 erros. ESLint: 0 warnings.
 
@@ -225,8 +260,8 @@ TypeScript: 0 erros. ESLint: 0 warnings.
 ### ✅ Sessão 3E — Hierarquia 3 níveis em categorias *(concluída)*
 
 **O que mudou:**
-- 7 tipos genéricos (`revenue`, `cost`, `expense`…) substituídos por 14 tipos específicos:
-  - **DRE (9):** `receita_operacional`, `deducoes_tributarias`, `deducoes_operacionais`, `cpv`, `sga`, `resultado_financeiro`, `ir`, `investimento`, `transfer`
+- 7 tipos genéricos (`revenue`, `cost`, `expense`…) substituídos por 15 tipos específicos (10 DRE + 5 BP — ver `0011_emprestimos_e_investimentos.sql` para o split de `investimento`):
+  - **DRE (10):** `receita_operacional`, `deducoes_tributarias`, `deducoes_operacionais`, `cpv`, `sga`, `resultado_financeiro`, `ir`, `emprestimos_amortizacoes`, `investimentos_retiradas`, `transfer`
   - **BP (5):** `ativo_circulante`, `ativo_nao_circulante`, `passivo_circulante`, `passivo_nao_circulante`, `patrimonio_liquido`
 - Hierarquia explícita: **Tipo da Natureza → Natureza Pai → Natureza Filho**
 - Apenas Natureza Filho (com `parent_id`) pode ser atribuída a transações

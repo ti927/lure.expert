@@ -26,7 +26,8 @@ async function getAuthContext() {
 const CATEGORY_TYPES = [
   // DRE
   'receita_operacional', 'deducoes_tributarias', 'deducoes_operacionais',
-  'cpv', 'sga', 'resultado_financeiro', 'ir', 'investimento', 'transfer',
+  'cpv', 'sga', 'resultado_financeiro', 'ir',
+  'emprestimos_amortizacoes', 'investimentos_retiradas', 'transfer',
   // BP
   'ativo_circulante', 'ativo_nao_circulante',
   'passivo_circulante', 'passivo_nao_circulante',

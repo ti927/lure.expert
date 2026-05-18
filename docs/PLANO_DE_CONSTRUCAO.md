@@ -584,6 +584,7 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 **✅ Sessão 3E — Hierarquia 3 níveis em categorias (concluída):**
 - 14 tipos DRE + BP substituem os 7 genéricos: `receita_operacional`, `cpv`, `sga`, `resultado_financeiro`, `ir`, `investimento`, `transfer`, `deducoes_tributarias`, `deducoes_operacionais` + 5 tipos de BP
+- **Atualização (migration 0011):** o tipo `investimento` foi separado em `emprestimos_amortizacoes` + `investimentos_retiradas` → total agora 15 tipos (10 DRE + 5 BP). Transferências renumeradas de código 9 para 10. Ver CLAUDE.md / migration `0011_emprestimos_e_investimentos.sql`.
 - Modelo explícito: **Tipo da Natureza → Natureza Pai (agrupador) → Natureza Filho (classifica transações)**
 - Apenas Natureza Filho (`parent_id IS NOT NULL`) pode ser atribuído a transações
 - Migration `0009_category_types.sql`: remapeia tipos + recria trigger de seed (53 categorias)
