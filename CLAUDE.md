@@ -255,6 +255,33 @@ TypeScript: 0 erros. ESLint: 0 warnings.
 
 ---
 
+### ✅ Reset total das categorias + reseed — migration 0012 *(concluída)*
+
+**O que mudou:**
+- Após a 0011, 2 orgs criadas antes da 0009 permaneceram com plano de contas incompleto (faltavam Pais que o seed deveria ter criado em sua origem). A 0009 só remapeou tipos; não inseriu categorias novas em orgs preexistentes.
+- Em vez de backfill cirúrgico, **wipe total + reseed** em todas as orgs. Autorização explícita do usuário: dados eram todos de teste.
+- **Refactor permanente:** extraído o corpo do seed numa função reusável `seed_categories_for_org(uuid)`. A trigger function `seed_default_categories()` virou um delegate. Dali em diante, qualquer reseed manual vira `SELECT seed_categories_for_org('<org_uuid>');` no SQL Editor.
+
+**Migration `db/migrations/rls/0012_reset_categorias_total.sql` (aplicar manualmente no Supabase Studio):**
+1. `CREATE OR REPLACE FUNCTION seed_categories_for_org(uuid)` com o corpo idêntico ao seed da 0011 (~140 linhas — 1 a 10 com filhos default)
+2. `CREATE OR REPLACE FUNCTION seed_default_categories()` reescrita só com `PERFORM seed_categories_for_org(NEW.id)`
+3. `DELETE FROM categorization_rules / transactions / fixed_assets / loans / equity_movements / categories` (sem WHERE — limpa tudo)
+4. `SELECT seed_categories_for_org(id) FROM organizations` — reseed em todas as orgs
+
+**Validação pós-aplicação:**
+```sql
+-- Todas as orgs devem ter o mesmo número de Pais raiz
+SELECT organization_id, count(*) FROM categories
+ WHERE parent_id IS NULL GROUP BY organization_id;
+
+-- Função utilitária disponível
+SELECT 1 FROM pg_proc WHERE proname = 'seed_categories_for_org';
+```
+
+Sem mudanças em `src/` — só SQL.
+
+---
+
 **Próxima fase: Fase 4 — Open Finance** (decisão pendente: Belvo vs Pluggy).
 
 ### ✅ Sessão 3E — Hierarquia 3 níveis em categorias *(concluída)*
