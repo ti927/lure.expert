@@ -169,7 +169,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 > de categorização não tem contexto para sugerir classificações úteis.
 >
 > **O que será implementado:**
-> - Import CSV em `/configuracoes/categorias`: colunas `codigo, nome, tipo, pai_codigo` (pai opcional). Upsert por código — atualiza se já existe, cria se não.
+> - Import CSV em `/configuracoes/categorias`: colunas `tipo, pai_codigo, codigo, nome`. Upsert por código — atualiza se já existe, cria se não.
 > - Import CSV em `/configuracoes/centros-de-custo`: colunas `codigo, nome`.
 > - Import CSV em `/configuracoes/unidades-de-negocio`: colunas `codigo, nome`.
 > - Import CSV em `/configuracoes/entidades-juridicas`: colunas `nome, cnpj`.
@@ -178,6 +178,20 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 > - Download de template CSV para cada dimensão.
 >
 > **Após essa sessão:** Fase 4 — Open Finance.
+
+### ✅ Sessão 3E — Hierarquia 3 níveis em categorias *(concluída)*
+
+**O que mudou:**
+- 7 tipos genéricos (`revenue`, `cost`, `expense`…) substituídos por 14 tipos específicos:
+  - **DRE (9):** `receita_operacional`, `deducoes_tributarias`, `deducoes_operacionais`, `cpv`, `sga`, `resultado_financeiro`, `ir`, `investimento`, `transfer`
+  - **BP (5):** `ativo_circulante`, `ativo_nao_circulante`, `passivo_circulante`, `passivo_nao_circulante`, `patrimonio_liquido`
+- Hierarquia explícita: **Tipo da Natureza → Natureza Pai → Natureza Filho**
+- Apenas Natureza Filho (com `parent_id`) pode ser atribuída a transações
+- Migration `0009_category_types.sql` aplicada no Supabase: remapeou tipos + recriou trigger de seed (53 categorias DRE padrão com estrutura Pai/Filho)
+- UI `/configuracoes/categorias`: seções DRE e BP separadas, dialog "Nova natureza" com seleção explícita Pai/Filho
+- Comboboxes em `/transacoes` filtrados para mostrar apenas Natureza Filho
+- Categorizer (`loadOrgContext`): só busca Naturezas Filho para o prompt do LLM
+- Validação server-side em `classifyTransaction` e `batchClassifyTransactions`
 
 ---
 
