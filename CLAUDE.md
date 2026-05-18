@@ -163,11 +163,21 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Fase 4 — Integração Open Finance (PRÓXIMA)**
-> Fase 3 concluída integralmente. Próximo passo: escolher provedor Open Finance
-> (Belvo ou Pluggy), implementar fluxo de autorização OAuth, job diário de sync e
-> conciliação automática com transações existentes.
-> Ver detalhamento na seção FASE 4 do `docs/PLANO_DE_CONSTRUCAO.md`.
+**Sessão 3D — Import CSV de dimensões (PRÓXIMA)**
+> Pré-requisito identificado antes da Fase 4: sem as dimensões devidamente
+> configuradas (plano de contas, centros de custo, unidades, entidades), o motor
+> de categorização não tem contexto para sugerir classificações úteis.
+>
+> **O que será implementado:**
+> - Import CSV em `/configuracoes/categorias`: colunas `codigo, nome, tipo, pai_codigo` (pai opcional). Upsert por código — atualiza se já existe, cria se não.
+> - Import CSV em `/configuracoes/centros-de-custo`: colunas `codigo, nome`.
+> - Import CSV em `/configuracoes/unidades-de-negocio`: colunas `codigo, nome`.
+> - Import CSV em `/configuracoes/entidades-juridicas`: colunas `nome, cnpj`.
+> - Cada tela ganha um botão "Importar CSV" que abre um dialog com: upload do arquivo, preview das linhas parseadas, confirmação antes de gravar.
+> - Erros de validação (código duplicado, tipo inválido, pai inexistente) exibidos linha a linha no preview antes de confirmar.
+> - Download de template CSV para cada dimensão.
+>
+> **Após essa sessão:** Fase 4 — Open Finance.
 
 ---
 
