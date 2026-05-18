@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
-import { Landmark, Plus, RefreshCw, Loader2, AlertCircle } from 'lucide-react'
+import { Landmark, Plus, RefreshCw, Loader2, AlertCircle, GitCompare } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
@@ -22,9 +22,10 @@ const PluggyConnect = dynamic(
 interface ContasClientProps {
   connections: DataSource[]
   includeSandbox: boolean
+  reconciliationCount: number
 }
 
-export function ContasClient({ connections, includeSandbox }: ContasClientProps) {
+export function ContasClient({ connections, includeSandbox, reconciliationCount }: ContasClientProps) {
   const router = useRouter()
   const [connectToken, setConnectToken] = useState<string | null>(null)
   const [isWidgetOpen, setIsWidgetOpen] = useState(false)
@@ -98,6 +99,22 @@ export function ContasClient({ connections, includeSandbox }: ContasClientProps)
           Conectar banco
         </Button>
       </div>
+
+      {/* Banner de reconciliação pendente */}
+      {reconciliationCount > 0 && (
+        <a
+          href="/transacoes/reconciliacao"
+          className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm hover:bg-amber-100 transition-colors"
+        >
+          <GitCompare className="h-4 w-4 text-amber-600 shrink-0" />
+          <span className="text-amber-800">
+            O expert identificou{' '}
+            <span className="font-semibold">{reconciliationCount} par{reconciliationCount !== 1 ? 'es' : ''}</span>{' '}
+            de possíveis duplicatas entre importações e banco conectado.
+          </span>
+          <span className="ml-auto text-amber-600 font-medium whitespace-nowrap">Revisar →</span>
+        </a>
+      )}
 
       {/* Lista */}
       {connections.length === 0 ? (
