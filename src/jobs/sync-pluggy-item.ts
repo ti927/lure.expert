@@ -32,7 +32,6 @@ export const syncPluggyItem = inngest.createFunction(
       fromDate?: string
     }
 
-    // Busca todas as contas do item
     const accountIds = await step.run('fetch-accounts', async () => {
       const client = getPluggyClient()
       const result = await client.fetchAccounts(itemId)
@@ -53,73 +52,79 @@ export const syncPluggyItem = inngest.createFunction(
     const dateTo = todayISO()
     const allInsertedIds: string[] = []
 
-    // Para cada conta, busca todas as transações dos últimos 90 dias
+    // Um step por página: evita timeout em step único quando há muitas transações.
+    // O Inngest memoiza cada step — ao re-invocar a função, steps completos são
+    // pulados e o cursor ('after') é derivado do resultado memoizado.
     for (const account of accountIds) {
-      const insertedIds = await step.run(`sync-account-${account.id}`, async () => {
-        const client = getPluggyClient()
+      let after: string | undefined = undefined
+      let pageNum = 0
 
-        // Loop cursor manual: contorna possível bug do SDK ao parsear a URL de next,
-        // e garante pageSize: 500 para minimizar roundtrips
-        const txList: Awaited<ReturnType<typeof client.fetchAllTransactions>> = []
-        let after: string | undefined = undefined
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const page = await client.fetchTransactionsCursor(
-            account.id,
-            // pageSize: 500 não está no tipo público mas é aceito pela API Pluggy v2
-            { dateFrom, pageSize: 500, ...(after ? { after } : {}) } as Parameters<typeof client.fetchTransactionsCursor>[1] & { pageSize?: number },
-          )
-          txList.push(...page.results)
-          if (!page.next) break
-          const nextAfter = new URL(page.next, 'https://api.pluggy.ai').searchParams.get('after')
-          if (!nextAfter) break
-          after = nextAfter
-        }
-
-        if (txList.length === 0) return { fetched: 0, ids: [] }
-
-        const ids: string[] = []
-
-        for (let i = 0; i < txList.length; i += BATCH_SIZE) {
-          const batch = txList.slice(i, i + BATCH_SIZE)
-          const rows = await db
-            .insert(transactions)
-            .values(
-              batch.map(tx => ({
-                organizationId,
-                dataSourceId,
-                externalId: tx.id,
-                date: tx.date.toISOString().split('T')[0],
-                amount: String(Math.abs(tx.amount)),
-                currency: tx.currencyCode ?? 'BRL',
-                direction: tx.type === 'CREDIT' ? 'inflow' : 'outflow',
-                description: tx.description,
-                rawData: tx as unknown as Record<string, unknown>,
-                metadata: {
-                  accountId: account.id,
-                  accountName: account.name,
-                  accountType: account.type,
-                  accountSubtype: account.subtype,
-                  accountNumber: account.number,
-                  pluggyDate: dateTo,
-                },
-                needsReview: false,
-                status: 'pending',
-              }))
+      while (true) {
+        const { insertedIds, next } = await step.run(
+          `sync-page-${account.id}-p${pageNum}`,
+          async () => {
+            const client = getPluggyClient()
+            const page = await client.fetchTransactionsCursor(
+              account.id,
+              {
+                dateFrom,
+                pageSize: 500,
+                ...(after ? { after } : {}),
+              } as Parameters<typeof client.fetchTransactionsCursor>[1] & { pageSize?: number },
             )
-            .onConflictDoNothing()
-            .returning({ id: transactions.id })
 
-          ids.push(...rows.map(r => r.id))
-        }
+            if (page.results.length === 0) {
+              return { insertedIds: [] as string[], next: null as string | null }
+            }
 
-        return { fetched: txList.length, ids }
-      })
+            const ids: string[] = []
+            for (let i = 0; i < page.results.length; i += BATCH_SIZE) {
+              const batch = page.results.slice(i, i + BATCH_SIZE)
+              const rows = await db
+                .insert(transactions)
+                .values(
+                  batch.map(tx => ({
+                    organizationId,
+                    dataSourceId,
+                    externalId: tx.id,
+                    date: tx.date.toISOString().split('T')[0],
+                    amount: String(Math.abs(tx.amount)),
+                    currency: tx.currencyCode ?? 'BRL',
+                    direction: tx.type === 'CREDIT' ? 'inflow' : 'outflow',
+                    description: tx.description,
+                    rawData: tx as unknown as Record<string, unknown>,
+                    metadata: {
+                      accountId: account.id,
+                      accountName: account.name,
+                      accountType: account.type,
+                      accountSubtype: account.subtype,
+                      accountNumber: account.number,
+                      pluggyDate: dateTo,
+                    },
+                    needsReview: false,
+                    status: 'pending',
+                  }))
+                )
+                .onConflictDoNothing()
+                .returning({ id: transactions.id })
 
-      allInsertedIds.push(...insertedIds.ids)
+              ids.push(...rows.map(r => r.id))
+            }
+
+            return { insertedIds: ids, next: page.next }
+          },
+        )
+
+        allInsertedIds.push(...insertedIds)
+
+        if (!next) break
+        const nextAfter = new URL(next, 'https://api.pluggy.ai').searchParams.get('after')
+        if (!nextAfter) break
+        after = nextAfter
+        pageNum++
+      }
     }
 
-    // Atualiza data_sources com lastSyncAt e lastTransactionFetchedAt no metadata
     await step.run('update-data-source', async () => {
       const [current] = await db
         .select({ metadata: dataSources.metadata })
@@ -156,7 +161,6 @@ export const syncPluggyItem = inngest.createFunction(
         ))
     })
 
-    // Dispara categorização automática e reconciliação das transações novas
     if (allInsertedIds.length > 0) {
       await step.run('trigger-categorization', async () => {
         await inngest.send({
