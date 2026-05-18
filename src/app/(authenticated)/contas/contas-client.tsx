@@ -1,14 +1,20 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
-import { Landmark, Plus, RefreshCw, Loader2, AlertCircle, GitCompare, Trash2, Check } from 'lucide-react'
+import {
+  Landmark, Plus, RefreshCw, Loader2, AlertCircle, GitCompare,
+  Trash2, Check, RotateCcw, ChevronLeft, ChevronRight,
+} from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   AlertDialog,
@@ -22,15 +28,23 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
-import { generateConnectToken, registerPluggyItem, confirmPendingTransactions, disconnectBank } from '@/server/connections'
+import {
+  generateConnectToken,
+  registerPluggyItem,
+  confirmPendingTransactions,
+  confirmSelectedTransactions,
+  disconnectBank,
+  triggerManualSync,
+} from '@/server/connections'
 import type { DataSource } from '@/db/schema'
-import type { PendingSource } from '@/server/connections'
+import type { PendingSource, PendingTransaction } from '@/server/connections'
 
-// Widget Pluggy: carregado apenas no browser (usa iframe/zoid, incompatível com SSR)
 const PluggyConnect = dynamic(
   () => import('react-pluggy-connect').then(m => m.PluggyConnect),
   { ssr: false },
 )
+
+const PAGE_SIZE = 25
 
 interface ContasClientProps {
   connections: DataSource[]
@@ -44,9 +58,14 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
   const [connectToken, setConnectToken] = useState<string | null>(null)
   const [isWidgetOpen, setIsWidgetOpen] = useState(false)
   const [updateItemId, setUpdateItemId] = useState<string | undefined>()
+  const [syncingId, setSyncingId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
   const totalPending = pendingSources.reduce((sum, s) => sum + s.count, 0)
+
+  function handleRefresh() {
+    startTransition(() => { router.refresh() })
+  }
 
   function handleConnect(itemId?: string) {
     setUpdateItemId(itemId)
@@ -70,7 +89,7 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
   async function handleSuccess(data: { item: { id: string } }) {
     try {
       await registerPluggyItem(data.item.id)
-      toast.success('Banco conectado com sucesso.')
+      toast.success('Banco conectado! Buscando extratos, pode levar alguns instantes.')
       router.refresh()
     } catch {
       toast.error('Banco autenticado, mas não foi possível salvar a conexão. Tente novamente.')
@@ -84,9 +103,21 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
     handleClose()
   }
 
+  async function handleSync(dataSourceId: string) {
+    setSyncingId(dataSourceId)
+    const result = await triggerManualSync(dataSourceId)
+    if ('error' in result) {
+      toast.error(result.error)
+    } else {
+      toast.success('Sincronização iniciada. Novos extratos aparecerão em Extrato pendente em instantes.')
+      // Aguarda 3s e atualiza para refletir possíveis mudanças no lastSyncAt
+      setTimeout(() => { router.refresh() }, 3000)
+    }
+    setSyncingId(null)
+  }
+
   return (
     <>
-      {/* Widget Pluggy (montado apenas com token ativo) */}
       {isWidgetOpen && connectToken && (
         <PluggyConnect
           connectToken={connectToken}
@@ -106,14 +137,22 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
             Bancos e cartões conectados via Open Finance
           </p>
         </div>
-        <Button onClick={() => handleConnect()} disabled={isPending}>
-          {isPending && !updateItemId ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Plus className="h-4 w-4 mr-2" />
-          )}
-          Conectar banco
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={handleRefresh} disabled={isPending}>
+            {isPending
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <RefreshCw className="h-4 w-4" />
+            }
+            <span className="ml-1.5">Atualizar</span>
+          </Button>
+          <Button onClick={() => handleConnect()} disabled={isPending}>
+            {isPending && !updateItemId
+              ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              : <Plus className="h-4 w-4 mr-2" />
+            }
+            Conectar banco
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue={totalPending > 0 ? 'pendente' : 'contas'}>
@@ -131,7 +170,6 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
 
         {/* Aba: Contas conectadas */}
         <TabsContent value="contas" className="mt-4 space-y-3">
-          {/* Banner de reconciliação pendente */}
           {reconciliationCount > 0 && (
             <a
               href="/transacoes/reconciliacao"
@@ -161,6 +199,8 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
                   connection={conn}
                   onReauth={() => handleConnect(conn.externalItemId ?? undefined)}
                   isReauthing={isPending && updateItemId === conn.externalItemId}
+                  isSyncing={syncingId === conn.id}
+                  onSync={() => handleSync(conn.id)}
                   onDisconnect={() => router.refresh()}
                 />
               ))}
@@ -173,19 +213,11 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
           {totalPending === 0 ? (
             <EmptyState
               icon={<Check className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
-              title="Nenhum extrato pendente"
-              description="Todos os lançamentos sincronizados já foram confirmados."
+              title="Extratos em dia"
+              description="Nenhum lançamento aguardando confirmação."
             />
           ) : (
-            <div className="flex flex-col gap-4">
-              {pendingSources.map(source => (
-                <PendingSourceCard
-                  key={source.dataSourceId}
-                  source={source}
-                  onConfirmed={() => router.refresh()}
-                />
-              ))}
-            </div>
+            <PendingExtractTab sources={pendingSources} onRefresh={handleRefresh} />
           )}
         </TabsContent>
       </Tabs>
@@ -205,11 +237,15 @@ function ConnectionCard({
   connection,
   onReauth,
   isReauthing,
+  isSyncing,
+  onSync,
   onDisconnect,
 }: {
   connection: DataSource
   onReauth: () => void
   isReauthing: boolean
+  isSyncing: boolean
+  onSync: () => void
   onDisconnect: () => void
 }) {
   const [isDisconnecting, startDisconnect] = useTransition()
@@ -248,8 +284,17 @@ function ConnectionCard({
         )}
         <div>
           <p className="text-sm font-medium">{meta.institutionName ?? connection.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {syncedAt ? `Sincronizado ${syncedAt}` : 'Nunca sincronizado'}
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            {isSyncing ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Sincronizando...
+              </>
+            ) : syncedAt ? (
+              `Sincronizado ${syncedAt}`
+            ) : (
+              'Aguardando sincronização'
+            )}
           </p>
         </div>
       </div>
@@ -261,7 +306,8 @@ function ConnectionCard({
             Atenção
           </Badge>
         )}
-        {isError && (
+
+        {isError ? (
           <Button size="sm" variant="outline" onClick={onReauth} disabled={isReauthing}>
             {isReauthing ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -272,16 +318,35 @@ function ConnectionCard({
               </>
             )}
           </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={onSync}
+            disabled={isSyncing}
+            title="Sincronizar agora"
+          >
+            {isSyncing
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <RotateCcw className="h-4 w-4" />
+            }
+          </Button>
         )}
 
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" disabled={isDisconnecting}>
-              {isDisconnecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground hover:text-destructive"
+              disabled={isDisconnecting}
+              title="Desconectar banco"
+            >
+              {isDisconnecting
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Trash2 className="h-4 w-4" />
+              }
             </Button>
           </AlertDialogTrigger>
           <AlertDialogContent>
@@ -305,7 +370,7 @@ function ConnectionCard({
   )
 }
 
-// --- PendingSourceCard ---
+// --- PendingExtractTab ---
 
 function formatDate(iso: string) {
   const [y, m, d] = iso.split('-')
@@ -316,65 +381,245 @@ function formatBRL(amount: string) {
   return Number(amount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-function PendingSourceCard({
-  source,
-  onConfirmed,
+function PendingExtractTab({
+  sources,
+  onRefresh,
 }: {
-  source: PendingSource
-  onConfirmed: () => void
+  sources: PendingSource[]
+  onRefresh: () => void
 }) {
+  const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  const [search, setSearch] = useState('')
+  const [dirFilter, setDirFilter] = useState<'all' | 'inflow' | 'outflow'>('all')
+  const [bankFilter, setBankFilter] = useState<string>('all')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [page, setPage] = useState(1)
 
-  function handleConfirm() {
+  // Aplana todas as transações de todas as fontes
+  const allTransactions = useMemo(() => {
+    return sources.flatMap(s => s.transactions)
+  }, [sources])
+
+  // Filtros client-side
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    return allTransactions.filter(tx => {
+      if (q && !tx.description.toLowerCase().includes(q)) return false
+      if (dirFilter !== 'all' && tx.direction !== dirFilter) return false
+      if (bankFilter !== 'all' && tx.dataSourceId !== bankFilter) return false
+      return true
+    })
+  }, [allTransactions, search, dirFilter, bankFilter])
+
+  // Paginação
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const pageIds = pageRows.map(tx => tx.id)
+
+  const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id))
+  const somePageSelected = pageIds.some(id => selectedIds.has(id))
+
+  function togglePageSelect() {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allPageSelected) {
+        pageIds.forEach(id => next.delete(id))
+      } else {
+        pageIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
+  function toggleRow(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function handleConfirmSelected() {
+    const ids = Array.from(selectedIds)
     startTransition(async () => {
-      const result = await confirmPendingTransactions(source.dataSourceId)
+      const result = await confirmSelectedTransactions(ids)
       if ('error' in result) {
         toast.error(result.error)
       } else {
         toast.success(`${result.confirmed} lançamentos confirmados e disponíveis em Transações.`)
-        onConfirmed()
+        setSelectedIds(new Set())
+        router.refresh()
       }
     })
   }
 
+  function handleConfirmAll() {
+    startTransition(async () => {
+      let total = 0
+      for (const source of sources) {
+        const result = await confirmPendingTransactions(source.dataSourceId)
+        if ('confirmed' in result) total += result.confirmed
+      }
+      toast.success(`${total} lançamentos confirmados e disponíveis em Transações.`)
+      setSelectedIds(new Set())
+      router.refresh()
+    })
+  }
+
+  const selectedCount = selectedIds.size
+  const multiplebanks = sources.length > 1
+
   return (
-    <div className="rounded-xl border bg-card">
-      <div className="flex items-center justify-between px-4 py-3 border-b">
-        <div>
-          <p className="text-sm font-medium">{source.dataSourceName}</p>
-          <p className="text-xs text-muted-foreground">{source.count} lançamentos aguardando confirmação</p>
-        </div>
-        <Button size="sm" onClick={handleConfirm} disabled={isPending}>
-          {isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <>
-              <Check className="mr-1.5 h-3.5 w-3.5" />
-              Confirmar {source.count} lançamentos
-            </>
+    <div className="flex flex-col gap-3">
+      {/* FilterBar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          placeholder="Buscar descrição..."
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1) }}
+          className="h-8 w-48 text-sm"
+        />
+        <Select value={dirFilter} onValueChange={v => { setDirFilter(v as typeof dirFilter); setPage(1) }}>
+          <SelectTrigger className="h-8 w-36 text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas as direções</SelectItem>
+            <SelectItem value="inflow">Entrada</SelectItem>
+            <SelectItem value="outflow">Saída</SelectItem>
+          </SelectContent>
+        </Select>
+        {multiplebanks && (
+          <Select value={bankFilter} onValueChange={v => { setBankFilter(v); setPage(1) }}>
+            <SelectTrigger className="h-8 w-40 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os bancos</SelectItem>
+              {sources.map(s => (
+                <SelectItem key={s.dataSourceId} value={s.dataSourceId}>
+                  {s.dataSourceName}{!s.dataSourceActive ? ' (desconectado)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          {selectedCount > 0 && (
+            <Button size="sm" variant="outline" onClick={handleConfirmSelected} disabled={isPending}>
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
+              Confirmar {selectedCount} selecionado{selectedCount !== 1 ? 's' : ''}
+            </Button>
           )}
-        </Button>
+          <Button size="sm" onClick={handleConfirmAll} disabled={isPending}>
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
+            Confirmar todos ({filtered.length})
+          </Button>
+        </div>
       </div>
 
-      <div className="divide-y">
-        {source.transactions.slice(0, 50).map(tx => {
-          const isInflow = tx.direction === 'inflow'
-          return (
-            <div key={tx.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="text-xs text-muted-foreground tabular-nums shrink-0">{formatDate(tx.date)}</span>
-                <span className="text-foreground truncate">{tx.description}</span>
-              </div>
-              <span className={`ml-4 tabular-nums font-medium shrink-0 ${isInflow ? 'text-emerald-700' : 'text-foreground'}`}>
-                {isInflow ? '+' : ''}{formatBRL(tx.amount)}
-              </span>
-            </div>
-          )
-        })}
-        {source.count > 50 && (
-          <p className="px-4 py-2 text-xs text-muted-foreground">
-            … e mais {source.count - 50} lançamentos
-          </p>
+      {/* Tabela */}
+      <div className="rounded-lg border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 border-b">
+            <tr>
+              <th className="w-10 px-3 py-2 text-left">
+                <Checkbox
+                  checked={allPageSelected}
+                  onCheckedChange={togglePageSelect}
+                  aria-label="Selecionar página"
+                  className={somePageSelected && !allPageSelected ? 'opacity-50' : ''}
+                />
+              </th>
+              <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Data</th>
+              {multiplebanks && <th className="px-3 py-2 text-left font-medium text-muted-foreground">Banco</th>}
+              <th className="px-3 py-2 text-left font-medium text-muted-foreground">Descrição</th>
+              <th className="px-3 py-2 text-left font-medium text-muted-foreground">Tipo</th>
+              <th className="px-3 py-2 text-right font-medium text-muted-foreground">Valor</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {pageRows.length === 0 ? (
+              <tr>
+                <td colSpan={multiplebanks ? 6 : 5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  Nenhum lançamento encontrado com os filtros aplicados.
+                </td>
+              </tr>
+            ) : (
+              pageRows.map(tx => {
+                const isInflow = tx.direction === 'inflow'
+                const isSelected = selectedIds.has(tx.id)
+                return (
+                  <tr
+                    key={tx.id}
+                    className={`cursor-pointer hover:bg-muted/30 transition-colors ${isSelected ? 'bg-muted/20' : ''}`}
+                    onClick={() => toggleRow(tx.id)}
+                  >
+                    <td className="w-10 px-3 py-2.5" onClick={e => e.stopPropagation()}>
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleRow(tx.id)}
+                        aria-label="Selecionar lançamento"
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 tabular-nums text-muted-foreground whitespace-nowrap">
+                      {formatDate(tx.date)}
+                    </td>
+                    {multiplebanks && (
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap text-xs">
+                        {tx.dataSourceName}
+                      </td>
+                    )}
+                    <td className="px-3 py-2.5 max-w-xs truncate" title={tx.description}>
+                      {tx.description}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <Badge variant={isInflow ? 'default' : 'secondary'} className={`text-xs ${isInflow ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100' : ''}`}>
+                        {isInflow ? 'Entrada' : 'Saída'}
+                      </Badge>
+                    </td>
+                    <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${isInflow ? 'text-emerald-700' : 'text-foreground'}`}>
+                      {isInflow ? '+' : ''}{formatBRL(tx.amount)}
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Rodapé */}
+      <div className="flex items-center justify-between text-sm text-muted-foreground">
+        <span>
+          {selectedCount > 0
+            ? `${selectedCount} selecionado${selectedCount !== 1 ? 's' : ''} · `
+            : ''}
+          Exibindo {Math.min((currentPage - 1) * PAGE_SIZE + 1, filtered.length)}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} de {filtered.length} lançamento{filtered.length !== 1 ? 's' : ''}
+        </span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1 || isPending}
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="px-2 text-xs">Página {currentPage} de {totalPages}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= totalPages || isPending}
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         )}
       </div>
     </div>

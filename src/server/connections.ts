@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, dataSources, transactions } from '@/db/schema'
-import { eq, and, isNotNull, ne, inArray } from 'drizzle-orm'
+import { eq, and, isNotNull, ne, inArray, desc } from 'drizzle-orm'
 import { getPluggyClient, createConnectToken as pluggyCreateToken } from '@/lib/pluggy'
 import { revalidatePath } from 'next/cache'
 import { inngest } from '@/lib/inngest'
@@ -110,64 +110,79 @@ export async function getOrgConnections() {
     .orderBy(dataSources.createdAt)
 }
 
+export type PendingTransaction = {
+  id: string
+  date: string
+  description: string
+  amount: string
+  direction: string
+  dataSourceId: string
+  dataSourceName: string
+  dataSourceActive: boolean
+}
+
 export type PendingSource = {
   dataSourceId: string
   dataSourceName: string
+  dataSourceActive: boolean
   count: number
-  transactions: { id: string; date: string; description: string; amount: string; direction: string }[]
+  transactions: PendingTransaction[]
 }
 
 export async function getPendingTransactionsBySource(): Promise<PendingSource[]> {
   const { organizationId } = await getAuthContext()
 
-  const sources = await db
-    .select({ id: dataSources.id, name: dataSources.name })
-    .from(dataSources)
+  // JOIN direto — inclui data sources inativos para não perder transações orphanadas
+  const rows = await db
+    .select({
+      id: transactions.id,
+      date: transactions.date,
+      description: transactions.description,
+      amount: transactions.amount,
+      direction: transactions.direction,
+      dataSourceId: dataSources.id,
+      dataSourceName: dataSources.name,
+      dataSourceStatus: dataSources.status,
+    })
+    .from(transactions)
+    .innerJoin(dataSources, eq(dataSources.id, transactions.dataSourceId))
     .where(and(
-      eq(dataSources.organizationId, organizationId),
+      eq(transactions.organizationId, organizationId),
+      eq(transactions.status, 'pending'),
       eq(dataSources.provider, 'pluggy'),
-      ne(dataSources.status, 'inactive'),
     ))
+    .orderBy(desc(transactions.date))
+    .limit(500)
 
-  if (sources.length === 0) return []
+  if (rows.length === 0) return []
 
-  const result: PendingSource[] = []
-
-  for (const source of sources) {
-    const rows = await db
-      .select({
-        id: transactions.id,
-        date: transactions.date,
-        description: transactions.description,
-        amount: transactions.amount,
-        direction: transactions.direction,
-      })
-      .from(transactions)
-      .where(and(
-        eq(transactions.organizationId, organizationId),
-        eq(transactions.dataSourceId, source.id),
-        eq(transactions.status, 'pending'),
-      ))
-      .orderBy(transactions.date)
-      .limit(200)
-
-    if (rows.length > 0) {
-      result.push({
-        dataSourceId: source.id,
-        dataSourceName: source.name,
-        count: rows.length,
-        transactions: rows.map(r => ({
-          id: r.id,
-          date: r.date,
-          description: r.description,
-          amount: r.amount,
-          direction: r.direction,
-        })),
+  // Agrupa em memória por data source
+  const map = new Map<string, PendingSource>()
+  for (const r of rows) {
+    if (!map.has(r.dataSourceId)) {
+      map.set(r.dataSourceId, {
+        dataSourceId: r.dataSourceId,
+        dataSourceName: r.dataSourceName,
+        dataSourceActive: r.dataSourceStatus !== 'inactive',
+        count: 0,
+        transactions: [],
       })
     }
+    const source = map.get(r.dataSourceId)!
+    source.count++
+    source.transactions.push({
+      id: r.id,
+      date: r.date,
+      description: r.description,
+      amount: r.amount,
+      direction: r.direction,
+      dataSourceId: r.dataSourceId,
+      dataSourceName: r.dataSourceName,
+      dataSourceActive: r.dataSourceStatus !== 'inactive',
+    })
   }
 
-  return result
+  return Array.from(map.values())
 }
 
 export async function confirmPendingTransactions(dataSourceId: string): Promise<{ confirmed: number } | { error: string }> {
@@ -238,4 +253,49 @@ export async function disconnectBank(dataSourceId: string): Promise<{ success: b
 
   revalidatePath('/contas')
   return { success: true }
+}
+
+export async function triggerManualSync(dataSourceId: string): Promise<{ triggered: boolean } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const [source] = await db
+    .select({ id: dataSources.id, externalItemId: dataSources.externalItemId })
+    .from(dataSources)
+    .where(and(
+      eq(dataSources.id, dataSourceId),
+      eq(dataSources.organizationId, organizationId),
+    ))
+    .limit(1)
+
+  if (!source) return { error: 'Conexão não encontrada.' }
+  if (!source.externalItemId) return { error: 'Item Pluggy não encontrado.' }
+
+  try {
+    await inngest.send({
+      name: 'pluggy/item.connected',
+      data: { itemId: source.externalItemId, organizationId, dataSourceId: source.id },
+    })
+  } catch {
+    return { error: 'Não foi possível iniciar a sincronização. Tente novamente.' }
+  }
+
+  return { triggered: true }
+}
+
+export async function confirmSelectedTransactions(ids: string[]): Promise<{ confirmed: number } | { error: string }> {
+  if (ids.length === 0) return { confirmed: 0 }
+  const { organizationId } = await getAuthContext()
+
+  await db
+    .update(transactions)
+    .set({ status: 'confirmed', updatedAt: new Date() })
+    .where(and(
+      eq(transactions.organizationId, organizationId),
+      inArray(transactions.id, ids),
+      eq(transactions.status, 'pending'),
+    ))
+
+  revalidatePath('/contas')
+  revalidatePath('/transacoes')
+  return { confirmed: ids.length }
 }
