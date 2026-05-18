@@ -6,6 +6,7 @@ import { db } from '@/db'
 import { memberships, dataSources } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { getPluggyClient, createConnectToken as pluggyCreateToken } from '@/lib/pluggy'
+import { inngest } from '@/lib/inngest'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -57,6 +58,8 @@ export async function registerPluggyItem(itemId: string) {
     ))
     .limit(1)
 
+  let dataSourceId: string
+
   if (existing) {
     await db.update(dataSources)
       .set({
@@ -64,10 +67,12 @@ export async function registerPluggyItem(itemId: string) {
         lastSyncAt: item.lastUpdatedAt ?? null,
         lastSyncStatus: item.executionStatus as string,
         metadata: metadata as Record<string, unknown>,
+        updatedAt: new Date(),
       })
       .where(eq(dataSources.id, existing.id))
+    dataSourceId = existing.id
   } else {
-    await db.insert(dataSources).values({
+    const [inserted] = await db.insert(dataSources).values({
       organizationId,
       provider: 'pluggy',
       externalItemId: itemId,
@@ -77,7 +82,17 @@ export async function registerPluggyItem(itemId: string) {
       lastSyncAt: item.lastUpdatedAt ?? null,
       lastSyncStatus: item.executionStatus as string,
       metadata: metadata as Record<string, unknown>,
+    }).returning({ id: dataSources.id })
+    dataSourceId = inserted.id
+  }
+
+  try {
+    await inngest.send({
+      name: 'pluggy/item.connected',
+      data: { itemId, organizationId, dataSourceId },
     })
+  } catch {
+    // não bloqueia o registro se o Inngest estiver offline
   }
 }
 
