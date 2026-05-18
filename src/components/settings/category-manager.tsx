@@ -49,16 +49,34 @@ export type CategoryItem = {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  revenue: 'Receita',
-  cost: 'Custo',
-  expense: 'Despesa',
-  asset: 'Ativo',
-  liability: 'Passivo',
-  equity: 'Patrimônio Líquido',
-  transfer: 'Transferência',
+  // DRE
+  receita_operacional:   'Receita Operacional',
+  deducoes_tributarias:  'Deduções Tributárias',
+  deducoes_operacionais: 'Deduções Operacionais',
+  cpv:                   'CPV / CMV / CSP',
+  sga:                   'SG&A',
+  resultado_financeiro:  'Receitas & Despesas Financeiras',
+  ir:                    'Impostos Sobre Renda',
+  investimento:          'Investimentos & Amortizações',
+  transfer:              'Transferências',
+  // BP
+  ativo_circulante:      'Ativo Circulante',
+  ativo_nao_circulante:  'Ativo Não-Circulante',
+  passivo_circulante:    'Passivo Circulante',
+  passivo_nao_circulante:'Passivo Não-Circulante',
+  patrimonio_liquido:    'Patrimônio Líquido',
 }
 
-const TYPE_ORDER = ['revenue', 'cost', 'expense', 'asset', 'liability', 'equity', 'transfer']
+const DRE_TYPES = [
+  'receita_operacional', 'deducoes_tributarias', 'deducoes_operacionais',
+  'cpv', 'sga', 'resultado_financeiro', 'ir', 'investimento', 'transfer',
+]
+const BP_TYPES = [
+  'ativo_circulante', 'ativo_nao_circulante',
+  'passivo_circulante', 'passivo_nao_circulante',
+  'patrimonio_liquido',
+]
+const TYPE_ORDER = [...DRE_TYPES, ...BP_TYPES]
 
 interface CategoryManagerProps {
   categories: CategoryItem[]
@@ -169,7 +187,7 @@ export function CategoryManager({
       <div className="flex items-center justify-between">
         <Button size="sm" onClick={() => setShowCreateDialog(true)} disabled={isPending}>
           <Plus className="h-4 w-4 mr-1" />
-          Nova categoria
+          Nova natureza
         </Button>
 
         {archivedCount > 0 && (
@@ -192,48 +210,61 @@ export function CategoryManager({
           description='Clique em "Nova categoria" para começar.'
         />
       ) : (
-        <div className="space-y-2">
-          {TYPE_ORDER.map((type) => {
-            const nodes = byType[type]
-            if (nodes.length === 0) return null
-            const isCollapsed = collapsedTypes.has(type)
-
+        <div className="space-y-4">
+          {([['DRE', DRE_TYPES], ['Balanço Patrimonial', BP_TYPES]] as [string, string[]][]).map(([sectionLabel, sectionTypes]) => {
+            const hasAny = sectionTypes.some(t => (byType[t]?.length ?? 0) > 0)
+            if (!hasAny) return null
             return (
-              <div key={type} className="border rounded-lg overflow-hidden">
-                <button
-                  type="button"
-                  className="w-full flex items-center gap-2 px-3 py-2 bg-muted/40 hover:bg-muted/60 text-left transition-colors"
-                  onClick={() => toggleTypeCollapse(type)}
-                >
-                  {isCollapsed ? (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                  )}
-                  <span className="text-sm font-semibold text-foreground">
-                    {TYPE_LABELS[type] ?? type}
-                  </span>
-                  <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
-                </button>
+              <div key={sectionLabel}>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-2 px-1">
+                  {sectionLabel}
+                </p>
+                <div className="space-y-2">
+                  {sectionTypes.map((type) => {
+                    const nodes = byType[type]
+                    if (!nodes || nodes.length === 0) return null
+                    const isCollapsed = collapsedTypes.has(type)
 
-                {!isCollapsed && (
-                  <div className="divide-y">
-                    {nodes.map((node) => (
-                      <CategoryNodeRow
-                        key={node.id}
-                        node={node}
-                        depth={0}
-                        editingId={editingId}
-                        isPending={isPending}
-                        onEditRequest={setEditingId}
-                        onCancelEdit={() => setEditingId(null)}
-                        onUpdateRequest={handleUpdate}
-                        onToggleActiveRequest={handleToggleActive}
-                        onDeleteRequest={setDeleteTarget}
-                      />
-                    ))}
-                  </div>
-                )}
+                    return (
+                      <div key={type} className="border rounded-lg overflow-hidden">
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-2 bg-muted/40 hover:bg-muted/60 text-left transition-colors"
+                          onClick={() => toggleTypeCollapse(type)}
+                        >
+                          {isCollapsed ? (
+                            <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                          )}
+                          <span className="text-sm font-semibold text-foreground">
+                            {TYPE_LABELS[type] ?? type}
+                          </span>
+                          <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
+                        </button>
+
+                        {!isCollapsed && (
+                          <div className="divide-y">
+                            {nodes.map((node) => (
+                              <CategoryNodeRow
+                                key={node.id}
+                                node={node}
+                                depth={0}
+                                editingId={editingId}
+                                isPending={isPending}
+                                onEditRequest={setEditingId}
+                                onCancelEdit={() => setEditingId(null)}
+                                onUpdateRequest={handleUpdate}
+                                onToggleActiveRequest={handleToggleActive}
+                                onDeleteRequest={setDeleteTarget}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )
           })}
@@ -405,77 +436,155 @@ function CreateCategoryDialog({
   onSubmit: (formData: FormData) => void
   isPending: boolean
 }) {
+  const [level, setLevel] = useState<'pai' | 'filho'>('filho')
   const [selectedType, setSelectedType] = useState<string>('')
+  const [selectedParentId, setSelectedParentId] = useState<string>('')
   const formRef = useRef<HTMLFormElement>(null)
 
-  const parentOptions = selectedType
-    ? categories.filter((c) => c.type === selectedType && c.isActive)
-    : []
+  // Naturezas Pai disponíveis (sem parent_id): filtradas por tipo quando criando Filho
+  const rootCategories = categories.filter((c) => c.parentId === null && c.isActive)
+  const parentOptions = level === 'filho' && selectedType
+    ? rootCategories.filter((c) => c.type === selectedType)
+    : rootCategories
+
+  // Tipo efetivo: se Filho, herdado do pai selecionado; se Pai, selecionado manualmente
+  const parentCategory = rootCategories.find((c) => c.id === selectedParentId)
+  const effectiveType = level === 'filho' ? (parentCategory?.type ?? selectedType) : selectedType
+
+  function handleLevelChange(next: 'pai' | 'filho') {
+    setLevel(next)
+    setSelectedParentId('')
+    if (next === 'pai') setSelectedType('')
+  }
+
+  function handleParentChange(parentId: string) {
+    setSelectedParentId(parentId)
+    const parent = rootCategories.find((c) => c.id === parentId)
+    if (parent) setSelectedType(parent.type)
+  }
 
   function handleSubmit(formData: FormData) {
     onSubmit(formData)
     formRef.current?.reset()
+    setLevel('filho')
     setSelectedType('')
+    setSelectedParentId('')
   }
+
+  const canSubmit = !isPending && !!effectiveType && (level === 'pai' || !!selectedParentId)
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Nova categoria</DialogTitle>
+          <DialogTitle>Nova natureza</DialogTitle>
         </DialogHeader>
         <form ref={formRef} action={handleSubmit} className="space-y-4 mt-2">
+          {/* Nível: Pai ou Filho */}
           <div>
-            <Label htmlFor="cat-type">Tipo</Label>
-            <Select
-              name="type"
-              value={selectedType}
-              onValueChange={setSelectedType}
-              required
-            >
-              <SelectTrigger id="cat-type" className="mt-1">
-                <SelectValue placeholder="Selecione o tipo" />
-              </SelectTrigger>
-              <SelectContent>
-                {TYPE_ORDER.map((t) => (
-                  <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>Nível</Label>
+            <div className="flex gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => handleLevelChange('pai')}
+                className={`flex-1 rounded-md border px-3 py-2 text-sm text-center transition-colors ${
+                  level === 'pai'
+                    ? 'border-primary bg-primary/5 text-primary font-medium'
+                    : 'border-input text-muted-foreground hover:border-muted-foreground'
+                }`}
+              >
+                Natureza Pai
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLevelChange('filho')}
+                className={`flex-1 rounded-md border px-3 py-2 text-sm text-center transition-colors ${
+                  level === 'filho'
+                    ? 'border-primary bg-primary/5 text-primary font-medium'
+                    : 'border-input text-muted-foreground hover:border-muted-foreground'
+                }`}
+              >
+                Natureza Filho
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {level === 'pai'
+                ? 'Agrupamento. Não pode ser atribuído diretamente a transações.'
+                : 'Classificação final. Atribuído às transações.'}
+            </p>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2">
-              <Label htmlFor="cat-name">Nome</Label>
-              <Input id="cat-name" name="name" className="mt-1" placeholder="Ex: Despesas com RH" required />
-            </div>
+          {/* Tipo (Pai: manual; Filho: herdado do pai selecionado) */}
+          {level === 'pai' ? (
             <div>
-              <Label htmlFor="cat-code">Código</Label>
-              <Input id="cat-code" name="code" className="mt-1" placeholder="Ex: 5.2.01" required />
-            </div>
-          </div>
-
-          {parentOptions.length > 0 && (
-            <div>
-              <Label htmlFor="cat-parent">Categoria pai (opcional)</Label>
-              <Select name="parentId">
-                <SelectTrigger id="cat-parent" className="mt-1">
-                  <SelectValue placeholder="Nenhuma (raiz)" />
+              <Label htmlFor="cat-type">Tipo da Natureza</Label>
+              <Select name="type" value={selectedType} onValueChange={setSelectedType} required>
+                <SelectTrigger id="cat-type" className="mt-1">
+                  <SelectValue placeholder="Selecione o tipo" />
                 </SelectTrigger>
                 <SelectContent>
-                  {parentOptions.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.code} — {c.name}
-                    </SelectItem>
+                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">DRE</div>
+                  {DRE_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
+                  ))}
+                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-1">Balanço Patrimonial</div>
+                  {BP_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+          ) : (
+            <div>
+              <Label htmlFor="cat-parent">Natureza Pai <span className="text-destructive">*</span></Label>
+              <Select
+                name="parentId"
+                value={selectedParentId}
+                onValueChange={handleParentChange}
+                required
+              >
+                <SelectTrigger id="cat-parent" className="mt-1">
+                  <SelectValue placeholder="Selecione a Natureza Pai" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TYPE_ORDER.filter(t => rootCategories.some(c => c.type === t)).map((t) => {
+                    const options = rootCategories.filter(c => c.type === t)
+                    if (options.length === 0) return null
+                    return (
+                      <div key={t}>
+                        <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          {TYPE_LABELS[t] ?? t}
+                        </div>
+                        {options.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.code} — {c.name}
+                          </SelectItem>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+              {/* Hidden field para manter o type no FormData */}
+              <input type="hidden" name="type" value={effectiveType} />
+            </div>
           )}
+
+          {/* Nome e Código */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <Label htmlFor="cat-name">Nome</Label>
+              <Input id="cat-name" name="name" className="mt-1" placeholder={level === 'pai' ? 'Ex: Despesas com Pessoal' : 'Ex: Salários'} required />
+            </div>
+            <div>
+              <Label htmlFor="cat-code">Código</Label>
+              <Input id="cat-code" name="code" className="mt-1" placeholder={level === 'pai' ? '5.1' : '5.1.1'} required />
+            </div>
+          </div>
 
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
-            <Button type="submit" disabled={isPending || !selectedType}>Criar categoria</Button>
+            <Button type="submit" disabled={!canSubmit}>Criar natureza</Button>
           </div>
         </form>
       </DialogContent>

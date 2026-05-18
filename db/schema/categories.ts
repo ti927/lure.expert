@@ -14,7 +14,8 @@ export const categories = pgTable(
       .references(() => organizations.id, { onDelete: 'cascade' }),
     code: text('code').notNull(),
     name: text('name').notNull(),
-    // revenue | cost | expense | asset | liability | equity | transfer
+    // DRE: receita_operacional | deducoes_tributarias | deducoes_operacionais | cpv | sga | resultado_financeiro | ir | investimento | transfer
+    // BP:  ativo_circulante | ativo_nao_circulante | passivo_circulante | passivo_nao_circulante | patrimonio_liquido
     type: text('type').notNull(),
     // self-referência: AnyPgColumn evita erro de referência circular
     parentId: uuid('parent_id').references((): AnyPgColumn => categories.id, {

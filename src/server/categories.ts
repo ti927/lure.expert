@@ -23,7 +23,15 @@ async function getAuthContext() {
   return { userId: user.id, organizationId: membership.organizationId }
 }
 
-const CATEGORY_TYPES = ['revenue', 'cost', 'expense', 'asset', 'liability', 'equity', 'transfer'] as const
+const CATEGORY_TYPES = [
+  // DRE
+  'receita_operacional', 'deducoes_tributarias', 'deducoes_operacionais',
+  'cpv', 'sga', 'resultado_financeiro', 'ir', 'investimento', 'transfer',
+  // BP
+  'ativo_circulante', 'ativo_nao_circulante',
+  'passivo_circulante', 'passivo_nao_circulante',
+  'patrimonio_liquido',
+] as const
 
 const createSchema = z.object({
   name: z.string().min(1, 'Nome obrigatório').max(200),

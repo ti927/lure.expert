@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, transactions, categorizationRules } from '@/db/schema'
+import { memberships, transactions, categorizationRules, categories } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, SQL } from 'drizzle-orm'
 
 async function getAuthContext() {
@@ -121,6 +121,17 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   }
 }
 
+async function assertLeafCategory(categoryId: string, organizationId: string): Promise<string | null> {
+  const [cat] = await db
+    .select({ parentId: categories.parentId })
+    .from(categories)
+    .where(and(eq(categories.id, categoryId), eq(categories.organizationId, organizationId)))
+    .limit(1)
+  if (!cat) return 'Categoria não encontrada.'
+  if (!cat.parentId) return 'Apenas Naturezas Filho (subcategorias) podem ser atribuídas a transações.'
+  return null
+}
+
 const dimensionSchema = z.object({
   categoryId: z.string().uuid().nullable().optional(),
   costCenterId: z.string().uuid().nullable().optional(),
@@ -171,6 +182,11 @@ export async function classifyTransaction(id: string, data: DimensionData) {
   const parsed = dimensionSchema.safeParse(data)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
   if (Object.keys(parsed.data).length === 0) return { error: 'Nenhuma dimensão fornecida.' }
+
+  if (parsed.data.categoryId) {
+    const catError = await assertLeafCategory(parsed.data.categoryId, organizationId)
+    if (catError) return { error: catError }
+  }
 
   const [tx] = await db
     .select({ description: transactions.description, cleanedDescription: transactions.cleanedDescription })
@@ -223,6 +239,11 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
   if (!parsed.success) return { error: parsed.error.issues[0].message }
   if (Object.values(parsed.data).every(v => v === undefined)) {
     return { error: 'Selecione ao menos uma dimensão para classificar.' }
+  }
+
+  if (parsed.data.categoryId) {
+    const catError = await assertLeafCategory(parsed.data.categoryId, organizationId)
+    if (catError) return { error: catError }
   }
 
   const txList = await db

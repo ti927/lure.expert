@@ -56,7 +56,11 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
 
     db.select({ id: categories.id, code: categories.code, name: categories.name, type: categories.type })
       .from(categories)
-      .where(and(eq(categories.organizationId, organizationId), eq(categories.isActive, true))),
+      .where(and(
+        eq(categories.organizationId, organizationId),
+        eq(categories.isActive, true),
+        isNotNull(categories.parentId),
+      )),
 
     db.select({ id: costCenters.id, name: costCenters.name, code: costCenters.code })
       .from(costCenters)

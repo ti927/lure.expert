@@ -51,13 +51,22 @@ function getDocumentLabel(doc: DocumentOption): string {
 }
 
 const CATEGORY_TYPE_LABELS: Record<string, string> = {
-  revenue: 'Receitas',
-  cost: 'Custos',
-  expense: 'Despesas',
-  asset: 'Ativos',
-  liability: 'Passivos',
-  equity: 'Patrimônio Líquido',
-  transfer: 'Transferências',
+  // DRE
+  receita_operacional:   'Receita Operacional',
+  deducoes_tributarias:  'Deduções Tributárias',
+  deducoes_operacionais: 'Deduções Operacionais',
+  cpv:                   'CPV / CMV / CSP',
+  sga:                   'SG&A',
+  resultado_financeiro:  'Receitas & Despesas Financeiras',
+  ir:                    'Impostos Sobre Renda',
+  investimento:          'Investimentos & Amortizações',
+  transfer:              'Transferências',
+  // BP
+  ativo_circulante:      'Ativo Circulante',
+  ativo_nao_circulante:  'Ativo Não-Circulante',
+  passivo_circulante:    'Passivo Circulante',
+  passivo_nao_circulante:'Passivo Não-Circulante',
+  patrimonio_liquido:    'Patrimônio Líquido',
 }
 
 interface SearchParams {
@@ -240,11 +249,13 @@ function CategoryMultiSelectFilter({ value, categories, onUpdate }: CategoryMult
     return `${selected.size} categorias`
   }, [hasValue, selected, categories])
 
-  const byType = useMemo(() => categories.reduce((acc, c) => {
-    if (!acc[c.type]) acc[c.type] = []
-    acc[c.type].push(c)
-    return acc
-  }, {} as Record<string, Category[]>), [categories])
+  const byType = useMemo(() => categories
+    .filter(c => c.parentId !== null)
+    .reduce((acc, c) => {
+      if (!acc[c.type]) acc[c.type] = []
+      acc[c.type].push(c)
+      return acc
+    }, {} as Record<string, Category[]>), [categories])
 
   return (
     <div className="relative flex-1 min-w-[140px]">
@@ -401,11 +412,13 @@ function CategoryCellCombobox({ value, categories, onValueChange, disabled }: Ca
   const selected = categories.find(c => c.id === value)
   const label = selected ? `${selected.code} – ${selected.name}` : null
 
-  const byType = categories.reduce((acc, c) => {
-    if (!acc[c.type]) acc[c.type] = []
-    acc[c.type].push(c)
-    return acc
-  }, {} as Record<string, Category[]>)
+  const byType = categories
+    .filter(c => c.parentId !== null)
+    .reduce((acc, c) => {
+      if (!acc[c.type]) acc[c.type] = []
+      acc[c.type].push(c)
+      return acc
+    }, {} as Record<string, Category[]>)
 
   return (
     <Popover open={open} onOpenChange={disabled ? undefined : setOpen}>
