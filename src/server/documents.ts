@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, documents, transactionsStaging, transactions } from '@/db/schema'
+import { memberships, documents, transactions } from '@/db/schema'
 import { eq, and, isNotNull, inArray, count, desc } from 'drizzle-orm'
 import { inngest } from '@/lib/inngest'
 

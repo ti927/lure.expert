@@ -48,7 +48,7 @@ function fileToText(buffer: Buffer, mimeType?: string): string {
 
 function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
   const warnings: string[] = []
-  let cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
 
   let parsed: unknown
   try {

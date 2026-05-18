@@ -80,7 +80,7 @@ const TYPE_LABELS: Record<string, string> = {
   resultado_financeiro:   'Receitas & Despesas Financeiras',
   ir:                     'Impostos Sobre Renda',
   investimento:           'Investimentos & Amortizações',
-  transfer:               'Transferências',
+  transfer:               'Transitórios',
   // BP
   ativo_circulante:       'Ativo Circulante',
   ativo_nao_circulante:   'Ativo Não-Circulante',
@@ -799,9 +799,6 @@ function CreateCategoryDialog({
   const formRef = useRef<HTMLFormElement>(null)
 
   const rootCategories = categories.filter((c) => c.parentId === null && c.isActive)
-  const parentOptions = level === 'filho' && selectedType
-    ? rootCategories.filter((c) => c.type === selectedType)
-    : rootCategories
 
   const parentCategory = rootCategories.find((c) => c.id === selectedParentId)
   const effectiveType = level === 'filho' ? (parentCategory?.type ?? selectedType) : selectedType

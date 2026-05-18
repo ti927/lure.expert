@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, categories, transactions } from '@/db/schema'
+import { memberships, categories, transactions, categorizationRules, fixedAssets, loans, equityMovements } from '@/db/schema'
 import { eq, and, isNotNull, count, sql } from 'drizzle-orm'
 
 async function getAuthContext() {
@@ -173,25 +173,45 @@ export async function moveCategory(filhoId: string, newParentId: string) {
 export async function deleteCategory(id: string) {
   const { organizationId } = await getAuthContext()
 
-  // Verifica subcategorias (ON DELETE RESTRICT no banco)
   const [{ childCount }] = await db
     .select({ childCount: count() })
     .from(categories)
     .where(and(eq(categories.parentId, id), eq(categories.organizationId, organizationId)))
-  if (childCount > 0) {
+  if (childCount > 0)
     return { error: `Esta categoria possui ${childCount} subcategoria(s). Mova ou delete as subcategorias primeiro.` }
-  }
 
-  // Verifica transações vinculadas
   const [{ txCount }] = await db
     .select({ txCount: count() })
     .from(transactions)
     .where(and(eq(transactions.categoryId, id), eq(transactions.organizationId, organizationId)))
-  if (txCount > 0) {
-    return {
-      error: `Esta categoria está vinculada a ${txCount} transação(ões). Archive-a em vez de deletar, ou reclassifique as transações primeiro.`,
-    }
-  }
+  if (txCount > 0)
+    return { error: `Esta categoria está vinculada a ${txCount} transação(ões). Archive-a em vez de deletar, ou reclassifique as transações primeiro.` }
+
+  const [{ faCount }] = await db
+    .select({ faCount: count() })
+    .from(fixedAssets)
+    .where(and(eq(fixedAssets.categoryId, id), eq(fixedAssets.organizationId, organizationId)))
+  if (faCount > 0)
+    return { error: `Esta categoria está vinculada a ${faCount} ativo(s) imobilizado(s). Reclassifique-os primeiro.` }
+
+  const [{ lnCount }] = await db
+    .select({ lnCount: count() })
+    .from(loans)
+    .where(and(eq(loans.categoryId, id), eq(loans.organizationId, organizationId)))
+  if (lnCount > 0)
+    return { error: `Esta categoria está vinculada a ${lnCount} empréstimo(s). Reclassifique-os primeiro.` }
+
+  const [{ eqCount }] = await db
+    .select({ eqCount: count() })
+    .from(equityMovements)
+    .where(and(eq(equityMovements.categoryId, id), eq(equityMovements.organizationId, organizationId)))
+  if (eqCount > 0)
+    return { error: `Esta categoria está vinculada a ${eqCount} movimento(s) de PL. Reclassifique-os primeiro.` }
+
+  // Regras de categorização são metadados gerados automaticamente — deletar em cascata
+  await db
+    .delete(categorizationRules)
+    .where(and(eq(categorizationRules.targetCategoryId, id), eq(categorizationRules.organizationId, organizationId)))
 
   await db
     .delete(categories)

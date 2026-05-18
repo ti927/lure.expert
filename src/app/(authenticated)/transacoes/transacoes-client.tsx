@@ -60,7 +60,7 @@ const CATEGORY_TYPE_LABELS: Record<string, string> = {
   resultado_financeiro:  'Receitas & Despesas Financeiras',
   ir:                    'Impostos Sobre Renda',
   investimento:          'Investimentos & Amortizações',
-  transfer:              'Transferências',
+  transfer:              'Transitórios',
   // BP
   ativo_circulante:      'Ativo Circulante',
   ativo_nao_circulante:  'Ativo Não-Circulante',
@@ -132,7 +132,7 @@ function MultiSelectFilter({ label, value, options, onUpdate, className }: Multi
 
   const toggle = useCallback((id: string) => {
     const next = new Set(selected)
-    next.has(id) ? next.delete(id) : next.add(id)
+    if (next.has(id)) next.delete(id); else next.add(id)
     onUpdate(next.size > 0 ? Array.from(next).join(',') : undefined)
   }, [selected, onUpdate])
 
@@ -234,7 +234,7 @@ function CategoryMultiSelectFilter({ value, categories, onUpdate }: CategoryMult
 
   const toggle = useCallback((id: string) => {
     const next = new Set(selected)
-    next.has(id) ? next.delete(id) : next.add(id)
+    if (next.has(id)) next.delete(id); else next.add(id)
     onUpdate(next.size > 0 ? Array.from(next).join(',') : undefined)
   }, [selected, onUpdate])
 
@@ -941,7 +941,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
   function toggleRow(id: string) {
     setSelectedIds(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id); else next.add(id)
       return next
     })
   }
