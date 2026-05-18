@@ -7,7 +7,7 @@ import { getPluggyClient } from '@/lib/pluggy'
 const DAYS_BACK = 90
 const BATCH_SIZE = 100
 
-function daysAgoISO(days: number): string {
+export function daysAgoISO(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() - days)
   return d.toISOString().split('T')[0]
@@ -25,10 +25,11 @@ export const syncPluggyItem = inngest.createFunction(
     concurrency: { limit: 1, key: 'event.data.dataSourceId' },
   },
   async ({ event, step }) => {
-    const { itemId, organizationId, dataSourceId } = event.data as {
+    const { itemId, organizationId, dataSourceId, fromDate } = event.data as {
       itemId: string
       organizationId: string
       dataSourceId: string
+      fromDate?: string
     }
 
     // Busca todas as contas do item
@@ -42,7 +43,7 @@ export const syncPluggyItem = inngest.createFunction(
       return { synced: 0, accounts: 0 }
     }
 
-    const dateFrom = daysAgoISO(DAYS_BACK)
+    const dateFrom = fromDate ?? daysAgoISO(DAYS_BACK)
     const dateTo = todayISO()
     const allInsertedIds: string[] = []
 
