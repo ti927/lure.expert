@@ -746,14 +746,14 @@ function DraggableFilhoRow({
       ref={setNodeRef}
       {...attributes}
       className={cn(
-        'group flex items-center gap-3 px-3 py-2 transition-opacity',
+        'flex items-center gap-3 px-3 py-2 transition-opacity',
         !node.isActive && 'opacity-60',
         isDragging && 'opacity-30',
       )}
     >
       <span
         {...listeners}
-        className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-muted-foreground/60 shrink-0 transition-opacity"
+        className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground shrink-0 transition-colors"
         title="Arrastar para mover de Natureza Pai"
       >
         <GripVertical className="h-3.5 w-3.5" />
