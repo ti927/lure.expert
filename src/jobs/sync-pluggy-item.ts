@@ -66,11 +66,7 @@ export const syncPluggyItem = inngest.createFunction(
             const client = getPluggyClient()
             const page = await client.fetchTransactionsCursor(
               account.id,
-              {
-                dateFrom,
-                pageSize: 500,
-                ...(after ? { after } : {}),
-              } as Parameters<typeof client.fetchTransactionsCursor>[1] & { pageSize?: number },
+              { dateFrom, ...(after ? { after } : {}) },
             )
 
             if (page.results.length === 0) {
