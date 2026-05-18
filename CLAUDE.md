@@ -163,6 +163,17 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
+### ✅ Sessão 3F — UX Plano de Contas: filtros + drag-and-drop *(concluída)*
+
+**O que mudou:**
+- `/configuracoes/categorias`: 3 filtros pesquisáveis multi-select na toolbar — **Tipo da Natureza**, **Natureza Pai**, **Natureza Filho**. Filtragem client-side; filtros combinam entre si; Pai aparece automaticamente quando Filho filtrado e vice-versa.
+- Drag-and-drop com `@dnd-kit/core`: ícone grip (⠿) aparece ao hover em cada Natureza Filho. Arrastando o Filho sobre outro Pai, a seção destaca com anel azul. Soltar move o Filho (cross-type permitido — Tipo atualiza para o do novo Pai).
+- Atualização otimista com rollback em caso de erro de servidor.
+- Nova server action `moveCategory` em `src/server/categories.ts`.
+- Componentes refatorados: `PaiSection` (useDroppable), `PaiRow`, `DraggableFilhoRow` (useDraggable), `RowActions`, `MultiFilter`.
+
+---
+
 **Sessão 3D — Import CSV de dimensões (PRÓXIMA)**
 > Pré-requisito identificado antes da Fase 4: sem as dimensões devidamente
 > configuradas (plano de contas, centros de custo, unidades, entidades), o motor
