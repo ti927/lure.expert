@@ -57,7 +57,24 @@ export const syncPluggyItem = inngest.createFunction(
     for (const account of accountIds) {
       const insertedIds = await step.run(`sync-account-${account.id}`, async () => {
         const client = getPluggyClient()
-        const txList = await client.fetchAllTransactions(account.id, { dateFrom })
+
+        // Loop cursor manual: contorna possível bug do SDK ao parsear a URL de next,
+        // e garante pageSize: 500 para minimizar roundtrips
+        const txList: Awaited<ReturnType<typeof client.fetchAllTransactions>> = []
+        let after: string | undefined = undefined
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const page = await client.fetchTransactionsCursor(
+            account.id,
+            // pageSize: 500 não está no tipo público mas é aceito pela API Pluggy v2
+            { dateFrom, pageSize: 500, ...(after ? { after } : {}) } as Parameters<typeof client.fetchTransactionsCursor>[1] & { pageSize?: number },
+          )
+          txList.push(...page.results)
+          if (!page.next) break
+          const nextAfter = new URL(page.next, 'https://api.pluggy.ai').searchParams.get('after')
+          if (!nextAfter) break
+          after = nextAfter
+        }
 
         if (txList.length === 0) return []
 
