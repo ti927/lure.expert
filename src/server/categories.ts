@@ -145,6 +145,31 @@ export async function toggleCategoryActive(id: string, isActive: boolean) {
   return { success: true }
 }
 
+export async function moveCategory(filhoId: string, newParentId: string) {
+  const { organizationId } = await getAuthContext()
+
+  const [filho] = await db.select()
+    .from(categories)
+    .where(and(eq(categories.id, filhoId), eq(categories.organizationId, organizationId)))
+    .limit(1)
+  if (!filho) return { error: 'Categoria não encontrada.' }
+  if (!filho.parentId) return { error: 'Apenas Naturezas Filho podem ser movidas.' }
+
+  const [newParent] = await db.select()
+    .from(categories)
+    .where(and(eq(categories.id, newParentId), eq(categories.organizationId, organizationId)))
+    .limit(1)
+  if (!newParent) return { error: 'Natureza Pai não encontrada.' }
+  if (newParent.parentId) return { error: 'Destino deve ser uma Natureza Pai.' }
+
+  await db.update(categories)
+    .set({ parentId: newParentId, type: newParent.type, updatedAt: new Date() })
+    .where(and(eq(categories.id, filhoId), eq(categories.organizationId, organizationId)))
+
+  revalidatePath('/configuracoes/categorias')
+  return { success: true }
+}
+
 export async function deleteCategory(id: string) {
   const { organizationId } = await getAuthContext()
 

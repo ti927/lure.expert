@@ -8,6 +8,7 @@ import {
   updateCategory,
   toggleCategoryActive,
   deleteCategory,
+  moveCategory,
 } from '@/server/categories'
 
 export default async function CategoriasPage() {
@@ -41,6 +42,7 @@ export default async function CategoriasPage() {
             onUpdate={updateCategory}
             onToggleActive={toggleCategoryActive}
             onDelete={deleteCategory}
+            onMove={moveCategory}
           />
         </CardContent>
       </Card>
