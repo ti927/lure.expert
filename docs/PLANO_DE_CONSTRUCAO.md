@@ -636,19 +636,17 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - `/contas` refatorado: server component (busca conexões + `includeSandbox`) + `contas-client.tsx` (botão, widget, lista com logo/status/syncedAt, reautenticação)
 - Mapeamento: `PERSONAL_BANK|BUSINESS_BANK` → `bank`; `CREDIT_CARD` → `credit_card`; `INVESTMENT` → `investment`
 
-**4.B — Sync inicial:**
-- Job Inngest `pluggy/item.connected` (disparado pelo `registerPluggyItem`)
-- Para cada `account` do `item`: busca transações via `pluggy.fetchTransactions(accountId, { from, to })`
-  com paginação por cursor (Pluggy retorna até 90d / 500 itens por página)
-- Mapeia para `transactions_staging` reusando o pipeline existente; em seguida `transactions`
-- Disparar `transaction/batch-inserted` (Fase 3B) para categorização automática rodar
-- `metadata.lastTransactionFetchedAt` atualizado a cada batch
+**✅ 4.B — Sync inicial (concluída):**
+- `src/jobs/sync-pluggy-item.ts` — função Inngest `syncPluggyItem`, evento `pluggy/item.connected`
+- Concurrency `limit: 1` por `dataSourceId`; `client.fetchAccounts(itemId)` → para cada conta `client.fetchAllTransactions(accountId, { dateFrom })` (90d padrão ou `fromDate` do evento)
+- Insert em `transactions` em lotes de 100 com `onConflictDoNothing` (dedup por `external_id`); `status='confirmed'`, `needsReview=false`
+- Atualiza `data_sources.lastSyncAt`, `lastSyncStatus='SUCCESS'`, `metadata.lastTransactionFetchedAt`
+- Dispara `transaction/batch-inserted` → categorização automática (Fase 3B)
+- `registerPluggyItem` em `src/server/connections.ts` dispara evento após upsert
 
-**4.C — Webhooks + cron diário:**
-- Rota `/api/webhooks/pluggy` validando HMAC com `PLUGGY_WEBHOOK_SECRET`
-- Evento `item/updated` → enfileira sync incremental (transações desde `lastTransactionFetchedAt`)
-- Cron Inngest 03:00 BRT: para cada `data_source` com `provider='pluggy'` e `status='active'`, fallback de polling caso o webhook tenha falhado
-- UI de erro: badge "Atenção" em `/contas` quando `executionStatus` for `LOGIN_ERROR` ou `USER_INPUT_TIMEOUT`, com CTA "Reautenticar" (gera novo connect_token apontando para o itemId existente)
+**✅ 4.C — Webhooks + cron diário (concluída):**
+- `src/app/api/webhooks/pluggy/route.ts` — `POST /api/webhooks/pluggy`; eventos `item/updated` (despacha sync incremental com `fromDate = lastTransactionFetchedAt - 1d`) e `item/error` (atualiza `status='error'`); segurança por lookup de `external_item_id` (sem HMAC)
+- `src/jobs/sync-all-pluggy-items.ts` — cron `0 6 * * *` (03h BRT); busca todos `data_sources` com `provider='pluggy'`, `status='active'`, `external_item_id IS NOT NULL`; despacha `pluggy/item.connected` com `fromDate = daysAgoISO(7)` para cada um
 
 **4.D — Reconciliação:**
 - Para cada transação ingerida via Pluggy, procurar match em `transactions` já importadas via upload manual (chave: org + valor + ±2 dias + descrição similaridade trigram > 0.6)
@@ -1021,9 +1019,10 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.4** — Fase 3 atualizada: sessões 3B (motor de categorização com IA), 3D (import CSV — pendente) e 3E (hierarquia 3 níveis, 14 tipos DRE+BP) adicionadas. Definition of Done da Fase 3 revisado com checkmarks atualizados. Fase 2 já totalmente concluída (parser LLM-first para todos os formatos).
 - **v1.5** — Fase 3 fechada (3D/3E/3F + migrations 0009–0012 + fixes pós-3F). Fase 4 reescrita com **Pluggy** travado como provedor de Open Finance (decisão de 2026-05-18). Sub-plano detalhado em sessões 4.0 (scaffolding — ✅ concluída), 4.A (widget), 4.B (sync inicial), 4.C (webhooks + cron), 4.D (reconciliação). Belvo removido como alternativa.
 - **v1.6** — Sessão 4.A concluída: `react-pluggy-connect` integrado em `/contas`, fluxo de connect token → widget → `onSuccess` → upsert em `data_sources` funcionando em sandbox. Lista de conexões com reautenticação.
+- **v1.7** — Sessões 4.B e 4.C concluídas: sync inicial via Inngest (`syncPluggyItem`) e webhook `POST /api/webhooks/pluggy` + cron diário `syncAllPluggyItems` (03h BRT). Próxima: 4.D (reconciliação Pluggy × upload manual).
 
 ---
 
 *Documento mantido por: Lure TI*
 *Última atualização: 2026-05-18*
-*Versão: 1.6*
+*Versão: 1.7*
