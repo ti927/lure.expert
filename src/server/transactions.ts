@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, transactions, categorizationRules, categories } from '@/db/schema'
-import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, SQL } from 'drizzle-orm'
+import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL } from 'drizzle-orm'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -69,7 +69,10 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   const { page = 1, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, sort } = params
   const offset = (page - 1) * PAGE_SIZE
 
-  const conditions: SQL[] = [eq(transactions.organizationId, organizationId)]
+  const conditions: SQL[] = [
+    eq(transactions.organizationId, organizationId),
+    ne(transactions.status, 'pending'),
+  ]
 
   if (q?.trim()) conditions.push(ilike(transactions.description, `%${q.trim()}%`))
   if (from) conditions.push(gte(transactions.date, from))

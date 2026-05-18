@@ -78,7 +78,7 @@ export const syncPluggyItem = inngest.createFunction(
                   pluggyDate: dateTo,
                 },
                 needsReview: false,
-                status: 'confirmed',
+                status: 'pending',
               }))
             )
             .onConflictDoNothing()
