@@ -5,6 +5,7 @@ import { memberships, businessUnits } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DimensionManager } from '@/components/settings/dimension-manager'
+import { CsvImportButton } from '@/components/settings/csv-import-button'
 import {
   createBusinessUnit,
   updateBusinessUnit,
@@ -41,10 +42,15 @@ export default async function UnidadesDeNegocioPage() {
 
       <Card className="shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">Unidades de negócio</CardTitle>
-          <CardDescription>
-            Cada lançamento pode ser atribuído a uma unidade para análise segmentada.
-          </CardDescription>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base">Unidades de negócio</CardTitle>
+              <CardDescription className="mt-1.5">
+                Cada lançamento pode ser atribuído a uma unidade para análise segmentada.
+              </CardDescription>
+            </div>
+            <CsvImportButton kind="unidades-de-negocio" />
+          </div>
         </CardHeader>
         <CardContent>
           <DimensionManager

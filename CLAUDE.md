@@ -195,21 +195,32 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ---
 
-**Sessão 3D — Import CSV de dimensões (PRÓXIMA)**
-> Pré-requisito identificado antes da Fase 4: sem as dimensões devidamente
-> configuradas (plano de contas, centros de custo, unidades, entidades), o motor
-> de categorização não tem contexto para sugerir classificações úteis.
->
-> **O que será implementado:**
-> - Import CSV em `/configuracoes/categorias`: colunas `tipo, pai_codigo, codigo, nome`. Upsert por código — atualiza se já existe, cria se não.
-> - Import CSV em `/configuracoes/centros-de-custo`: colunas `codigo, nome`.
-> - Import CSV em `/configuracoes/unidades-de-negocio`: colunas `codigo, nome`.
-> - Import CSV em `/configuracoes/entidades-juridicas`: colunas `nome, cnpj`.
-> - Cada tela ganha um botão "Importar CSV" que abre um dialog com: upload do arquivo, preview das linhas parseadas, confirmação antes de gravar.
-> - Erros de validação (código duplicado, tipo inválido, pai inexistente) exibidos linha a linha no preview antes de confirmar.
-> - Download de template CSV para cada dimensão.
->
-> **Após essa sessão:** Fase 4 — Open Finance.
+### ✅ Sessão 3D — Import CSV de dimensões *(concluída)*
+
+**Arquivos principais:**
+- `src/lib/csv-parser.ts` — parser CSV genérico (delim `;`, BOM UTF-8 tolerado, quoting padrão CSV com `""` como escape, validação de cabeçalho com mensagem amigável)
+- `src/lib/csv-templates.ts` — templates dos 4 CSVs com cabeçalho fixo + samples; `downloadTemplate()` dispara download via Blob no cliente
+- `src/server/imports.ts` — 8 server actions (preview + commit × 4 dimensões); preview valida linha a linha sem escrever no banco e calcula `willInsert` / `willUpdate` por diff com o estado atual
+- `src/components/settings/csv-import-dialog.tsx` — dialog reutilizável: upload, download de modelo, preview com badges de status (criar/atualizar/erro), tabela rolável com linhas inválidas destacadas em rosa
+- `src/components/settings/csv-import-button.tsx` — botão cliente (header das 4 páginas)
+
+**Formato dos CSVs (cabeçalhos fixos — parser depende dos nomes exatos):**
+- `categorias`: `codigo;tipo natureza;natureza pai;natureza filho` — **Leitura A:** cada linha define um Filho; o Pai é inferido pelo nome único em `natureza pai`. Código do Pai derivado do prefixo do primeiro Filho (`3.1.01` → `3.1`), ou slug com prefixo `pai-` quando não há padrão `X.Y.Z`.
+- `centros-de-custo`: `codigo;nome`
+- `unidades-de-negocio`: `codigo;nome`
+- `entidades-juridicas`: `codigo;nome;cnpj` (CNPJ aceita com ou sem máscara; normaliza para 14 dígitos)
+
+**Comportamento:**
+- **All-or-nothing:** "Confirmar e importar" só habilita com zero erros. Cliente corrige o CSV e tenta de novo.
+- **Upsert:** categorias por `code` (atualiza nome+tipo, mas **não move** entre Pais via CSV — proteção contra acidente); flat por `code → cnpj → name` (na ordem).
+- **Pai já existente:** reusa o id (case-insensitive em `name` + igualdade em `type`); não cria duplicado.
+- **Validação:** tipo deve ser um dos 14; campos obrigatórios não vazios; CNPJ 14 dígitos quando preenchido; código duplicado dentro do mesmo arquivo é erro.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
+
+---
+
+**Próxima fase: Fase 4 — Open Finance** (decisão pendente: Belvo vs Pluggy).
 
 ### ✅ Sessão 3E — Hierarquia 3 níveis em categorias *(concluída)*
 

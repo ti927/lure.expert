@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { CategoryManager } from '@/components/settings/category-manager'
+import { CsvImportButton } from '@/components/settings/csv-import-button'
 import {
   getCategoriesWithTxCount,
   createCategory,
@@ -29,11 +30,16 @@ export default async function CategoriasPage() {
 
       <Card className="shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">Categorias</CardTitle>
-          <CardDescription>
-            Organize seu plano de contas. As categorias seeded são o padrão DRE — renomeie e
-            complemente conforme sua realidade.
-          </CardDescription>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base">Categorias</CardTitle>
+              <CardDescription className="mt-1.5">
+                Organize seu plano de contas. As categorias seeded são o padrão DRE — renomeie e
+                complemente conforme sua realidade.
+              </CardDescription>
+            </div>
+            <CsvImportButton kind="categorias" />
+          </div>
         </CardHeader>
         <CardContent>
           <CategoryManager

@@ -5,6 +5,7 @@ import { memberships, legalEntities } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DimensionManager } from '@/components/settings/dimension-manager'
+import { CsvImportButton } from '@/components/settings/csv-import-button'
 import {
   createLegalEntity,
   updateLegalEntity,
@@ -41,10 +42,15 @@ export default async function EntidadesJuridicasPage() {
 
       <Card className="shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">Entidades jurídicas</CardTitle>
-          <CardDescription>
-            Cada lançamento pode ser vinculado a uma pessoa jurídica para análise consolidada ou por entidade.
-          </CardDescription>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base">Entidades jurídicas</CardTitle>
+              <CardDescription className="mt-1.5">
+                Cada lançamento pode ser vinculado a uma pessoa jurídica para análise consolidada ou por entidade.
+              </CardDescription>
+            </div>
+            <CsvImportButton kind="entidades-juridicas" />
+          </div>
         </CardHeader>
         <CardContent>
           <DimensionManager

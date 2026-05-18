@@ -569,11 +569,18 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 **Sessões adicionais (inseridas antes da Fase 4):**
 
-**⏳ Sessão 3D — Import CSV de dimensões (PRÓXIMA):**
-- Botão "Importar CSV" em `/configuracoes/categorias`: colunas `tipo, pai_codigo, codigo, nome`; upsert por código
-- Mesmo para centros de custo (`codigo, nome`), unidades (`codigo, nome`), entidades (`nome, cnpj`)
-- Dialog com preview das linhas parseadas + validação linha a linha + confirmação antes de gravar
-- Download de template CSV para cada dimensão
+**✅ Sessão 3D — Import CSV de dimensões (concluída):**
+- Parser CSV genérico (`src/lib/csv-parser.ts`): delim `;`, BOM UTF-8 tolerado, quoting padrão CSV, validação de cabeçalho
+- Templates fixos (`src/lib/csv-templates.ts`): download via Blob client-side
+- 8 server actions (`src/server/imports.ts`): preview (lê estado, valida linha a linha, calcula diff insert/update) + commit (atomic) × 4 dimensões
+- `CsvImportDialog` reutilizável + `CsvImportButton` integrados nas 4 páginas `/configuracoes/*`
+- Formatos:
+  - `categorias`: `codigo;tipo natureza;natureza pai;natureza filho` (uma linha por Filho, Pai inferido)
+  - `centros-de-custo`: `codigo;nome`
+  - `unidades-de-negocio`: `codigo;nome`
+  - `entidades-juridicas`: `codigo;nome;cnpj`
+- All-or-nothing: confirmar só habilita com zero erros
+- Upsert seguro: categorias não movem entre Pais via CSV (proteção); flat por `code → cnpj → name`
 
 **✅ Sessão 3E — Hierarquia 3 níveis em categorias (concluída):**
 - 14 tipos DRE + BP substituem os 7 genéricos: `receita_operacional`, `cpv`, `sga`, `resultado_financeiro`, `ir`, `investimento`, `transfer`, `deducoes_tributarias`, `deducoes_operacionais` + 5 tipos de BP
@@ -583,7 +590,7 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - UI `/configuracoes/categorias`: seções DRE / Balanço Patrimonial separadas, dialog Pai/Filho explícito
 - Comboboxes em `/transacoes` filtrados para Natureza Filho; categorizer (`loadOrgContext`) idem
 
-**Ordem de implementação:** ✅ 3.0 → ✅ 3A → ✅ 3C → ✅ parser LLM → ✅ 3B → ✅ 3E → ⏳ 3D
+**Ordem de implementação:** ✅ 3.0 → ✅ 3A → ✅ 3C → ✅ parser LLM → ✅ 3B → ✅ 3E → ✅ 3F → ✅ 3D
 
 **Definition of Done:**
 - ✅ Cliente cadastra centros de custo, unidades de negócio e entidades jurídicas em `/configuracoes`
@@ -593,7 +600,7 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - ✅ Parser: todos os formatos (CSV, TXT, XLS, XLSX) via Claude Haiku — sem heurística, sem templates
 - ✅ Mais de 70% das transações são auto-classificadas via motor de 4 camadas após histórico suficiente
 - ✅ Custo de LLM por 1.000 transações abaixo de US$ 0,50 (US$ 0,001–0,012 por upload medido)
-- ⏳ Import CSV em lote para popular dimensões rapidamente (Sessão 3D)
+- ✅ Import CSV em lote para popular dimensões rapidamente (Sessão 3D)
 
 **Tempo:** 3 semanas
 

@@ -5,6 +5,7 @@ import { memberships, costCenters } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DimensionManager } from '@/components/settings/dimension-manager'
+import { CsvImportButton } from '@/components/settings/csv-import-button'
 import {
   createCostCenter,
   updateCostCenter,
@@ -41,10 +42,15 @@ export default async function CentrosDeCustoPage() {
 
       <Card className="shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">Centros de custo</CardTitle>
-          <CardDescription>
-            Cada lançamento pode ser atribuído a um centro de custo para análise por área.
-          </CardDescription>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-base">Centros de custo</CardTitle>
+              <CardDescription className="mt-1.5">
+                Cada lançamento pode ser atribuído a um centro de custo para análise por área.
+              </CardDescription>
+            </div>
+            <CsvImportButton kind="centros-de-custo" />
+          </div>
         </CardHeader>
         <CardContent>
           <DimensionManager
