@@ -36,7 +36,13 @@ export const syncPluggyItem = inngest.createFunction(
     const accountIds = await step.run('fetch-accounts', async () => {
       const client = getPluggyClient()
       const result = await client.fetchAccounts(itemId)
-      return result.results.map(a => ({ id: a.id, name: a.name }))
+      return result.results.map(a => ({
+        id: a.id,
+        name: a.name,
+        type: a.type as string,
+        subtype: a.subtype as string,
+        number: a.number,
+      }))
     })
 
     if (accountIds.length === 0) {
@@ -75,6 +81,9 @@ export const syncPluggyItem = inngest.createFunction(
                 metadata: {
                   accountId: account.id,
                   accountName: account.name,
+                  accountType: account.type,
+                  accountSubtype: account.subtype,
+                  accountNumber: account.number,
                   pluggyDate: dateTo,
                 },
                 needsReview: false,
@@ -111,7 +120,17 @@ export const syncPluggyItem = inngest.createFunction(
         .set({
           lastSyncAt: new Date(),
           lastSyncStatus: 'SUCCESS',
-          metadata: { ...existingMeta, lastTransactionFetchedAt: new Date().toISOString() },
+          metadata: {
+            ...existingMeta,
+            lastTransactionFetchedAt: new Date().toISOString(),
+            accounts: accountIds.map(a => ({
+              id: a.id,
+              name: a.name,
+              type: a.type,
+              subtype: a.subtype,
+              number: a.number,
+            })),
+          },
           updatedAt: new Date(),
         })
         .where(and(

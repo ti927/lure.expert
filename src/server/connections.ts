@@ -119,6 +119,8 @@ export type PendingTransaction = {
   dataSourceId: string
   dataSourceName: string
   dataSourceActive: boolean
+  accountName: string | null
+  accountSubtype: string | null
 }
 
 export type PendingSource = {
@@ -140,6 +142,7 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       description: transactions.description,
       amount: transactions.amount,
       direction: transactions.direction,
+      metadata: transactions.metadata,
       dataSourceId: dataSources.id,
       dataSourceName: dataSources.name,
       dataSourceStatus: dataSources.status,
@@ -168,6 +171,7 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
         transactions: [],
       })
     }
+    const meta = (r.metadata ?? {}) as Record<string, string>
     const source = map.get(r.dataSourceId)!
     source.count++
     source.transactions.push({
@@ -179,6 +183,8 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       dataSourceId: r.dataSourceId,
       dataSourceName: r.dataSourceName,
       dataSourceActive: r.dataSourceStatus !== 'inactive',
+      accountName: meta.accountName ?? null,
+      accountSubtype: meta.accountSubtype ?? null,
     })
   }
 

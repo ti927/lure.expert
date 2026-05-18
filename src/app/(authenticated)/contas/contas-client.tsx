@@ -227,10 +227,17 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
 
 // --- ConnectionCard ---
 
+const SUBTYPE_LABEL: Record<string, string> = {
+  CHECKING_ACCOUNT: 'C. Corrente',
+  SAVINGS_ACCOUNT: 'Poupança',
+  CREDIT_CARD: 'Cartão',
+}
+
 type ConnectionMeta = {
   institutionName?: string
   institutionImageUrl?: string
   executionStatus?: string
+  accounts?: { id: string; name: string; type: string; subtype: string; number: string }[]
 }
 
 function ConnectionCard({
@@ -254,6 +261,10 @@ function ConnectionCard({
   const syncedAt = connection.lastSyncAt
     ? format(new Date(connection.lastSyncAt), "dd/MM/yy 'às' HH:mm", { locale: ptBR })
     : null
+  const accountSummary = (meta.accounts ?? [])
+    .map(a => SUBTYPE_LABEL[a.subtype] ?? a.name)
+    .filter(Boolean)
+    .join(' · ')
 
   function handleDisconnect() {
     startDisconnect(async () => {
@@ -296,6 +307,9 @@ function ConnectionCard({
               'Aguardando sincronização'
             )}
           </p>
+          {accountSummary && (
+            <p className="text-xs text-muted-foreground/70 mt-0.5">{accountSummary}</p>
+          )}
         </div>
       </div>
 
@@ -471,6 +485,8 @@ function PendingExtractTab({
 
   const selectedCount = selectedIds.size
   const multiplebanks = sources.length > 1
+  // Mostra coluna "Conta" se alguma transação tem accountSubtype
+  const hasAccountInfo = allTransactions.some(tx => tx.accountSubtype)
 
   return (
     <div className="flex flex-col gap-3">
@@ -536,6 +552,7 @@ function PendingExtractTab({
               </th>
               <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Data</th>
               {multiplebanks && <th className="px-3 py-2 text-left font-medium text-muted-foreground">Banco</th>}
+              {hasAccountInfo && <th className="px-3 py-2 text-left font-medium text-muted-foreground">Conta</th>}
               <th className="px-3 py-2 text-left font-medium text-muted-foreground">Descrição</th>
               <th className="px-3 py-2 text-left font-medium text-muted-foreground">Tipo</th>
               <th className="px-3 py-2 text-right font-medium text-muted-foreground">Valor</th>
@@ -544,7 +561,7 @@ function PendingExtractTab({
           <tbody className="divide-y">
             {pageRows.length === 0 ? (
               <tr>
-                <td colSpan={multiplebanks ? 6 : 5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={5 + (multiplebanks ? 1 : 0) + (hasAccountInfo ? 1 : 0)} className="px-3 py-8 text-center text-sm text-muted-foreground">
                   Nenhum lançamento encontrado com os filtros aplicados.
                 </td>
               </tr>
@@ -552,6 +569,9 @@ function PendingExtractTab({
               pageRows.map(tx => {
                 const isInflow = tx.direction === 'inflow'
                 const isSelected = selectedIds.has(tx.id)
+                const accountLabel = tx.accountSubtype
+                  ? (SUBTYPE_LABEL[tx.accountSubtype] ?? tx.accountName ?? '')
+                  : (tx.accountName ?? '')
                 return (
                   <tr
                     key={tx.id}
@@ -571,6 +591,11 @@ function PendingExtractTab({
                     {multiplebanks && (
                       <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap text-xs">
                         {tx.dataSourceName}
+                      </td>
+                    )}
+                    {hasAccountInfo && (
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap text-xs">
+                        {accountLabel}
                       </td>
                     )}
                     <td className="px-3 py-2.5 max-w-xs truncate" title={tx.description}>
