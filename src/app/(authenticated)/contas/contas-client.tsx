@@ -262,7 +262,10 @@ function ConnectionCard({
     ? format(new Date(connection.lastSyncAt), "dd/MM/yy 'às' HH:mm", { locale: ptBR })
     : null
   const accountSummary = (meta.accounts ?? [])
-    .map(a => SUBTYPE_LABEL[a.subtype] ?? a.name)
+    .map(a => {
+      const label = SUBTYPE_LABEL[a.subtype] ?? a.name
+      return a.number ? `${label} • ${a.number}` : label
+    })
     .filter(Boolean)
     .join(' · ')
 
@@ -510,16 +513,24 @@ function PendingExtractTab({
         </Select>
         {multiplebanks && (
           <Select value={bankFilter} onValueChange={v => { setBankFilter(v); setPage(1) }}>
-            <SelectTrigger className="h-8 w-40 text-sm">
+            <SelectTrigger className="h-8 w-44 text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos os bancos</SelectItem>
-              {sources.map(s => (
-                <SelectItem key={s.dataSourceId} value={s.dataSourceId}>
-                  {s.dataSourceName}{!s.dataSourceActive ? ' (desconectado)' : ''}
-                </SelectItem>
-              ))}
+              {sources.map(s => {
+                const acctLabels = Array.from(new Set(
+                  s.transactions
+                    .map(t => t.accountSubtype ? (SUBTYPE_LABEL[t.accountSubtype] ?? null) : null)
+                    .filter((x): x is string => x !== null)
+                ))
+                const suffix = acctLabels.length > 0 ? ` · ${acctLabels.join(', ')}` : ''
+                return (
+                  <SelectItem key={s.dataSourceId} value={s.dataSourceId}>
+                    {s.dataSourceName}{suffix}{!s.dataSourceActive ? ' (desconectado)' : ''}
+                  </SelectItem>
+                )
+              })}
             </SelectContent>
           </Select>
         )}
@@ -569,9 +580,12 @@ function PendingExtractTab({
               pageRows.map(tx => {
                 const isInflow = tx.direction === 'inflow'
                 const isSelected = selectedIds.has(tx.id)
-                const accountLabel = tx.accountSubtype
+                const subtypeLabel = tx.accountSubtype
                   ? (SUBTYPE_LABEL[tx.accountSubtype] ?? tx.accountName ?? '')
                   : (tx.accountName ?? '')
+                const accountLabel = tx.accountNumber
+                  ? `${subtypeLabel} • ${tx.accountNumber}`
+                  : subtypeLabel
                 return (
                   <tr
                     key={tx.id}

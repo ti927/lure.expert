@@ -121,6 +121,7 @@ export type PendingTransaction = {
   dataSourceActive: boolean
   accountName: string | null
   accountSubtype: string | null
+  accountNumber: string | null
 }
 
 export type PendingSource = {
@@ -185,6 +186,7 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       dataSourceActive: r.dataSourceStatus !== 'inactive',
       accountName: meta.accountName ?? null,
       accountSubtype: meta.accountSubtype ?? null,
+      accountNumber: meta.accountNumber ?? null,
     })
   }
 
