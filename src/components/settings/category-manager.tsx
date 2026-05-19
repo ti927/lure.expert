@@ -121,6 +121,58 @@ function buildTree(flat: CategoryItem[], parentId: string | null = null): TreeNo
     .map((c) => ({ ...c, children: buildTree(flat, c.id) }))
 }
 
+// ─── InlineCreateRow ──────────────────────────────────────────────────────────
+
+function InlineCreateRow({
+  type,
+  parentId,
+  isPending,
+  onSubmit,
+  onCancel,
+  indent,
+}: {
+  type: string
+  parentId: string | null
+  isPending: boolean
+  onSubmit: (formData: FormData) => void
+  onCancel: () => void
+  indent?: boolean
+}) {
+  const nameRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    nameRef.current?.focus()
+  }, [])
+
+  return (
+    <form
+      action={onSubmit}
+      onKeyDown={(e) => { if (e.key === 'Escape') onCancel() }}
+      className={cn(
+        'flex gap-2 items-center px-3 py-2 bg-primary/5 border-t',
+        indent && 'pl-8',
+      )}
+    >
+      <input type="hidden" name="type" value={type} />
+      {parentId && <input type="hidden" name="parentId" value={parentId} />}
+      <Input
+        ref={nameRef}
+        name="name"
+        placeholder={parentId ? 'Nome da Natureza Filho' : 'Nome da Natureza Pai'}
+        className="h-8 flex-1"
+        required
+      />
+      <Input name="code" placeholder="Código" className="h-8 w-24" required />
+      <Button type="submit" size="sm" variant="ghost" disabled={isPending} title="Salvar">
+        <Check className="h-4 w-4 text-emerald-600" />
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={onCancel} title="Cancelar">
+        <X className="h-4 w-4" />
+      </Button>
+    </form>
+  )
+}
+
 // ─── Shared row action buttons ────────────────────────────────────────────────
 
 interface RowActionsProps {
@@ -216,7 +268,6 @@ export function CategoryManager({
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
-  // Local categories for optimistic DnD updates
   const [localCategories, setLocalCategories] = useState(categories)
   useEffect(() => { setLocalCategories(categories) }, [categories])
 
@@ -227,6 +278,8 @@ export function CategoryManager({
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CategoryItem | null>(null)
   const [changeTypeTarget, setChangeTypeTarget] = useState<CategoryItem | null>(null)
+  const [addingPaiToType, setAddingPaiToType] = useState<string | null>(null)
+  const [addingFilhoToPaiId, setAddingFilhoToPaiId] = useState<string | null>(null)
 
   const [typeFilter, setTypeFilter] = useState<string[]>([])
   const [paiFilter, setPaiFilter] = useState<string[]>([])
@@ -234,12 +287,10 @@ export function CategoryManager({
 
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
 
-  // Filter options
   const allPais = localCategories.filter(c => c.parentId === null && c.isActive)
   const allFilhos = localCategories.filter(c => c.parentId !== null && c.isActive)
   const typesWithCategories = TYPE_ORDER.filter(t => localCategories.some(c => c.type === t))
 
-  // Apply filters
   const visibleCategories = (() => {
     let result = showArchived ? localCategories : localCategories.filter(c => c.isActive)
 
@@ -290,12 +341,21 @@ export function CategoryManager({
 
   const visiblePaiIds = visibleCategories.filter(c => c.parentId === null).map(c => c.id)
   const allPaisCollapsed = visiblePaiIds.length > 0 && visiblePaiIds.every(id => collapsedPais.has(id))
+  const allTypesCollapsed = TYPE_ORDER.every(t => collapsedTypes.has(t))
 
   function toggleAllPais() {
     if (allPaisCollapsed) {
       setCollapsedPais(new Set())
     } else {
       setCollapsedPais(new Set(visiblePaiIds))
+    }
+  }
+
+  function toggleAllTypes() {
+    if (allTypesCollapsed) {
+      setCollapsedTypes(new Set())
+    } else {
+      setCollapsedTypes(new Set(TYPE_ORDER))
     }
   }
 
@@ -307,6 +367,20 @@ export function CategoryManager({
       } else {
         toast.success('Categoria criada.')
         setShowCreateDialog(false)
+        router.refresh()
+      }
+    })
+  }
+
+  function handleInlineCreate(formData: FormData) {
+    startTransition(async () => {
+      const result = await onCreate(formData)
+      if (result.error) {
+        toast.error(result.error)
+      } else {
+        toast.success('Categoria criada.')
+        setAddingPaiToType(null)
+        setAddingFilhoToPaiId(null)
         router.refresh()
       }
     })
@@ -408,6 +482,13 @@ export function CategoryManager({
     onToggleActiveRequest: handleToggleActive,
     onDeleteRequest: setDeleteTarget,
     onChangeTypeRequest: setChangeTypeTarget,
+    addingFilhoToPaiId,
+    onAddFilho: (paiId: string) => {
+      setAddingFilhoToPaiId(paiId)
+      setCollapsedPais(prev => { const n = new Set(prev); n.delete(paiId); return n })
+    },
+    onCancelAddFilho: () => setAddingFilhoToPaiId(null),
+    onInlineCreate: handleInlineCreate,
   }
 
   return (
@@ -419,10 +500,14 @@ export function CategoryManager({
             <Plus className="h-4 w-4 mr-1" />
             Nova natureza
           </Button>
+          <Button variant="ghost" size="sm" onClick={toggleAllTypes}>
+            <ChevronsUpDown className="h-4 w-4 mr-1" />
+            {allTypesCollapsed ? 'Expandir tipos' : 'Recolher tipos'}
+          </Button>
           {visiblePaiIds.length > 0 && (
             <Button variant="ghost" size="sm" onClick={toggleAllPais}>
               <ChevronsUpDown className="h-4 w-4 mr-1" />
-              {allPaisCollapsed ? 'Expandir tudo' : 'Recolher tudo'}
+              {allPaisCollapsed ? 'Expandir pais' : 'Recolher pais'}
             </Button>
           )}
         </div>
@@ -522,8 +607,6 @@ export function CategoryManager({
           <div className="space-y-4">
             {([['DRE', DRE_TYPES], ['Balanço Patrimonial', BP_TYPES]] as [string, string[]][]).map(
               ([sectionLabel, sectionTypes]) => {
-                const hasAny = sectionTypes.some(t => (byType[t]?.length ?? 0) > 0)
-                if (!hasAny) return null
                 return (
                   <div key={sectionLabel}>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-2 px-1">
@@ -531,26 +614,39 @@ export function CategoryManager({
                     </p>
                     <div className="space-y-2">
                       {sectionTypes.map(type => {
-                        const nodes = byType[type]
-                        if (!nodes || nodes.length === 0) return null
+                        const nodes = byType[type] ?? []
                         const isCollapsed = collapsedTypes.has(type)
 
                         return (
                           <div key={type} className="border rounded-lg overflow-hidden">
-                            <button
-                              type="button"
-                              className="w-full flex items-center gap-2 px-3 py-2 bg-muted/40 hover:bg-muted/60 text-left transition-colors"
-                              onClick={() => toggleTypeCollapse(type)}
-                            >
-                              {isCollapsed
-                                ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                                : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                              }
-                              <span className="text-sm font-semibold text-foreground">
-                                {TYPE_LABELS[type] ?? type}
-                              </span>
-                              <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
-                            </button>
+                            {/* TYPE header: botão collapse + botão "+" para Nat. Pai */}
+                            <div className="flex items-center bg-muted/40 hover:bg-muted/60 transition-colors">
+                              <button
+                                type="button"
+                                className="flex-1 flex items-center gap-2 px-3 py-2 text-left"
+                                onClick={() => toggleTypeCollapse(type)}
+                              >
+                                {isCollapsed
+                                  ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                                  : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                                }
+                                <span className="text-sm font-semibold text-foreground">
+                                  {TYPE_LABELS[type] ?? type}
+                                </span>
+                                <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="h-8 w-8 shrink-0 flex items-center justify-center text-primary hover:bg-primary/10 rounded mr-1"
+                                onClick={() => {
+                                  setAddingPaiToType(type)
+                                  setCollapsedTypes(prev => { const n = new Set(prev); n.delete(type); return n })
+                                }}
+                                title="Adicionar Natureza Pai"
+                              >
+                                <Plus className="h-4 w-4" />
+                              </button>
+                            </div>
 
                             {!isCollapsed && (
                               <div>
@@ -564,6 +660,15 @@ export function CategoryManager({
                                     {...sharedProps}
                                   />
                                 ))}
+                                {addingPaiToType === type && (
+                                  <InlineCreateRow
+                                    type={type}
+                                    parentId={null}
+                                    isPending={isPending}
+                                    onSubmit={handleInlineCreate}
+                                    onCancel={() => setAddingPaiToType(null)}
+                                  />
+                                )}
                               </div>
                             )}
                           </div>
@@ -654,6 +759,10 @@ interface SectionProps {
   onToggleActiveRequest: (item: CategoryItem) => void
   onDeleteRequest: (item: CategoryItem) => void
   onChangeTypeRequest: (item: CategoryItem) => void
+  addingFilhoToPaiId: string | null
+  onAddFilho: (paiId: string) => void
+  onCancelAddFilho: () => void
+  onInlineCreate: (formData: FormData) => void
 }
 
 function PaiSection({
@@ -669,9 +778,12 @@ function PaiSection({
   onToggleActiveRequest,
   onDeleteRequest,
   onChangeTypeRequest,
+  addingFilhoToPaiId,
+  onAddFilho,
+  onCancelAddFilho,
+  onInlineCreate,
 }: SectionProps) {
   const { setNodeRef, isOver } = useDroppable({ id: node.id })
-  // Don't highlight when dragging from this same Pai
   const isDragFromSelf = activeDragId !== null && node.children.some(c => c.id === activeDragId)
   const showDropHighlight = isOver && !isDragFromSelf
 
@@ -692,11 +804,26 @@ function PaiSection({
         isCollapsed={isCollapsed}
         hasChildren={node.children.length > 0}
         onToggleCollapse={onToggleCollapse}
+        onAddFilho={onAddFilho}
         {...rowProps}
       />
-      {!isCollapsed && node.children.map(child => (
-        <DraggableFilhoRow key={child.id} node={child} editingId={editingId} {...rowProps} />
-      ))}
+      {!isCollapsed && (
+        <>
+          {node.children.map(child => (
+            <DraggableFilhoRow key={child.id} node={child} editingId={editingId} {...rowProps} />
+          ))}
+          {addingFilhoToPaiId === node.id && (
+            <InlineCreateRow
+              type={node.type}
+              parentId={node.id}
+              isPending={isPending}
+              onSubmit={onInlineCreate}
+              onCancel={onCancelAddFilho}
+              indent
+            />
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -717,6 +844,7 @@ interface PaiRowProps {
   onToggleActiveRequest: (item: CategoryItem) => void
   onDeleteRequest: (item: CategoryItem) => void
   onChangeTypeRequest: (item: CategoryItem) => void
+  onAddFilho: (paiId: string) => void
 }
 
 function PaiRow({
@@ -733,6 +861,7 @@ function PaiRow({
   onToggleActiveRequest,
   onDeleteRequest,
   onChangeTypeRequest,
+  onAddFilho,
 }: PaiRowProps) {
   const isEditing = editingId === node.id
 
@@ -790,6 +919,14 @@ function PaiRow({
         title="Alterar tipo desta Natureza Pai e seus filhos"
       >
         {TYPE_LABELS[node.type] ?? node.type}
+      </Button>
+      <Button
+        size="sm" variant="ghost"
+        className="h-7 w-7 p-0 text-primary hover:bg-primary/10"
+        onClick={() => onAddFilho(node.id)}
+        title="Adicionar Natureza Filho"
+      >
+        <Plus className="h-3.5 w-3.5" />
       </Button>
       <RowActions
         node={node}
@@ -1037,7 +1174,6 @@ function CreateCategoryDialog({
             </p>
           </div>
 
-          {/* Tipo (Pai: manual; Filho: herdado do pai selecionado) */}
           {level === 'pai' ? (
             <div>
               <Label htmlFor="cat-type">Tipo da Natureza</Label>

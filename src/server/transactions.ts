@@ -129,12 +129,18 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
 
 async function assertLeafCategory(categoryId: string, organizationId: string): Promise<string | null> {
   const [cat] = await db
-    .select({ parentId: categories.parentId })
+    .select({ id: categories.id })
     .from(categories)
     .where(and(eq(categories.id, categoryId), eq(categories.organizationId, organizationId)))
     .limit(1)
   if (!cat) return 'Categoria não encontrada.'
-  if (!cat.parentId) return 'Apenas Naturezas Filho (subcategorias) podem ser atribuídas a transações.'
+
+  const [child] = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(and(eq(categories.parentId, categoryId), eq(categories.organizationId, organizationId)))
+    .limit(1)
+  if (child) return 'Categorias com subcategorias não podem ser atribuídas diretamente a transações.'
   return null
 }
 

@@ -41,13 +41,26 @@ const createSchema = z.object({
   parentId: z.string().uuid().optional(),
 })
 
+function numericCodeSort(a: { type: string; code: string | null }, b: { type: string; code: string | null }) {
+  const tA = CATEGORY_TYPES.indexOf(a.type as typeof CATEGORY_TYPES[number])
+  const tB = CATEGORY_TYPES.indexOf(b.type as typeof CATEGORY_TYPES[number])
+  if (tA !== tB) return tA - tB
+  const partsA = (a.code ?? '').split('.').map(p => parseInt(p, 10) || 0)
+  const partsB = (b.code ?? '').split('.').map(p => parseInt(p, 10) || 0)
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const diff = (partsA[i] ?? 0) - (partsB[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return (a.code ?? '').localeCompare(b.code ?? '')
+}
+
 export async function getCategories() {
   const { organizationId } = await getAuthContext()
-  return db
+  const rows = await db
     .select()
     .from(categories)
     .where(eq(categories.organizationId, organizationId))
-    .orderBy(categories.code)
+  return rows.sort(numericCodeSort)
 }
 
 export async function getCategoriesWithTxCount() {
@@ -73,9 +86,8 @@ export async function getCategoriesWithTxCount() {
     })
     .from(categories)
     .where(eq(categories.organizationId, organizationId))
-    .orderBy(categories.code)
 
-  return rows
+  return rows.sort(numericCodeSort)
 }
 
 export async function createCategory(formData: FormData) {

@@ -265,13 +265,16 @@ function CategoryMultiSelectFilter({ value, categories, onUpdate }: CategoryMult
     return `${selected.size} categorias`
   }, [hasValue, selected, categories])
 
-  const byType = useMemo(() => categories
-    .filter(c => c.parentId !== null)
-    .reduce((acc, c) => {
-      if (!acc[c.type]) acc[c.type] = []
-      acc[c.type].push(c)
-      return acc
-    }, {} as Record<string, Category[]>), [categories])
+  const byType = useMemo(() => {
+    const parentIds = new Set(categories.map(c => c.parentId).filter(Boolean) as string[])
+    return categories
+      .filter(c => !parentIds.has(c.id))
+      .reduce((acc, c) => {
+        if (!acc[c.type]) acc[c.type] = []
+        acc[c.type].push(c)
+        return acc
+      }, {} as Record<string, Category[]>)
+  }, [categories])
 
   return (
     <div className="relative flex-1 min-w-[140px]">
@@ -441,8 +444,9 @@ function CategoryCellCombobox({ value, categories, onValueChange, disabled }: Ca
   const selected = categories.find(c => c.id === value)
   const label = selected ? `${selected.code} – ${selected.name}` : null
 
+  const parentIds = new Set(categories.map(c => c.parentId).filter(Boolean) as string[])
   const byType = categories
-    .filter(c => c.parentId !== null)
+    .filter(c => !parentIds.has(c.id))
     .reduce((acc, c) => {
       if (!acc[c.type]) acc[c.type] = []
       acc[c.type].push(c)
@@ -1040,17 +1044,17 @@ export default function TransacoesClient({ data, options, documents, searchParam
     })
   }
 
-  const categoriesByType = options.categories.reduce((acc, c) => {
-    if (!c.parentId) return acc
+  const batchParentIds = new Set(options.categories.map(c => c.parentId).filter(Boolean) as string[])
+  const leafCategories = options.categories.filter(c => !batchParentIds.has(c.id))
+
+  const categoriesByType = leafCategories.reduce((acc, c) => {
     if (!acc[c.type]) acc[c.type] = []
     acc[c.type].push({ id: c.id, label: `${c.code} – ${c.name}` })
     return acc
   }, {} as Record<string, { id: string; label: string }[]>)
 
   const groupedCategories = Object.entries(categoriesByType).map(([type, items]) => ({ type, items }))
-  const allCategoryOptions = options.categories
-    .filter(c => c.parentId !== null)
-    .map(c => ({ id: c.id, label: `${c.code} – ${c.name}` }))
+  const allCategoryOptions = leafCategories.map(c => ({ id: c.id, label: `${c.code} – ${c.name}` }))
 
   return (
     <div className="space-y-4">

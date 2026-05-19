@@ -163,14 +163,16 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9). Sessão de correções e melhorias UX pré-Fase 6 **concluída**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload de relatório + migration 0016) **concluída**. Sessões de melhorias UX de categorias e fixes de classificação **concluídas**.
+
+Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **Fase 6** — Balanço Patrimonial gerencial (telas de apoio: imobilizado, empréstimos, PL, estoque + BP com drill-down)
+- **Fase 6 continuação** — Tela `/balanco` com visualização do BP por data de referência (drill-down por tipo/pai/filho, comparativo entre datas)
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
@@ -178,6 +180,51 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão UX categorias + fixes de classificação *(concluída)*
+
+**O que mudou:**
+
+- **Criação inline de categorias** — `src/components/settings/category-manager.tsx`: botão "+" no cabeçalho de cada bloco de Tipo abre `InlineCreateRow` para criar Natureza Pai; botão "+" na linha de cada Pai abre `InlineCreateRow` indentada para criar Natureza Filho. Auto-focus ao montar, Enter salva, Escape cancela. Seção do tipo é auto-expandida ao clicar "+".
+
+- **Todos os blocos de Tipo sempre visíveis** — mesmo sem nenhum Pai cadastrado, o bloco do Tipo aparece na tela. Remove a necessidade de saber de antemão que o Tipo existe para criar o primeiro Pai.
+
+- **"Recolher/Expandir tipos"** — botão global na toolbar controla `collapsedTypes: Set<string>` (independente de `collapsedPais`). Label alterna entre "Recolher tipos" e "Expandir tipos" conforme estado. Posicionado à esquerda do botão de Pais existente.
+
+- **Fix: regra de folha (leaf node) para categorias BP** — `assertLeafCategory` em `src/server/transactions.ts` reescrita: em vez de bloquear categorias sem `parentId`, agora bloqueia categorias que TÊM filhos. Isso permite atribuir Naturezas Pai de BP (ex: "Banco 9999" sob Ativo Circulante) que não possuem subcategorias — caso de uso principal do BP gerencial.
+
+- **Fix: categorias BP no dialog de classificação em lote** — `src/app/(authenticated)/transacoes/transacoes-client.tsx`: os 4 pontos que filtravam `parentId !== null` (somente FILHOs) foram substituídos por cálculo de `parentIds = new Set(categories.map(c => c.parentId).filter(Boolean))` e filtro `!parentIds.has(c.id)` (nós folha). Resultado: categorias BP Pai sem filhos agora aparecem nos dropdowns de categoria.
+
+- **Fix: ordenação numérica de categorias nos dropdowns** — `src/server/categories.ts`: `numericCodeSort()` ordena por (1) posição do tipo em `CATEGORY_TYPES` e (2) segmentos do código como inteiros (`"10".split('.').map(parseInt)` → `[10]`). Corrige o bug de ordenação textual onde "10" e "11" apareciam logo após "1", antes de "2", "3" etc. Aplicado em `getCategories()` e `getCategoriesWithTxCount()`.
+
+TypeScript: 0 erros.
+
+---
+
+### ✅ Sessão 6.0 redesenhada — BP via importação de relatórios *(concluída)*
+
+**Decisão de arquitetura:** abordamos o BP gerencial via upload de relatório com data de referência, em vez de tabelas de apoio separadas (imobilizado, empréstimos, PL, estoque). Justificativa: as tabelas de apoio requerem entrada manual volumosa; o BP snapshottado por upload é o fluxo real de PMEs que já têm o relatório no Excel/sistema.
+
+**O que mudou:**
+
+- **Migration `db/migrations/rls/0016_document_report_type.sql`** — dois novos campos em `documents`:
+  - `report_type text NOT NULL DEFAULT 'other'` — distingue relatórios de BP (`'balance_sheet'`) dos demais uploads
+  - `reference_date text` — data de referência do snapshot de BP (ex: `'2026-01-31'`)
+
+- **`src/server/balance-sheet.ts`** (criado) — server actions:
+  - `getBpData(referenceDate)` — busca o documento BP mais recente com `referenceDate ≤ referenceDate` solicitado, depois agrega `transactions` daquele documento por categoria (JOIN com `categories` e alias `parent`), filtrado pelos tipos BP (`BP_TYPES`). Retorna `BpData` com `rows: BpRow[]`.
+  - `getAvailableBpDates()` — lista todas as `reference_date` de documentos `report_type='balance_sheet'` da org, ordenadas desc.
+
+- **`src/lib/bp-types.ts`** (criado) — constantes e tipos públicos do BP: `BP_TYPES`, `BpType`. Extraído como módulo separado (sem `'use server'`) para ser importável por client e server components.
+
+**Fluxo de uso:**
+1. Usuário faz upload em `/upload` de arquivo de BP → tipo de origem "Balanço Patrimonial"
+2. Transações do arquivo são classificadas com categorias de tipo BP
+3. Tela `/balanco` (a implementar) consulta `getBpData(data)` e exibe o BP estruturado
+
+TypeScript: 0 erros.
 
 ---
 
