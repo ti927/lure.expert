@@ -9,9 +9,9 @@ import { memberships, organizations } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrgForm } from '@/components/settings/org-form'
-import { Tags, Building2, Briefcase, Landmark, ChevronRight } from 'lucide-react'
+import { Tags, Building2, Briefcase, Landmark, ChevronRight, Package, CreditCard, TrendingUp, BoxesIcon } from 'lucide-react'
 
-const NAV_SECTIONS = [
+const ANALYTICS_SECTIONS = [
   {
     href: '/configuracoes/categorias',
     icon: Tags,
@@ -35,6 +35,33 @@ const NAV_SECTIONS = [
     icon: Landmark,
     title: 'Entidades jurídicas',
     description: 'Vincule lançamentos a CNPJs — matriz, filiais ou empresas do grupo.',
+  },
+]
+
+const BP_SECTIONS = [
+  {
+    href: '/configuracoes/imobilizado',
+    icon: Package,
+    title: 'Imobilizado',
+    description: 'Equipamentos, veículos e móveis — Ativo Não-Circulante.',
+  },
+  {
+    href: '/configuracoes/emprestimos',
+    icon: CreditCard,
+    title: 'Empréstimos e financiamentos',
+    description: 'Capital de giro, CCB, BNDES, mútuos — Passivo Circulante e Não-Circulante.',
+  },
+  {
+    href: '/configuracoes/patrimonio-liquido',
+    icon: TrendingUp,
+    title: 'Patrimônio Líquido',
+    description: 'Aportes, retiradas e distribuição de lucros — PL no Balanço.',
+  },
+  {
+    href: '/configuracoes/estoque',
+    icon: BoxesIcon,
+    title: 'Estoque',
+    description: 'Snapshots periódicos do valor do estoque — Ativo Circulante.',
   },
 ]
 
@@ -80,7 +107,30 @@ export default async function ConfiguracoesPage() {
           Classificações analíticas
         </h2>
         <div className="space-y-2">
-          {NAV_SECTIONS.map(({ href, icon: Icon, title, description }) => (
+          {ANALYTICS_SECTIONS.map(({ href, icon: Icon, title, description }) => (
+            <Link key={href} href={href}>
+              <div className="flex items-center gap-4 p-4 rounded-lg border bg-card hover:bg-muted/40 transition-colors cursor-pointer">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
+                  <Icon className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground">{title}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{description}</p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+              </div>
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      {/* Balanço Patrimonial */}
+      <div>
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          Balanço Patrimonial
+        </h2>
+        <div className="space-y-2">
+          {BP_SECTIONS.map(({ href, icon: Icon, title, description }) => (
             <Link key={href} href={href}>
               <div className="flex items-center gap-4 p-4 rounded-lg border bg-card hover:bg-muted/40 transition-colors cursor-pointer">
                 <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
