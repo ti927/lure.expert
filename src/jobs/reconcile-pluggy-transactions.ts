@@ -4,8 +4,9 @@ import { transactions } from '@/db/schema'
 import { eq, and, sql } from 'drizzle-orm'
 
 // Thresholds de similaridade (pg_trgm similarity(), escala 0–1)
-const SCORE_AUTO = 0.85   // ≥ 0.85 → duplicata automática
-const SCORE_MIN  = 0.50   // ≥ 0.50 → fila de revisão manual
+const SCORE_AUTO = 0.85      // ≥ 0.85 → duplicata automática
+const SCORE_MIN  = 0.50      // ≥ 0.50 → fila de revisão manual
+const RECONCILE_BATCH = 50   // transações por step (limite Inngest: 1000 steps/run)
 
 export const reconcilePluggyTransactions = inngest.createFunction(
   {
@@ -44,80 +45,76 @@ export const reconcilePluggyTransactions = inngest.createFunction(
     let duplicates = 0
     let flagged = 0
 
-    // Processa cada transação Pluggy individualmente para aproveitar os steps do Inngest
-    for (const tx of pluggyTxs) {
-      const result = await step.run(`reconcile-tx-${tx.id}`, async () => {
-        // Busca o melhor candidato entre transações de upload (não-Pluggy) da mesma org
-        // Critérios: mesma direção + mesmo valor + ±2 dias + similaridade trigram na descrição
-        const rows = await db.execute<{
-          id: string
-          score: number
-        }>(sql`
-          SELECT
-            t.id,
-            similarity(t.description, ${tx.description}) AS score
-          FROM transactions t
-          JOIN data_sources ds ON ds.id = t.data_source_id
-          WHERE t.organization_id = ${organizationId}::uuid
-            AND t.direction       = ${tx.direction}
-            AND t.amount          = ${tx.amount}::numeric
-            AND t.date BETWEEN (${tx.date}::date - INTERVAL '2 days')
-                           AND (${tx.date}::date + INTERVAL '2 days')
-            AND ds.provider      != 'pluggy'
-            AND t.status         NOT IN ('duplicate', 'ignored')
-            AND t.duplicate_of   IS NULL
-            AND similarity(t.description, ${tx.description}) >= ${SCORE_MIN}
-          ORDER BY score DESC
-          LIMIT 1
-        `)
+    // Processa em lotes de RECONCILE_BATCH por step — evita ultrapassar o limite de 1000 steps/run
+    for (let i = 0; i < pluggyTxs.length; i += RECONCILE_BATCH) {
+      const batch = pluggyTxs.slice(i, i + RECONCILE_BATCH)
+      const batchNum = Math.floor(i / RECONCILE_BATCH)
 
-        const match = rows[0]
-        if (!match) return { action: 'none' as const }
+      const counts = await step.run(`reconcile-batch-${batchNum}`, async () => {
+        let batchDuplicates = 0
+        let batchFlagged = 0
 
-        const score = Number(match.score)
+        for (const tx of batch) {
+          const rows = await db.execute<{ id: string; score: number }>(sql`
+            SELECT
+              t.id,
+              similarity(t.description, ${tx.description}) AS score
+            FROM transactions t
+            JOIN data_sources ds ON ds.id = t.data_source_id
+            WHERE t.organization_id = ${organizationId}::uuid
+              AND t.direction       = ${tx.direction}
+              AND t.amount          = ${tx.amount}::numeric
+              AND t.date BETWEEN (${tx.date}::date - INTERVAL '2 days')
+                             AND (${tx.date}::date + INTERVAL '2 days')
+              AND ds.provider      != 'pluggy'
+              AND t.status         NOT IN ('duplicate', 'ignored')
+              AND t.duplicate_of   IS NULL
+              AND similarity(t.description, ${tx.description}) >= ${SCORE_MIN}
+            ORDER BY score DESC
+            LIMIT 1
+          `)
 
-        if (score >= SCORE_AUTO) {
-          // Duplicata automática: marca o upload como duplicata, aponta para a canônica (Pluggy)
+          const match = rows[0]
+          if (!match) continue
+
+          const score = Number(match.score)
+
+          if (score >= SCORE_AUTO) {
+            await db
+              .update(transactions)
+              .set({ status: 'duplicate', duplicateOf: tx.id, updatedAt: new Date() })
+              .where(eq(transactions.id, match.id))
+            batchDuplicates++
+            continue
+          }
+
+          const [current] = await db
+            .select({ metadata: transactions.metadata })
+            .from(transactions)
+            .where(eq(transactions.id, match.id))
+            .limit(1)
+
           await db
             .update(transactions)
             .set({
-              status: 'duplicate',
-              duplicateOf: tx.id,
+              needsReview: true,
+              metadata: {
+                ...((current?.metadata ?? {}) as Record<string, unknown>),
+                reconciliationPending: true,
+                reconciliationCandidateId: tx.id,
+                reconciliationScore: score,
+              },
               updatedAt: new Date(),
             })
             .where(eq(transactions.id, match.id))
-
-          return { action: 'duplicate' as const, matchId: match.id, score }
+          batchFlagged++
         }
 
-        // Fila de revisão manual: seta needs_review + flag no metadata
-        const [current] = await db
-          .select({ metadata: transactions.metadata })
-          .from(transactions)
-          .where(eq(transactions.id, match.id))
-          .limit(1)
-
-        const existingMeta = (current?.metadata ?? {}) as Record<string, unknown>
-
-        await db
-          .update(transactions)
-          .set({
-            needsReview: true,
-            metadata: {
-              ...existingMeta,
-              reconciliationPending: true,
-              reconciliationCandidateId: tx.id,
-              reconciliationScore: score,
-            },
-            updatedAt: new Date(),
-          })
-          .where(eq(transactions.id, match.id))
-
-        return { action: 'flagged' as const, matchId: match.id, score }
+        return { duplicates: batchDuplicates, flagged: batchFlagged }
       })
 
-      if (result.action === 'duplicate') duplicates++
-      if (result.action === 'flagged') flagged++
+      duplicates += counts.duplicates
+      flagged += counts.flagged
     }
 
     return { processed: pluggyTxs.length, duplicates, flagged }
