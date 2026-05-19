@@ -163,11 +163,11 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 4 — Open Finance via **Pluggy** *em andamento* (4.0, 4.A, 4.B e 4.C concluídas).
+**Status:** Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próxima sub-fase:** 4.D (reconciliação entre transações Pluggy e transações importadas manualmente).
+**Próxima fase:** Fase 5 — DRE interativo com filtros por dimensão.
 
 ---
 
@@ -234,10 +234,10 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - **`src/jobs/sync-pluggy-item.ts`** (novo) — função Inngest `syncPluggyItem` acionada pelo evento `pluggy/item.connected`:
   - Concurrency: `limit: 1` por `dataSourceId` (evita sobreposição de syncs do mesmo item).
   - Busca todas as contas do item via `client.fetchAccounts(itemId)`.
-  - Para cada conta: `client.fetchAllTransactions(accountId, { dateFrom })` (janela padrão 90 dias ou `fromDate` do evento).
-  - Insere em `transactions` em lotes de 100 com `onConflictDoNothing` (dedup por `external_id`).
+  - Paginação cursor manual via `fetchTransactionsCursor` — **um `step.run` por página** (evita timeout em step único e permite memoização do cursor). `DAYS_BACK = 365`.
+  - Insere em `transactions` em lotes de 100 com `onConflictDoNothing` (dedup por `UNIQUE(dataSourceId, externalId)`).
   - Atualiza `data_sources.lastSyncAt`, `lastSyncStatus = 'SUCCESS'` e `metadata.lastTransactionFetchedAt`.
-  - Dispara `transaction/batch-inserted` para categorização automática das novas transações.
+  - Dispara `transaction/batch-inserted` para categorização automática e `pluggy/reconcile.requested` para reconciliação.
 - **`src/server/connections.ts`** — `registerPluggyItem` passou a disparar o evento `pluggy/item.connected` após o upsert em `data_sources`.
 - **`src/app/api/inngest/route.ts`** — `syncPluggyItem` registrado no `serve()`.
 
@@ -248,8 +248,50 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - `direction` ← `tx.type === 'CREDIT' ? 'inflow' : 'outflow'`
 - `description` ← `tx.description`
 - `rawData` ← objeto `tx` completo
-- `metadata` ← `{ accountId, accountName, pluggyDate }`
-- `status = 'confirmed'`, `needsReview = false` (transações Open Finance não passam por staging)
+- `metadata` ← `{ accountId, accountName, accountType, accountSubtype, accountNumber, pluggyDate, pluggyCategory, pluggyCategoryId, merchantName, merchantCategory }`
+- `status = 'pending'` (aguarda confirmação no extrato pendente)
+
+---
+
+### ✅ Sessão 4.F — Categoria Pluggy como hint IA + exibição *(concluída)*
+
+**O que mudou:**
+- **`src/jobs/sync-pluggy-item.ts`** — `metadata` passa a incluir campos do Pluggy: `pluggyCategory`, `pluggyCategoryId`, `merchantName`, `merchantCategory` (extraídos de `tx.category`, `tx.categoryId`, `tx.merchant`).
+- **`src/jobs/categorize-transaction.ts`** — `metadata` incluído no select para repassar ao categorizador.
+- **`src/lib/categorizer.ts`** — `classifyWithLLM` aceita `pluggyCategory?: string | null`; quando presente, injeta `\nCategoria do banco (Pluggy): {value}` no user message → melhora precisão sem mapeamento manual.
+- **`src/app/(authenticated)/transacoes/transacoes-client.tsx`** — célula de descrição exibe a categoria Pluggy como texto secundário cinza (`text-xs text-muted-foreground/60`) quando disponível.
+
+**Limitação:** transações já sincronizadas antes desta sessão não têm `pluggyCategory` em metadata. O campo é populado apenas em syncs novos.
+
+---
+
+### ✅ Sessão 4.E — UX /contas: número de conta, filtros e sync com data de corte *(concluída)*
+
+**O que mudou:**
+- **`src/server/connections.ts`**:
+  - `PendingTransaction` inclui `accountNumber: string | null` (extraído de `metadata.accountNumber`).
+  - `getPendingTransactionsBySource` — removido `.limit(500)` (limitava o extrato a 500 lançamentos independente do volume real).
+  - `triggerManualSync(dataSourceId, fromDate?)` — aceita `fromDate` opcional e repassa ao job Inngest.
+- **`src/app/(authenticated)/contas/contas-client.tsx`**:
+  - Cards de conexão: accountSummary exibe número junto ao tipo — "C. Corrente • 00025546-7 · Cartão • 7634".
+  - Extrato pendente: filtro por conta (account subtype + number), filtro de data (de/até), coluna "Conta" exibe número.
+  - Filtro de banco no dropdown diferencia conexões do mesmo banco pelos tipos de conta.
+  - Filtro de conta se atualiza automaticamente ao mudar o banco selecionado.
+  - Botão de sync abre dialog pedindo data de corte (default: 90 dias atrás); a data escolhida é passada ao job como `fromDate`.
+
+---
+
+### ✅ Sessão 4.D — Reconciliação Pluggy *(concluída)*
+
+**O que mudou:**
+- **`src/jobs/reconcile-pluggy-transactions.ts`** (novo) — função Inngest `reconcilePluggyTransactions` acionada por `pluggy/reconcile.requested`:
+  - Busca as transações Pluggy recém-inseridas por ID.
+  - Para cada uma: query SQL com `pg_trgm similarity()` buscando correspondências em transações de outras fontes (`provider != 'pluggy'`), mesma direção, mesmo valor, data ±2 dias.
+  - Score ≥ 0,85 → marca como `status = 'duplicate'` + `duplicateOf = pluggyTxId` (automático).
+  - Score 0,50–0,84 → marca `needsReview = true` + `metadata.reconciliationPending = true` + candidato e score (fila de revisão).
+  - Processamento em lotes de 50 transações por `step.run` (respeita limite de 1000 steps/run do Inngest).
+  - Concurrency: `limit: 1` por `organizationId`.
+- Tela `/transacoes/reconciliacao` (já existia) exibe os pares para revisão manual.
 
 ---
 
