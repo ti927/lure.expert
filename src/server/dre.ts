@@ -138,8 +138,9 @@ export async function getDreData(filters: DreFilters): Promise<DreData> {
 
 export async function getDreDrillDown(
   categoryId: string,
-  month: string,   // YYYY-MM
+  month: string,   // YYYY-MM; ignorado quando dateRange é fornecido
   filters: Pick<DreFilters, 'costCenterIds' | 'businessUnitIds' | 'legalEntityIds'>,
+  dateRange?: { from: string; to: string },
 ): Promise<{ transactions: DrillDownTransaction[]; total: number }> {
   const { organizationId } = await getAuthContext()
   const { costCenterIds, businessUnitIds, legalEntityIds } = filters
@@ -156,9 +157,16 @@ export async function getDreDrillDown(
     ? sql`AND t.legal_entity_id IN (${sql.join(legalEntityIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
-  const [y, m]    = month.split('-').map(Number)
-  const monthFrom = `${month}-01`
-  const monthTo   = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+  let monthFrom: string
+  let monthTo: string
+  if (dateRange) {
+    monthFrom = dateRange.from
+    monthTo   = dateRange.to
+  } else {
+    const [y, m] = month.split('-').map(Number)
+    monthFrom = `${month}-01`
+    monthTo   = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+  }
 
   type TxRow = {
     id:               string

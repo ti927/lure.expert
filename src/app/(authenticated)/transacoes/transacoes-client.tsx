@@ -715,7 +715,8 @@ interface BatchComboboxProps {
 
 function BatchCombobox({ value, options, placeholder, onValueChange, grouped }: BatchComboboxProps) {
   const [open, setOpen] = useState(false)
-  const selected = options.find(o => o.id === value)
+  const isNull = value === '__null__'
+  const selected = isNull ? null : options.find(o => o.id === value)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -724,8 +725,8 @@ function BatchCombobox({ value, options, placeholder, onValueChange, grouped }: 
           'flex h-8 w-full items-center justify-between rounded-md border border-input px-3 text-xs bg-background',
           'hover:bg-accent transition-colors focus:outline-none focus:ring-1 focus:ring-ring',
         )}>
-          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-            {selected?.label ?? placeholder}
+          <span className={cn('truncate', !selected && !isNull && 'text-muted-foreground', isNull && 'text-muted-foreground italic')}>
+            {isNull ? '— Remover' : (selected?.label ?? placeholder)}
           </span>
           <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-40" />
         </button>
@@ -735,6 +736,23 @@ function BatchCombobox({ value, options, placeholder, onValueChange, grouped }: 
           <CommandInput placeholder="Buscar..." />
           <CommandList>
             <CommandEmpty>Nenhum resultado.</CommandEmpty>
+            <CommandItem
+              value="__null__"
+              onSelect={() => { onValueChange('__null__'); setOpen(false) }}
+              className={cn('text-xs italic', isNull ? 'text-foreground' : 'text-muted-foreground')}
+            >
+              <Check className={cn('mr-2 h-3 w-3', isNull ? 'opacity-100' : 'opacity-0')} />
+              — Remover (gravar em branco)
+            </CommandItem>
+            {value && value !== '__null__' && (
+              <CommandItem
+                value="__clear__"
+                onSelect={() => { onValueChange(''); setOpen(false) }}
+                className="text-xs text-muted-foreground italic"
+              >
+                — Não alterar
+              </CommandItem>
+            )}
             {grouped ? (
               grouped.map(group => (
                 <CommandGroup key={group.type} heading={CATEGORY_TYPE_LABELS[group.type] ?? group.type}>
@@ -890,29 +908,38 @@ export default function TransacoesClient({ data, options, documents, searchParam
     }
   }
 
+  function resolveField(v: string): string | null | undefined {
+    if (v === '__null__') return null
+    return v || undefined
+  }
+
   async function handleBatchClassify() {
     const payload = {
-      categoryId: batchForm.categoryId || undefined,
-      costCenterId: batchForm.costCenterId || undefined,
-      businessUnitId: batchForm.businessUnitId || undefined,
-      legalEntityId: batchForm.legalEntityId || undefined,
+      categoryId:     resolveField(batchForm.categoryId),
+      costCenterId:   resolveField(batchForm.costCenterId),
+      businessUnitId: resolveField(batchForm.businessUnitId),
+      legalEntityId:  resolveField(batchForm.legalEntityId),
     }
     if (Object.values(payload).every(v => v === undefined)) {
       toast.error('Selecione ao menos uma dimensão.')
       return
     }
     setIsBatching(true)
-    const result = await batchClassifyTransactions(Array.from(selectedIds), payload)
-    setIsBatching(false)
-
-    if (result?.error) {
-      toast.error(result.error)
-    } else {
-      toast.success(`${result.updated} transação(ões) classificada(s).`)
-      setBatchOpen(false)
-      setSelectedIds(new Set())
-      setBatchForm({ categoryId: '', costCenterId: '', businessUnitId: '', legalEntityId: '' })
-      router.refresh()
+    try {
+      const result = await batchClassifyTransactions(Array.from(selectedIds), payload)
+      if (result?.error) {
+        toast.error(result.error)
+      } else {
+        toast.success(`${result.updated} transaç${result.updated !== 1 ? 'ões' : 'ão'} classificada${result.updated !== 1 ? 's' : ''}.`)
+        setBatchOpen(false)
+        setSelectedIds(new Set())
+        setBatchForm({ categoryId: '', costCenterId: '', businessUnitId: '', legalEntityId: '' })
+        router.refresh()
+      }
+    } catch {
+      toast.error('Erro ao classificar. Tente novamente.')
+    } finally {
+      setIsBatching(false)
     }
   }
 
@@ -948,13 +975,16 @@ export default function TransacoesClient({ data, options, documents, searchParam
   }
 
   const categoriesByType = options.categories.reduce((acc, c) => {
+    if (!c.parentId) return acc
     if (!acc[c.type]) acc[c.type] = []
     acc[c.type].push({ id: c.id, label: `${c.code} – ${c.name}` })
     return acc
   }, {} as Record<string, { id: string; label: string }[]>)
 
   const groupedCategories = Object.entries(categoriesByType).map(([type, items]) => ({ type, items }))
-  const allCategoryOptions = options.categories.map(c => ({ id: c.id, label: `${c.code} – ${c.name}` }))
+  const allCategoryOptions = options.categories
+    .filter(c => c.parentId !== null)
+    .map(c => ({ id: c.id, label: `${c.code} – ${c.name}` }))
 
   return (
     <div className="space-y-4">
@@ -1184,7 +1214,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
       <Dialog open={batchOpen} onOpenChange={setBatchOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Classificar {selectedIds.size} transação{selectedIds.size !== 1 ? 'ões' : ''} em lote</DialogTitle>
+            <DialogTitle>Classificar {selectedIds.size} transaç{selectedIds.size !== 1 ? 'ões' : 'ão'} em lote</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Selecione as dimensões que deseja aplicar. Campos em branco não serão alterados.

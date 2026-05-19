@@ -163,7 +163,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0 e 5.A concluídas).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0 e 5.A concluídas, fixes pós-5.A aplicados).
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
@@ -171,8 +171,38 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 
 **Próximas sessões:**
 - **5.B** — Dashboard `/dashboard` com KPI cards + gráfico de fluxo de caixa 90 dias
-- **5.C** — Drill-down no DRE: clicar num valor abre transações por trás (server action `getDreDrillDown` já existe)
+- **5.C** — Drill-down no DRE: clicar num valor abre transações por trás (server action `getDreDrillDown` já existe — e já aprimorado com dateRange)
 - **5.D** — Indicadores financeiros (margem EBITDA, liquidez, cobertura de dívida)
+
+---
+
+### ✅ Fixes pós-5.A — DRE drill-down aprimorado + classificação em lote corrigida *(concluídos)*
+
+**O que mudou:**
+
+- **`src/app/layout.tsx`** — `<Toaster />` (Sonner) adicionado ao layout raiz. Estava faltando desde o início — nenhum toast era visível em lugar nenhum do app.
+
+- **`src/server/dre.ts`** — `getDreDrillDown` aceita `dateRange?: { from: string; to: string }` opcional. Quando fornecido, usa esse range em vez de derivar o mês. Permite drill-down do Total (todos os meses exibidos).
+
+- **`src/app/(authenticated)/dre/dre-client.tsx`** — Refatoração significativa do `DrillDownDialog` e do `DreClient`:
+  - **Coluna Unidade de Negócio** não aparecia quando a org não tinha UNs cadastradas — removidos todos os condicionais `{dimension.length > 0 && ...}` na tabela do drill-down; todas as 4 colunas sempre renderizam.
+  - **Filtros de dimensão no drill-down** — segunda linha de filtros com selects de CC, UN e Entidade Jurídica (filtragem client-side via `useMemo`).
+  - **Filtros de data no drill-down** — inputs De/Até dentro do dialog (filtragem client-side).
+  - **Coluna Total clicável** — célula Total de cada Natureza Filho abre drill-down com todas as transações do período exibido (`openDrillDownTotal`). Interfaces `BlockProps`, `TypeBlockProps`, `ParentBlockProps` estendidas com `openDrillDownTotal`.
+  - **Título do dialog** diferencia modo mês vs. modo Total: `"Total — jan/25 a dez/25"`.
+  - `currentFrom`/`currentTo` derivados de `fromMonth`/`toMonth` via `useMemo`.
+
+- **`src/app/(authenticated)/transacoes/transacoes-client.tsx`** — Múltiplas correções no dialog de classificação em lote:
+  - **Typo corrigido**: `"transaçãoões"` → `"transações"` no título.
+  - **try/catch/finally** em `handleBatchClassify` — erros de rede/servidor agora exibem toast de erro; `setIsBatching(false)` garantido no `finally`.
+  - **"Limpar seleção"** no `BatchCombobox` (volta para "Não alterar") — implementado na sessão anterior.
+  - **"— Remover (gravar em branco)"** no `BatchCombobox` — sentinel `'__null__'`; `resolveField()` converte `'__null__'` → `null` no payload, gravando NULL no banco. Permite limpar CC/UN/Entidade de lançamentos classificados erroneamente.
+  - **Bug: categorias Pai apareciam no batch** — `categoriesByType` e `allCategoryOptions` agora filtram `c.parentId !== null` (mesmo comportamento do `CategoryCellCombobox` inline). Eliminava o erro "Apenas Naturezas Filho podem ser atribuídas".
+
+**Convenção `__null__` no batch:**
+- `''` (vazio) = "Não alterar" — campo ignorado no UPDATE
+- `'uuid'` = setar esse valor
+- `'__null__'` = gravar NULL (remover classificação) — o único jeito de limpar uma dimensão em lote
 
 ---
 

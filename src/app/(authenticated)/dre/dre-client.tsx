@@ -59,6 +59,7 @@ type DrillDownState = {
   categoryId: string
   categoryName: string
   month: string
+  dateRange?: { from: string; to: string }
 }
 
 type ComboOption = {
@@ -287,7 +288,7 @@ function DimCellCombobox({
       <PopoverContent className="w-[240px] p-0" align="start">
         <Command>
           <CommandInput placeholder="Buscar..." className="h-8 text-xs" />
-          <CommandList>
+          <CommandList onWheel={e => e.stopPropagation()}>
             <CommandEmpty className="py-3 text-center text-xs text-muted-foreground">
               Nenhum resultado.
             </CommandEmpty>
@@ -360,6 +361,11 @@ function DrillDownDialog({
   const [localData, setLocalData] = useState<DrillDownTransaction[]>([])
   const [search, setSearch] = useState('')
   const [dirFilter, setDirFilter] = useState<'all' | 'inflow' | 'outflow'>('all')
+  const [ddDateFrom, setDdDateFrom] = useState(state.dateRange?.from ?? '')
+  const [ddDateTo, setDdDateTo]     = useState(state.dateRange?.to ?? '')
+  const [ddCc, setDdCc] = useState('')
+  const [ddBu, setDdBu] = useState('')
+  const [ddLe, setDdLe] = useState('')
 
   useEffect(() => {
     if (data) setLocalData(data)
@@ -383,8 +389,13 @@ function DrillDownDialog({
   const filtered = useMemo(() => localData.filter(tx => {
     if (search && !tx.description.toLowerCase().includes(search.toLowerCase())) return false
     if (dirFilter !== 'all' && tx.direction !== dirFilter) return false
+    if (ddDateFrom && tx.date.slice(0, 10) < ddDateFrom) return false
+    if (ddDateTo && tx.date.slice(0, 10) > ddDateTo) return false
+    if (ddCc && tx.costCenterId !== ddCc) return false
+    if (ddBu && tx.businessUnitId !== ddBu) return false
+    if (ddLe && tx.legalEntityId !== ddLe) return false
     return true
-  }), [localData, search, dirFilter])
+  }), [localData, search, dirFilter, ddDateFrom, ddDateTo, ddCc, ddBu, ddLe])
 
   const totalNet = filtered.reduce((s, t) => s + t.netAmount, 0)
 
@@ -411,21 +422,24 @@ function DrillDownDialog({
     if (result?.error) setLocalData(prev)
   }
 
-  const hasDims = costCenters.length > 0 || businessUnits.length > 0 || legalEntities.length > 0
+  const hasSecondaryFilters = ddDateFrom || ddDateTo || ddCc || ddBu || ddLe
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent className={cn('flex flex-col', hasDims ? 'max-w-5xl' : 'max-w-2xl', 'max-h-[85vh]')}>
+      <DialogContent className="flex flex-col max-w-5xl max-h-[85vh]">
         <DialogHeader>
           <DialogTitle className="text-sm">
             {state.categoryName}
             <span className="font-normal text-muted-foreground ml-2">
-              {monthLabel(state.month)}
+              {state.dateRange
+                ? `Total — ${monthLabel(state.dateRange.from.slice(0, 7))} a ${monthLabel(state.dateRange.to.slice(0, 7))}`
+                : monthLabel(state.month)
+              }
             </span>
           </DialogTitle>
         </DialogHeader>
 
-        {/* Filtros */}
+        {/* Linha 1: busca + direção */}
         <div className="flex items-center gap-2 shrink-0">
           <input
             type="text"
@@ -452,6 +466,66 @@ function DrillDownDialog({
           </div>
         </div>
 
+        {/* Linha 2: datas + dimensões */}
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">De:</span>
+            <input
+              type="date"
+              value={ddDateFrom}
+              onChange={e => setDdDateFrom(e.target.value)}
+              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">Até:</span>
+            <input
+              type="date"
+              value={ddDateTo}
+              onChange={e => setDdDateTo(e.target.value)}
+              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
+            />
+          </div>
+          {costCenters.length > 0 && (
+            <select
+              value={ddCc}
+              onChange={e => setDdCc(e.target.value)}
+              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
+            >
+              <option value="">Todos os C. Custo</option>
+              {costCenters.map(cc => <option key={cc.id} value={cc.id}>{cc.name}</option>)}
+            </select>
+          )}
+          {businessUnits.length > 0 && (
+            <select
+              value={ddBu}
+              onChange={e => setDdBu(e.target.value)}
+              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
+            >
+              <option value="">Todas as Un. Negócio</option>
+              {businessUnits.map(bu => <option key={bu.id} value={bu.id}>{bu.name}</option>)}
+            </select>
+          )}
+          {legalEntities.length > 0 && (
+            <select
+              value={ddLe}
+              onChange={e => setDdLe(e.target.value)}
+              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
+            >
+              <option value="">Todas as Entidades</option>
+              {legalEntities.map(le => <option key={le.id} value={le.id}>{le.name}</option>)}
+            </select>
+          )}
+          {hasSecondaryFilters && (
+            <button
+              onClick={() => { setDdDateFrom(''); setDdDateTo(''); setDdCc(''); setDdBu(''); setDdLe('') }}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+            >
+              Limpar filtros
+            </button>
+          )}
+        </div>
+
         {loading && localData.length === 0 ? (
           <div className="flex-1 flex items-center justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -463,21 +537,15 @@ function DrillDownDialog({
         ) : (
           <div className="flex flex-col min-h-0 flex-1 gap-3">
             <div className="overflow-auto flex-1 min-h-0">
-              <table className="w-full border-collapse text-xs" style={{ minWidth: hasDims ? 700 : 380 }}>
+              <table className="w-full border-collapse text-xs" style={{ minWidth: 820 }}>
                 <thead className="sticky top-0 bg-background z-10">
                   <tr className="border-b text-muted-foreground">
                     <th className="text-left py-1.5 font-medium pr-3 whitespace-nowrap w-[76px]">Data</th>
                     <th className="text-left py-1.5 font-medium min-w-[140px]">Descrição</th>
                     <th className="text-left py-1.5 font-medium pl-2 w-[160px]">Categoria</th>
-                    {costCenters.length > 0 && (
-                      <th className="text-left py-1.5 font-medium pl-2 w-[120px]">C. Custo</th>
-                    )}
-                    {businessUnits.length > 0 && (
-                      <th className="text-left py-1.5 font-medium pl-2 w-[120px]">Un. Negócio</th>
-                    )}
-                    {legalEntities.length > 0 && (
-                      <th className="text-left py-1.5 font-medium pl-2 w-[120px]">Entidade</th>
-                    )}
+                    <th className="text-left py-1.5 font-medium pl-2 w-[120px]">C. Custo</th>
+                    <th className="text-left py-1.5 font-medium pl-2 w-[120px]">Un. Negócio</th>
+                    <th className="text-left py-1.5 font-medium pl-2 w-[120px]">Entidade</th>
                     <th className="text-right py-1.5 font-medium pl-3 whitespace-nowrap w-[80px]">Valor</th>
                   </tr>
                 </thead>
@@ -496,36 +564,30 @@ function DrillDownDialog({
                           onSelect={id => handleEdit(tx.id, 'categoryId', id)}
                         />
                       </td>
-                      {costCenters.length > 0 && (
-                        <td className="py-1 pl-2">
-                          <DimCellCombobox
-                            value={tx.costCenterName}
-                            options={ccOptions}
-                            placeholder="—"
-                            onSelect={id => handleEdit(tx.id, 'costCenterId', id)}
-                          />
-                        </td>
-                      )}
-                      {businessUnits.length > 0 && (
-                        <td className="py-1 pl-2">
-                          <DimCellCombobox
-                            value={tx.businessUnitName}
-                            options={buOptions}
-                            placeholder="—"
-                            onSelect={id => handleEdit(tx.id, 'businessUnitId', id)}
-                          />
-                        </td>
-                      )}
-                      {legalEntities.length > 0 && (
-                        <td className="py-1 pl-2">
-                          <DimCellCombobox
-                            value={tx.legalEntityName}
-                            options={leOptions}
-                            placeholder="—"
-                            onSelect={id => handleEdit(tx.id, 'legalEntityId', id)}
-                          />
-                        </td>
-                      )}
+                      <td className="py-1 pl-2">
+                        <DimCellCombobox
+                          value={tx.costCenterName}
+                          options={ccOptions}
+                          placeholder="—"
+                          onSelect={id => handleEdit(tx.id, 'costCenterId', id)}
+                        />
+                      </td>
+                      <td className="py-1 pl-2">
+                        <DimCellCombobox
+                          value={tx.businessUnitName}
+                          options={buOptions}
+                          placeholder="—"
+                          onSelect={id => handleEdit(tx.id, 'businessUnitId', id)}
+                        />
+                      </td>
+                      <td className="py-1 pl-2">
+                        <DimCellCombobox
+                          value={tx.legalEntityName}
+                          options={leOptions}
+                          placeholder="—"
+                          onSelect={id => handleEdit(tx.id, 'legalEntityId', id)}
+                        />
+                      </td>
                       <td className={cn(
                         'py-1 pl-3 text-right tabular-nums font-medium whitespace-nowrap',
                         tx.netAmount > 0 ? 'text-emerald-700' : 'text-rose-600',
@@ -630,17 +692,32 @@ export function DreClient({
     })
   }
 
-  function openDrillDown(categoryId: string, categoryName: string, month: string) {
-    setDrillDown({ categoryId, categoryName, month })
+  const currentFrom = useMemo(() => {
+    const [y1, m1] = fromMonth.split('-').map(Number)
+    return `${y1}-${String(m1).padStart(2, '0')}-01`
+  }, [fromMonth])
+
+  const currentTo = useMemo(() => {
+    const [y2, m2] = toMonth.split('-').map(Number)
+    const lastDay = new Date(y2, m2, 0).getDate()
+    return `${y2}-${String(m2).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  }, [toMonth])
+
+  function openDrillDown(categoryId: string, categoryName: string, month: string, dateRange?: { from: string; to: string }) {
+    setDrillDown({ categoryId, categoryName, month, dateRange })
     setDrillDownData(null)
     startDrillTransition(async () => {
       const result = await getDreDrillDown(categoryId, month, {
         costCenterIds: selCc.length ? selCc : undefined,
         businessUnitIds: selBu.length ? selBu : undefined,
         legalEntityIds: selLe.length ? selLe : undefined,
-      })
+      }, dateRange)
       setDrillDownData(result.transactions)
     })
+  }
+
+  function openDrillDownTotal(categoryId: string, categoryName: string) {
+    openDrillDown(categoryId, categoryName, '', { from: currentFrom, to: currentTo })
   }
 
   function closeDrillDown() {
@@ -796,6 +873,7 @@ export function DreClient({
                   collapsedParents={collapsedParents}
                   toggleParent={toggleParent}
                   openDrillDown={openDrillDown}
+                  openDrillDownTotal={openDrillDownTotal}
                   nCols={nCols}
                 />
               ))}
@@ -814,6 +892,7 @@ export function DreClient({
                 collapsedParents={collapsedParents}
                 toggleParent={toggleParent}
                 openDrillDown={openDrillDown}
+                openDrillDownTotal={openDrillDownTotal}
                 nCols={nCols}
               />
             </tbody>
@@ -848,10 +927,11 @@ interface BlockProps {
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
+  openDrillDownTotal: (categoryId: string, categoryName: string) => void
   nCols: number
 }
 
-function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents, toggleParent, openDrillDown, nCols }: BlockProps) {
+function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: BlockProps) {
   const blocks = useMemo(() => buildBlocks(rows, section.types), [rows, section.types])
 
   const subtotalTotal = months.reduce((s, m) => {
@@ -870,6 +950,7 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents
           collapsedParents={collapsedParents}
           toggleParent={toggleParent}
           openDrillDown={openDrillDown}
+          openDrillDownTotal={openDrillDownTotal}
           nCols={nCols}
         />
       ))}
@@ -903,10 +984,11 @@ interface TypeBlockProps {
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
+  openDrillDownTotal: (categoryId: string, categoryName: string) => void
   nCols: number
 }
 
-function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDown, nCols }: TypeBlockProps) {
+function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: TypeBlockProps) {
   return (
     <>
       <tr className="bg-slate-100/70 border-t border-slate-200">
@@ -923,6 +1005,7 @@ function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDow
           isCollapsed={collapsedParents.has(parent.parentId)}
           onToggle={() => toggleParent(parent.parentId)}
           openDrillDown={openDrillDown}
+          openDrillDownTotal={openDrillDownTotal}
         />
       ))}
     </>
@@ -937,9 +1020,10 @@ interface ParentBlockProps {
   isCollapsed: boolean
   onToggle: () => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
+  openDrillDownTotal: (categoryId: string, categoryName: string) => void
 }
 
-function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown }: ParentBlockProps) {
+function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown, openDrillDownTotal }: ParentBlockProps) {
   const parentByMonth = useMemo(() => {
     const result: Record<string, number> = {}
     months.forEach(m => {
@@ -1030,7 +1114,15 @@ function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown }: P
                 />
               )
             })}
-            <td className="px-3 py-[3px] text-right tabular-nums text-xs border-l border-slate-100 text-muted-foreground/40">
+            <td
+              className={cn(
+                'px-3 py-[3px] text-right tabular-nums text-xs border-l border-slate-100',
+                childTotal !== 0
+                  ? 'text-muted-foreground/60 cursor-pointer hover:text-foreground hover:underline underline-offset-2'
+                  : 'text-muted-foreground/40',
+              )}
+              onClick={childTotal !== 0 ? () => openDrillDownTotal(child.categoryId, child.categoryName) : undefined}
+            >
               {childTotal === 0 ? '—' : fmtNum(childTotal)}
             </td>
             <td className="px-3 py-[3px] text-right tabular-nums text-xs text-muted-foreground/30">
