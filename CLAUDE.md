@@ -163,15 +163,47 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0, 5.A, fixes pós-5.A, 5.B e 5.D concluídas; 5.C entregue como parte dos fixes pós-5.A).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D e 5.E concluídas; 5.C entregue como parte dos fixes pós-5.A).
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **5.E** — Expert drawer: primeira conversa real com Claude Sonnet (chat simples com contexto financeiro da org)
 - **5.F** — Fluxo de Caixa Projetado em `/fluxo` (projeção 30/60/90 dias baseada em recorrências detectadas)
+- **5.G** — Relatório de fechamento mensal gerado pelo expert (PDF/texto)
+
+---
+
+### ✅ Sessão 5.E — Expert drawer com chat real *(concluída)*
+
+**O que mudou:**
+
+- **`src/server/expert.ts`** (criado) — 3 server actions:
+  - `getOrCreateConversation()` — busca conversa mais recente não arquivada da org+usuário; cria se não existir. Retorna `{ conversationId, history: ChatMessage[] }` (últimas 50 mensagens).
+  - `sendExpertMessage(conversationId, userContent)` — persiste mensagem do usuário, carrega histórico (40 msgs), constrói system prompt com KPIs do mês (receita, despesas, lucro, saldo + variações percentuais vs. mês anterior) e nome da org, chama `claude-sonnet-4-6`, persiste resposta com `tokensInput`/`tokensOutput`, atualiza `conversations.updatedAt`. Retorna string da resposta.
+  - `startNewConversation()` — insere novo registro em `conversations`, retorna `{ conversationId }`.
+  - Multi-tenancy garantida: `sendExpertMessage` valida que `conversationId` pertence à org do usuário antes de processar.
+
+- **`src/components/expert/expert-chat.tsx`** (criado) — client component:
+  - Estado: `conversationId`, `msgs` (array local), `input`, `initializing`, `sending`.
+  - On mount: chama `getOrCreateConversation()`, popula histórico.
+  - `handleSend`: adiciona mensagem do usuário otimisticamente → chama `sendExpertMessage` → adiciona resposta. Erro de rede exibe mensagem de fallback.
+  - Bubble "expert está analisando..." animada enquanto `sending = true`.
+  - Auto-scroll para o fim a cada nova mensagem.
+  - Botão "Nova conversa" (aparece quando há histórico) chama `startNewConversation()` e limpa o estado local.
+  - Enter envia, Shift+Enter nova linha.
+
+- **`src/components/expert/expert-trigger.tsx`** — placeholder substituído por `<ExpertChat />`. Import de `LoadingState` removido.
+
+**System prompt inclui:**
+- Nome da org, tom e proibições (AI_VOICE.md)
+- Receita, Despesas, Lucro Líquido e Saldo em Caixa do mês com variação percentual vs. mês anterior
+- Instrução para citar a origem dos dados e apontar tela relevante quando dados faltam
+
+**Modelo:** `claude-sonnet-4-6`. Custo interno (cliente não vê tokens).
+
+TypeScript: 0 erros.
 
 ---
 

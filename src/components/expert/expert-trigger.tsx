@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { MessageCircle, X } from 'lucide-react'
-import { LoadingState } from '@/components/states/loading-state'
+import { ExpertChat } from './expert-chat'
 
 interface ExpertTriggerProps {
   collapsed: boolean
@@ -47,12 +47,7 @@ export function ExpertTrigger({ collapsed }: ExpertTriggerProps) {
             <X size={18} />
           </button>
         </div>
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-          <LoadingState variant="thinking" />
-          <p className="text-xs text-muted-foreground">
-            Chat com o expert disponível na Fase 5.
-          </p>
-        </div>
+        <ExpertChat />
       </div>
     </>
   )
