@@ -109,6 +109,7 @@ interface CategoryManagerProps {
   onToggleActive: (id: string, isActive: boolean) => Promise<{ success?: boolean; error?: string }>
   onDelete: (id: string) => Promise<{ success?: boolean; error?: string }>
   onMove: (filhoId: string, newParentId: string) => Promise<{ success?: boolean; error?: string }>
+  onChangeType: (parentId: string, newType: string) => Promise<{ success?: boolean; error?: string; updated?: number }>
 }
 
 type TreeNode = CategoryItem & { children: TreeNode[] }
@@ -210,6 +211,7 @@ export function CategoryManager({
   onToggleActive,
   onDelete,
   onMove,
+  onChangeType,
 }: CategoryManagerProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -223,6 +225,7 @@ export function CategoryManager({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CategoryItem | null>(null)
+  const [changeTypeTarget, setChangeTypeTarget] = useState<CategoryItem | null>(null)
 
   const [typeFilter, setTypeFilter] = useState<string[]>([])
   const [paiFilter, setPaiFilter] = useState<string[]>([])
@@ -327,6 +330,21 @@ export function CategoryManager({
     })
   }
 
+  function handleChangeTypeConfirm(newType: string) {
+    if (!changeTypeTarget) return
+    startTransition(async () => {
+      const result = await onChangeType(changeTypeTarget.id, newType)
+      if (result.error) {
+        toast.error(result.error)
+      } else {
+        const n = result.updated ?? 0
+        toast.success(`Tipo alterado.${n > 0 ? ` ${n} filho${n !== 1 ? 's' : ''} atualizado${n !== 1 ? 's' : ''}.` : ''}`)
+        setChangeTypeTarget(null)
+        router.refresh()
+      }
+    })
+  }
+
   function handleDragStart({ active }: DragStartEvent) {
     setActiveDragId(active.id as string)
   }
@@ -368,6 +386,7 @@ export function CategoryManager({
     onUpdateRequest: handleUpdate,
     onToggleActiveRequest: handleToggleActive,
     onDeleteRequest: setDeleteTarget,
+    onChangeTypeRequest: setChangeTypeTarget,
   }
 
   return (
@@ -575,6 +594,16 @@ export function CategoryManager({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {changeTypeTarget && (
+        <ChangeTypeDialog
+          pai={changeTypeTarget}
+          childrenCount={localCategories.filter(c => c.parentId === changeTypeTarget.id).length}
+          isPending={isPending}
+          onConfirm={handleChangeTypeConfirm}
+          onClose={() => setChangeTypeTarget(null)}
+        />
+      )}
     </div>
   )
 }
@@ -591,6 +620,7 @@ interface SectionProps {
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
   onDeleteRequest: (item: CategoryItem) => void
+  onChangeTypeRequest: (item: CategoryItem) => void
 }
 
 function PaiSection({
@@ -603,13 +633,14 @@ function PaiSection({
   onUpdateRequest,
   onToggleActiveRequest,
   onDeleteRequest,
+  onChangeTypeRequest,
 }: SectionProps) {
   const { setNodeRef, isOver } = useDroppable({ id: node.id })
   // Don't highlight when dragging from this same Pai
   const isDragFromSelf = activeDragId !== null && node.children.some(c => c.id === activeDragId)
   const showDropHighlight = isOver && !isDragFromSelf
 
-  const rowProps = { isPending, onEditRequest, onCancelEdit, onUpdateRequest, onToggleActiveRequest, onDeleteRequest }
+  const rowProps = { isPending, onEditRequest, onCancelEdit, onUpdateRequest, onToggleActiveRequest, onDeleteRequest, onChangeTypeRequest }
 
   return (
     <div
@@ -639,6 +670,7 @@ interface PaiRowProps {
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
   onDeleteRequest: (item: CategoryItem) => void
+  onChangeTypeRequest: (item: CategoryItem) => void
 }
 
 function PaiRow({
@@ -651,6 +683,7 @@ function PaiRow({
   onUpdateRequest,
   onToggleActiveRequest,
   onDeleteRequest,
+  onChangeTypeRequest,
 }: PaiRowProps) {
   const isEditing = editingId === node.id
 
@@ -688,6 +721,13 @@ function PaiRow({
       {!node.isActive && (
         <Badge variant="secondary" className="text-xs shrink-0">Arquivada</Badge>
       )}
+      <Button
+        size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground gap-1"
+        onClick={() => onChangeTypeRequest(node)}
+        title="Alterar tipo desta Natureza Pai e seus filhos"
+      >
+        {TYPE_LABELS[node.type] ?? node.type}
+      </Button>
       <RowActions
         node={node}
         isPending={isPending}
@@ -777,6 +817,72 @@ function DraggableFilhoRow({
         onDeleteRequest={onDeleteRequest}
       />
     </div>
+  )
+}
+
+// ─── Dialog alterar tipo da Natureza Pai ─────────────────────────────────────
+
+function ChangeTypeDialog({
+  pai,
+  childrenCount,
+  isPending,
+  onConfirm,
+  onClose,
+}: {
+  pai: CategoryItem
+  childrenCount: number
+  isPending: boolean
+  onConfirm: (newType: string) => void
+  onClose: () => void
+}) {
+  const [newType, setNewType] = useState(pai.type)
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Alterar tipo da Natureza Pai</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 mt-1">
+          <p className="text-sm text-muted-foreground">
+            <strong className="text-foreground">{pai.code} — {pai.name}</strong>
+          </p>
+          {childrenCount > 0 && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              {childrenCount} natureza{childrenCount !== 1 ? 's' : ''} filho{childrenCount !== 1 ? 's' : ''} também ser{childrenCount !== 1 ? 'ão' : 'á'} atualizada{childrenCount !== 1 ? 's' : ''}.
+            </p>
+          )}
+          <div>
+            <Label>Novo tipo</Label>
+            <Select value={newType} onValueChange={setNewType}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">DRE</div>
+                {DRE_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
+                ))}
+                <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-1">Balanço Patrimonial</div>
+                {BP_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>{TYPE_LABELS[t]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button
+              type="button"
+              disabled={isPending || newType === pai.type}
+              onClick={() => onConfirm(newType)}
+            >
+              Confirmar
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -11,7 +11,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "lure.expert",
+  title: {
+    template: '%s | lure.expert',
+    default: 'lure.expert',
+  },
   description: "Seu time financeiro virtual",
 };
 

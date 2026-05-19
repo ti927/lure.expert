@@ -25,29 +25,32 @@ async function getAuthContext() {
 
 const PAGE_SIZE = 25
 
-// Parseia filtros multi-select: "id1,id2,__none__" → { ids, includeNone }
-function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean } {
-  if (!param) return { ids: [], includeNone: false }
+// Parseia filtros multi-select: "id1,id2,__none__,__classified__" → { ids, includeNone, includeClassified }
+function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean; includeClassified: boolean } {
+  if (!param) return { ids: [], includeNone: false, includeClassified: false }
   const parts = param.split(',').map(p => p.trim()).filter(Boolean)
   return {
     includeNone: parts.includes('__none__'),
-    ids: parts.filter(p => p !== '__none__'),
+    includeClassified: parts.includes('__classified__'),
+    ids: parts.filter(p => p !== '__none__' && p !== '__classified__'),
   }
 }
 
 // Constrói condição SQL para filtro multi-select numa coluna nullable
 function buildMultiFilterCondition(
   column: Parameters<typeof isNull>[0],
-  filter: { ids: string[]; includeNone: boolean },
+  filter: { ids: string[]; includeNone: boolean; includeClassified: boolean },
 ): SQL | null {
-  const { ids, includeNone } = filter
-  if (!includeNone && ids.length === 0) return null
+  const { ids, includeNone, includeClassified } = filter
+  if (!includeNone && !includeClassified && ids.length === 0) return null
 
-  if (includeNone && ids.length > 0) {
-    return or(isNull(column), inArray(column, ids)) as SQL
-  }
-  if (includeNone) return isNull(column)
-  return inArray(column, ids) as SQL
+  const clauses: (SQL | undefined)[] = []
+  if (includeNone) clauses.push(isNull(column) as SQL)
+  if (includeClassified) clauses.push(isNotNull(column) as SQL)
+  if (ids.length > 0) clauses.push(inArray(column, ids) as SQL)
+
+  if (clauses.length === 1) return clauses[0]!
+  return or(...clauses as SQL[]) as SQL
 }
 
 interface GetTransactionsParams {

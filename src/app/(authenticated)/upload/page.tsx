@@ -1,6 +1,9 @@
 export const dynamic = 'force-dynamic'
 
+import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
+
+export const metadata: Metadata = { title: 'Importar' }
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, documents, transactionsStaging } from '@/db/schema'

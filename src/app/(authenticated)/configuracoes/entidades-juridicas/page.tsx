@@ -1,7 +1,10 @@
+import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, legalEntities } from '@/db/schema'
+
+export const metadata: Metadata = { title: 'Entidades Jurídicas' }
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DimensionManager } from '@/components/settings/dimension-manager'

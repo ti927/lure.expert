@@ -142,6 +142,7 @@ function MultiSelectFilter({ label, value, options, onUpdate, className }: Multi
     if (selected.size === 1) {
       const id = Array.from(selected)[0]
       if (id === '__none__') return 'Não classificado'
+      if (id === '__classified__') return 'Classificado'
       return options.find(o => o.id === id)?.label ?? label
     }
     return `${selected.size} selecionados`
@@ -180,6 +181,19 @@ function MultiSelectFilter({ label, value, options, onUpdate, className }: Multi
                   {selected.has('__none__') && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
                 </div>
                 Não classificado
+              </CommandItem>
+              <CommandItem
+                value="__classified__"
+                onSelect={() => toggle('__classified__')}
+                className="text-muted-foreground"
+              >
+                <div className={cn(
+                  'mr-2 h-3.5 w-3.5 rounded-sm border flex items-center justify-center shrink-0',
+                  selected.has('__classified__') ? 'bg-primary border-primary' : 'border-muted-foreground/40',
+                )}>
+                  {selected.has('__classified__') && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                </div>
+                Classificado
               </CommandItem>
               <CommandSeparator />
               {options.map(opt => (
@@ -244,6 +258,7 @@ function CategoryMultiSelectFilter({ value, categories, onUpdate }: CategoryMult
     if (selected.size === 1) {
       const id = Array.from(selected)[0]
       if (id === '__none__') return 'Não classificado'
+      if (id === '__classified__') return 'Classificado'
       const cat = categories.find(c => c.id === id)
       return cat ? `${cat.code} – ${cat.name}` : 'Categoria'
     }
@@ -291,6 +306,19 @@ function CategoryMultiSelectFilter({ value, categories, onUpdate }: CategoryMult
                   {selected.has('__none__') && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
                 </div>
                 Não classificado
+              </CommandItem>
+              <CommandItem
+                value="__classified__"
+                onSelect={() => toggle('__classified__')}
+                className="text-muted-foreground"
+              >
+                <div className={cn(
+                  'mr-2 h-3.5 w-3.5 rounded-sm border flex items-center justify-center shrink-0',
+                  selected.has('__classified__') ? 'bg-primary border-primary' : 'border-muted-foreground/40',
+                )}>
+                  {selected.has('__classified__') && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                </div>
+                Classificado
               </CommandItem>
               <CommandSeparator />
               {Object.entries(byType).map(([type, cats]) => (
@@ -731,7 +759,7 @@ function BatchCombobox({ value, options, placeholder, onValueChange, grouped }: 
           <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-40" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-0" align="start">
+      <PopoverContent className="w-64 p-0" align="start" onWheel={(e) => e.stopPropagation()}>
         <Command>
           <CommandInput placeholder="Buscar..." />
           <CommandList>
@@ -820,6 +848,28 @@ function SortHeader({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+const LS_FILTERS_KEY = 'lure:transacoes:filters'
+
+const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'documentId', 'sort'] as const
+
+function saveFiltersToStorage(sp: SearchParams) {
+  try {
+    const saved: Record<string, string> = {}
+    for (const k of FILTER_KEYS) {
+      if (sp[k]) saved[k] = sp[k]!
+    }
+    localStorage.setItem(LS_FILTERS_KEY, JSON.stringify(saved))
+  } catch { /* ignora se storage indisponível */ }
+}
+
+function loadFiltersFromStorage(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(LS_FILTERS_KEY)
+    if (!raw) return {}
+    return JSON.parse(raw) as Record<string, string>
+  } catch { return {} }
+}
+
 export default function TransacoesClient({ data, options, documents, searchParams }: Props) {
   const router = useRouter()
   const [localRows, setLocalRows] = useState<Transaction[]>(data.rows)
@@ -837,6 +887,21 @@ export default function TransacoesClient({ data, options, documents, searchParam
     setLocalRows(data.rows)
     setSelectedIds(new Set())
   }, [data.rows])
+
+  // Restaura filtros do localStorage quando a URL não traz filtros (acesso limpo)
+  useEffect(() => {
+    const hasUrlFilters = !!(searchParams.q || searchParams.from || searchParams.to ||
+      searchParams.direction || searchParams.category || searchParams.costCenter ||
+      searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId || searchParams.sort)
+    if (hasUrlFilters) return
+    const saved = loadFiltersFromStorage()
+    if (Object.keys(saved).length === 0) return
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(saved)) params.set(k, v)
+    router.replace(`/transacoes?${params.toString()}`)
+  // Só na montagem inicial
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const hasFilters = !!(searchParams.q || searchParams.from || searchParams.to ||
     searchParams.direction || searchParams.category || searchParams.costCenter ||
@@ -866,6 +931,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
     for (const [k, v] of Object.entries(current)) {
       if (v) params.set(k, v)
     }
+    saveFiltersToStorage(current as SearchParams)
     router.push(`/transacoes?${params.toString()}`)
   }
 
@@ -993,7 +1059,10 @@ export default function TransacoesClient({ data, options, documents, searchParam
         options={options}
         documents={documents}
         onUpdate={updateFilters}
-        onClear={() => router.push('/transacoes')}
+        onClear={() => {
+          try { localStorage.removeItem(LS_FILTERS_KEY) } catch { /* */ }
+          router.push('/transacoes')
+        }}
         hasFilters={hasFilters}
       />
 

@@ -1,4 +1,7 @@
+import type { Metadata } from 'next'
 import { getFluxoData } from '@/server/fluxo'
+
+export const metadata: Metadata = { title: 'Fluxo de Caixa' }
 import { FluxoClient } from './fluxo-client'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'

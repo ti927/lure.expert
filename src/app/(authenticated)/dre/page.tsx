@@ -1,4 +1,7 @@
+import type { Metadata } from 'next'
 import { getDreData } from '@/server/dre'
+
+export const metadata: Metadata = { title: 'DRE' }
 import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories } from '@/server/dimensions'
 import { DreClient } from './dre-client'
 

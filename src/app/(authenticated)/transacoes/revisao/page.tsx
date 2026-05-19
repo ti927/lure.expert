@@ -1,7 +1,9 @@
+import type { Metadata } from 'next'
 import { getReviewQueue } from '@/server/review'
 import RevisaoClient from './revisao-client'
 
 export const dynamic = 'force-dynamic'
+export const metadata: Metadata = { title: 'Revisão de Sugestões' }
 
 interface Props {
   searchParams: {

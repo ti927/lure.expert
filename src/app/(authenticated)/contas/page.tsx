@@ -1,4 +1,7 @@
+import type { Metadata } from 'next'
 import { ContasClient } from './contas-client'
+
+export const metadata: Metadata = { title: 'Contas' }
 import { getOrgConnections, getPendingTransactionsBySource } from '@/server/connections'
 import { getReconciliationCount } from '@/server/reconciliation'
 

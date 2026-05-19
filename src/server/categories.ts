@@ -220,3 +220,47 @@ export async function deleteCategory(id: string) {
   revalidatePath('/configuracoes/categorias')
   return { success: true }
 }
+
+export async function changeParentType(parentId: string, newType: string) {
+  const { organizationId } = await getAuthContext()
+
+  if (!CATEGORY_TYPES.includes(newType as typeof CATEGORY_TYPES[number]))
+    return { error: 'Tipo inválido.' }
+
+  const [pai] = await db.select()
+    .from(categories)
+    .where(and(eq(categories.id, parentId), eq(categories.organizationId, organizationId)))
+    .limit(1)
+  if (!pai) return { error: 'Categoria não encontrada.' }
+  if (pai.parentId !== null) return { error: 'Apenas Naturezas Pai podem ter o tipo alterado aqui.' }
+  if (pai.type === newType) return { success: true, updated: 0 }
+
+  const children = await db.select({ id: categories.id })
+    .from(categories)
+    .where(and(eq(categories.parentId, parentId), eq(categories.organizationId, organizationId)))
+
+  await db.update(categories)
+    .set({ type: newType as typeof CATEGORY_TYPES[number], updatedAt: new Date() })
+    .where(and(eq(categories.id, parentId), eq(categories.organizationId, organizationId)))
+
+  if (children.length > 0) {
+    await db.update(categories)
+      .set({ type: newType as typeof CATEGORY_TYPES[number], updatedAt: new Date() })
+      .where(and(
+        eq(categories.parentId, parentId),
+        eq(categories.organizationId, organizationId),
+      ))
+  }
+
+  revalidatePath('/configuracoes/categorias')
+  return { success: true, updated: children.length }
+}
+
+export async function getChildrenCount(parentId: string) {
+  const { organizationId } = await getAuthContext()
+  const [{ cnt }] = await db
+    .select({ cnt: count() })
+    .from(categories)
+    .where(and(eq(categories.parentId, parentId), eq(categories.organizationId, organizationId)))
+  return cnt
+}

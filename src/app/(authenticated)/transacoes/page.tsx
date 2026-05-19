@@ -1,4 +1,7 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
+
+export const metadata: Metadata = { title: 'Transações' }
 import { ArrowLeftRight, Bot } from 'lucide-react'
 import { getTransactions } from '@/server/transactions'
 import { getCategories } from '@/server/categories'

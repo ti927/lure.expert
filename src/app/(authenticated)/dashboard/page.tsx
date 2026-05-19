@@ -1,4 +1,7 @@
+import type { Metadata } from 'next'
 import { createClient } from "@/lib/supabase/server";
+
+export const metadata: Metadata = { title: 'Visão Geral' }
 import { PartialDataBanner } from "@/components/states/partial-data-banner";
 import { Button } from "@/components/ui/button";
 import { getDashboardKPIs, getCashFlowChart, getFinancialIndicators } from "@/server/dashboard";

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,7 +11,10 @@ import {
   toggleCategoryActive,
   deleteCategory,
   moveCategory,
+  changeParentType,
 } from '@/server/categories'
+
+export const metadata: Metadata = { title: 'Plano de Contas' }
 
 export default async function CategoriasPage() {
   const supabase = createClient()
@@ -49,6 +53,7 @@ export default async function CategoriasPage() {
             onToggleActive={toggleCategoryActive}
             onDelete={deleteCategory}
             onMove={moveCategory}
+            onChangeType={changeParentType}
           />
         </CardContent>
       </Card>
