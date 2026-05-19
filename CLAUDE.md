@@ -163,16 +163,48 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0 e 5.A concluídas, fixes pós-5.A aplicados).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0, 5.A, fixes pós-5.A, 5.B e 5.D concluídas; 5.C entregue como parte dos fixes pós-5.A).
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **5.B** — Dashboard `/dashboard` com KPI cards + gráfico de fluxo de caixa 90 dias
-- **5.C** — Drill-down no DRE: clicar num valor abre transações por trás (server action `getDreDrillDown` já existe — e já aprimorado com dateRange)
-- **5.D** — Indicadores financeiros (margem EBITDA, liquidez, cobertura de dívida)
+- **5.E** — Expert drawer: primeira conversa real com Claude Sonnet (chat simples com contexto financeiro da org)
+- **5.F** — Fluxo de Caixa Projetado em `/fluxo` (projeção 30/60/90 dias baseada em recorrências detectadas)
+
+---
+
+### ✅ Sessão 5.D — Indicadores Financeiros no Dashboard *(concluída)*
+
+**O que mudou:**
+
+- **`src/server/dashboard.ts`** — `FinancialIndicators` type + `getFinancialIndicators()` server action:
+  - Duas queries paralelas para o mês atual: (1) DRE — Receita Bruta, EBITDA (receita + deduções + CPV + SGA aditivos), serviço da dívida (outflows de `emprestimos_amortizacoes`); (2) BP — `ativo_circulante` e `passivo_circulante` acumulados (sem filtro de data — posição de balanço).
+  - Três indicadores calculados: `margemEbitda = ebitda / receitaBruta × 100`, `liquidezCorrente = ativoCirc / passivoCirc`, `coberturaServicoDivida = ebitda / servicoDivida`. Retornam `null` quando denominador é zero.
+
+- **`src/app/(authenticated)/dashboard/dashboard-client.tsx`** — Card "Indicadores Financeiros — mês atual" adicionado após o gráfico de fluxo de caixa:
+  - Três linhas: Margem EBITDA (%), Liquidez Corrente (x), Cobertura do Serviço da Dívida (x).
+  - Semáforo por indicador: verde (≥ threshold bom), âmbar (≥ threshold aviso), vermelho (abaixo). Thresholds: EBITDA ≥ 15%/5%; Liquidez/DCSR ≥ 1,5x/1,0x.
+  - `null` exibe "—" em cinza neutro, com hint explicando a ausência (ex: "Sem amortizações no mês", "Requer lançamentos de Balanço Patrimonial").
+  - Quando todos os três são `null`, exibe mensagem sugerindo classificação de transações em vez de card vazio.
+
+- **`src/app/(authenticated)/dashboard/page.tsx`** — `getFinancialIndicators()` adicionado ao `Promise.all` e passado como prop `indicators` ao `DashboardClient`.
+
+**Nota sobre Liquidez Corrente:** depende de transações categorizadas como `ativo_circulante`/`passivo_circulante` (tipos BP). A maioria das PMEs em early adoption só terá dados DRE — o indicador ficará `null` até o cliente categorizar movimentos de balanço.
+
+TypeScript: 0 erros.
+
+---
+
+### ✅ Sessão 5.B — Dashboard com KPI cards e gráfico de fluxo de caixa *(concluída)*
+
+**O que mudou:**
+
+- **`src/server/dashboard.ts`** (criado) — server actions: `getDashboardKPIs()` (3 queries paralelas: mês atual, mês anterior, saldo acumulado) e `getCashFlowChart()` (90 dias diários). Tipos exportados: `KPIValue`, `DashboardKPIs`, `CashFlowDay`.
+- **`src/app/(authenticated)/dashboard/dashboard-client.tsx`** (criado) — grid 4 KPI cards + gráfico de barras semanal (Recharts). `groupByWeek()` agrega dados diários esparsos em semanas ISO (seg–dom). Cores: `#059669` entradas, `#e11d48` saídas. Delta de despesas negado para que aumento de custo apareça em vermelho.
+- **`src/app/(authenticated)/dashboard/page.tsx`** (reescrito) — `Promise.all` paralelo, label de mês localizado, banner "sem dados" condicional.
+- **`recharts@3.8.1`** instalado.
 
 ---
 

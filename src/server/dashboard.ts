@@ -114,6 +114,75 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
   }
 }
 
+export type FinancialIndicators = {
+  margemEbitda: number | null
+  liquidezCorrente: number | null
+  coberturaServicoDivida: number | null
+}
+
+export async function getFinancialIndicators(): Promise<FinancialIndicators> {
+  const { organizationId } = await getAuthContext()
+
+  const now     = new Date()
+  const curFrom = format(startOfMonth(now), 'yyyy-MM-dd')
+  const curTo   = format(endOfMonth(now),   'yyyy-MM-dd')
+
+  const dreTypes = sql.raw(
+    `'receita_operacional','deducoes_tributarias','deducoes_operacionais','cpv','sga'`
+  )
+
+  type DreRow = { receita_bruta: string; ebitda: string; servico_divida: string }
+  type BpRow  = { ativo_circ: string; passivo_circ: string }
+
+  const [dreRows, bpRows] = await Promise.all([
+    db.execute<DreRow>(sql`
+      SELECT
+        COALESCE(SUM(CASE WHEN c.type = 'receita_operacional'
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS receita_bruta,
+        COALESCE(SUM(CASE WHEN c.type IN (${dreTypes})
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS ebitda,
+        COALESCE(SUM(CASE WHEN c.type = 'emprestimos_amortizacoes' AND t.direction = 'outflow'
+          THEN t.amount::numeric ELSE 0 END), 0)::text AS servico_divida
+      FROM transactions t
+      JOIN categories c ON t.category_id = c.id
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+        AND t.date::date >= ${curFrom}::date
+        AND t.date::date <= ${curTo}::date
+    `),
+    db.execute<BpRow>(sql`
+      SELECT
+        COALESCE(SUM(CASE WHEN c.type = 'ativo_circulante'
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS ativo_circ,
+        COALESCE(SUM(CASE WHEN c.type = 'passivo_circulante'
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS passivo_circ
+      FROM transactions t
+      JOIN categories c ON t.category_id = c.id
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+    `),
+  ])
+
+  const dre = dreRows[0]  ?? { receita_bruta: '0', ebitda: '0', servico_divida: '0' }
+  const bp  = bpRows[0]   ?? { ativo_circ: '0', passivo_circ: '0' }
+
+  const receitaBruta  = Number(dre.receita_bruta)
+  const ebitda        = Number(dre.ebitda)
+  const servicoDivida = Number(dre.servico_divida)
+  const ativoCirc     = Number(bp.ativo_circ)
+  const passivoCirc   = Number(bp.passivo_circ)
+
+  return {
+    margemEbitda:           receitaBruta > 0  ? (ebitda / receitaBruta) * 100 : null,
+    liquidezCorrente:       passivoCirc  > 0  ? ativoCirc / passivoCirc       : null,
+    coberturaServicoDivida: servicoDivida > 0 ? ebitda / servicoDivida        : null,
+  }
+}
+
 export async function getCashFlowChart(): Promise<CashFlowDay[]> {
   const { organizationId } = await getAuthContext()
 

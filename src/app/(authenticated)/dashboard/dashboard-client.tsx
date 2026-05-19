@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import { KPICard } from '@/components/financial/kpi-card'
 import { EmptyState } from '@/components/states/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { DashboardKPIs, CashFlowDay } from '@/server/dashboard'
+import type { DashboardKPIs, CashFlowDay, FinancialIndicators } from '@/server/dashboard'
 import { format, parseISO, startOfWeek } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import {
@@ -17,7 +17,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { BarChart2 } from 'lucide-react'
+import { BarChart2, TrendingUp, Droplets, ShieldCheck } from 'lucide-react'
 
 type WeekData = { label: string; inflow: number; outflow: number }
 
@@ -83,14 +83,71 @@ function legendFormatter(value: string): string {
   return value === 'inflow' ? 'Entradas' : 'Saídas'
 }
 
+type IndicatorStatus = 'good' | 'warn' | 'bad' | 'neutral'
+
+function indicatorStatus(value: number | null, good: number, warn: number): IndicatorStatus {
+  if (value === null) return 'neutral'
+  if (value >= good) return 'good'
+  if (value >= warn) return 'warn'
+  return 'bad'
+}
+
+const statusColor: Record<IndicatorStatus, string> = {
+  good:    'bg-emerald-500',
+  warn:    'bg-amber-500',
+  bad:     'bg-rose-600',
+  neutral: 'bg-muted-foreground/40',
+}
+
+const statusText: Record<IndicatorStatus, string> = {
+  good:    'text-emerald-700 dark:text-emerald-400',
+  warn:    'text-amber-600 dark:text-amber-400',
+  bad:     'text-rose-600',
+  neutral: 'text-muted-foreground',
+}
+
+interface IndicatorItemProps {
+  icon: React.ReactNode
+  label: string
+  value: number | null
+  format: (v: number) => string
+  status: IndicatorStatus
+  hint: string
+}
+
+function IndicatorItem({ icon, label, value, format: fmt, status, hint }: IndicatorItemProps) {
+  return (
+    <div className="flex items-start gap-3 py-3">
+      <div className="mt-0.5 text-muted-foreground">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-muted-foreground truncate">{label}</p>
+        <p className={`text-lg font-semibold tabular-nums leading-tight ${statusText[status]}`}>
+          {value !== null ? fmt(value) : '—'}
+        </p>
+        <p className="text-xs text-muted-foreground/70 mt-0.5">{hint}</p>
+      </div>
+      <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${statusColor[status]}`} />
+    </div>
+  )
+}
+
 interface DashboardClientProps {
   kpis: DashboardKPIs
   cashFlow: CashFlowDay[]
+  indicators: FinancialIndicators
 }
 
-export function DashboardClient({ kpis, cashFlow }: DashboardClientProps) {
+export function DashboardClient({ kpis, cashFlow, indicators }: DashboardClientProps) {
   const weeklyData  = useMemo(() => groupByWeek(cashFlow), [cashFlow])
   const hasChart    = cashFlow.length > 0
+
+  const ebitdaStatus   = indicatorStatus(indicators.margemEbitda,           15, 5)
+  const liquidezStatus = indicatorStatus(indicators.liquidezCorrente,        1.5, 1.0)
+  const dcsrStatus     = indicatorStatus(indicators.coberturaServicoDivida,  1.5, 1.0)
+
+  const allNull = indicators.margemEbitda === null
+    && indicators.liquidezCorrente === null
+    && indicators.coberturaServicoDivida === null
 
   return (
     <div className="space-y-6">
@@ -160,6 +217,46 @@ export function DashboardClient({ kpis, cashFlow }: DashboardClientProps) {
                 <Bar dataKey="outflow" name="outflow" fill="#e11d48" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base font-semibold">Indicadores Financeiros — mês atual</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {allNull ? (
+            <p className="text-sm text-muted-foreground py-2">
+              Sem dados suficientes para calcular indicadores. Classifique as transações do mês.
+            </p>
+          ) : (
+            <div className="divide-y divide-border">
+              <IndicatorItem
+                icon={<TrendingUp className="h-4 w-4" strokeWidth={1.5} />}
+                label="Margem EBITDA"
+                value={indicators.margemEbitda}
+                format={v => `${v.toFixed(1)}%`}
+                status={ebitdaStatus}
+                hint="Referência saudável: acima de 15%"
+              />
+              <IndicatorItem
+                icon={<Droplets className="h-4 w-4" strokeWidth={1.5} />}
+                label="Liquidez Corrente"
+                value={indicators.liquidezCorrente}
+                format={v => `${v.toFixed(2)}x`}
+                status={liquidezStatus}
+                hint={indicators.liquidezCorrente === null ? 'Requer lançamentos de Balanço Patrimonial' : 'Referência saudável: acima de 1,5x'}
+              />
+              <IndicatorItem
+                icon={<ShieldCheck className="h-4 w-4" strokeWidth={1.5} />}
+                label="Cobertura do Serviço da Dívida"
+                value={indicators.coberturaServicoDivida}
+                format={v => `${v.toFixed(2)}x`}
+                status={dcsrStatus}
+                hint={indicators.coberturaServicoDivida === null ? 'Sem amortizações no mês' : 'Referência saudável: acima de 1,5x'}
+              />
+            </div>
           )}
         </CardContent>
       </Card>

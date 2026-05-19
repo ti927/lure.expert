@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { PartialDataBanner } from "@/components/states/partial-data-banner";
 import { Button } from "@/components/ui/button";
-import { getDashboardKPIs, getCashFlowChart } from "@/server/dashboard";
+import { getDashboardKPIs, getCashFlowChart, getFinancialIndicators } from "@/server/dashboard";
 import { DashboardClient } from "./dashboard-client";
 import { signOut } from "./actions";
 import { format } from "date-fns";
@@ -13,9 +13,10 @@ export default async function DashboardPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const [kpis, cashFlow] = await Promise.all([
+  const [kpis, cashFlow, indicators] = await Promise.all([
     getDashboardKPIs(),
     getCashFlowChart(),
+    getFinancialIndicators(),
   ]);
 
   const mesAtual = format(new Date(), "MMMM yyyy", { locale: ptBR });
@@ -44,7 +45,7 @@ export default async function DashboardPage() {
         />
       )}
 
-      <DashboardClient kpis={kpis} cashFlow={cashFlow} />
+      <DashboardClient kpis={kpis} cashFlow={cashFlow} indicators={indicators} />
     </div>
   );
 }
