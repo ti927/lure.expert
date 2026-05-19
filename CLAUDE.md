@@ -163,14 +163,14 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **5.G** — Relatório de fechamento mensal gerado pelo expert (PDF/texto)
+- **Fase 6** — Balanço Patrimonial gerencial (telas de apoio: imobilizado, empréstimos, PL, estoque + BP com drill-down)
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:

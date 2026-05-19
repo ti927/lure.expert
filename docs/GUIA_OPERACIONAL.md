@@ -336,11 +336,6 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 
 **✅ Sessão 5.F — Fluxo de Caixa Projetado** — detecção de recorrências via SQL, projeção 90d, KPIs 30/60/90d
 
-**⬜ Sessão 5.G — Relatório de fechamento mensal** — próxima sessão
-- Expert gera narrativa estruturada (abertura, resultado, posição, atenções, recomendações)
-- Renderização em tela dedicada ou no drawer
-- DoD: "compõe fechamento de maio" → relatório com dados reais
-
 **Fase futura — Expert agentivo com tool use:**
 - Tools: `search_transactions`, `aggregate_by_period`, `compare_periods`, `get_balance`
 - Responde perguntas via SQL dinâmico; prompt caching no system prompt
@@ -399,6 +394,32 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 **Sessão 6.8 (folga) — Polimento + drill-down completo**
 - Garantir que todo número no produto permite drill-down até a transação
 - Ajustes de UX
+
+---
+
+### FASE 9 — Agente Proativo, Fechamento Mensal e Notificações (4-6 sessões)
+
+**Texto pro CLAUDE.md:**
+> Iniciando Fase 9 — Agente Proativo. Job diário de insights + fechamento mensal narrado pelo expert (movido da Fase 5) + notificações por WhatsApp/e-mail. Sistema age sem o cliente pedir.
+
+**Sessão 9.1 — Fechamento mensal narrado (ex-5.G)**
+- Job Inngest no dia 5 de cada mês: expert gera narrativa do mês anterior em 5 seções (abertura, resultado, posição, atenções, recomendações) com dados reais do DRE + KPIs
+- Tela `/relatorios/[mes]` renderiza o relatório; CTA "Compartilhar" / "Exportar"
+- DoD: acionar manualmente, relatório gerado com dados reais, disponível em tela
+
+**Sessão 9.2 — Job diário de insights**
+- Analisa estado da empresa: anomalias (valor incomum vs. histórico), riscos (projeção de caixa negativo), oportunidades (caixa parado há N dias), padrões (gasto crescente 3 meses seguidos)
+- Insights salvos em `agent_events`; painel de insights em `/dashboard`
+- DoD: ao menos 2 tipos de insight detectados com dados reais
+
+**Sessão 9.3 — Notificações por e-mail**
+- Integração Resend ou SendGrid: insights de alta prioridade + fechamento mensal enviados por e-mail
+- Preferências de notificação em `/configuracoes`
+- DoD: e-mail enviado com fechamento mensal renderizado em HTML
+
+**Sessão 9.4 — Notificações por WhatsApp (opcional)**
+- Twilio API: insights críticos (caixa < X dias) enviados via WhatsApp
+- DoD: mensagem recebida no WhatsApp com valor e link pra tela
 
 ---
 

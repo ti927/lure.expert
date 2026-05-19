@@ -725,16 +725,15 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - Gráfico de barras: histórico (60d, cores escuras) + projeção (90d, cores claras), empilhados por `stackId`
 - Tabela de recorrências: descrição, tipo, valor médio, próxima data, intervalo
 
-**Pendente:**
-- **5.G** — Relatório de fechamento mensal gerado pelo expert
-- **Fase futura** — Expert com tool use real (queries dinâmicas ao banco via Anthropic tool use): `search_transactions`, `aggregate_by_period`, `forecast_cashflow`, etc. — funcionalidade prevista no plano original, diferida por complexidade
+**Fase futura** — Expert com tool use real (queries dinâmicas ao banco via Anthropic tool use): `search_transactions`, `aggregate_by_period`, `forecast_cashflow`, etc. — funcionalidade prevista no plano original, diferida por complexidade.
 
-**Definition of Done — ✅ FASE 5 EM ANDAMENTO (5.G pendente):**
+**Nota:** relatório de fechamento mensal (5.G original) movido para a **Fase 9** — pertence ao agente proativo (age sem o cliente pedir), não ao chat interativo.
+
+**Definition of Done — ✅ FASE 5 COMPLETA:**
 - ✅ Dashboard com KPIs, gráfico de fluxo e indicadores financeiros em tempo real
 - ✅ DRE 12 meses com filtros por dimensão, drill-down e coluna Total
 - ✅ Expert no drawer com contexto financeiro da org, histórico persistente
 - ✅ Fluxo de Caixa projetado 30/60/90 dias baseado em recorrências detectadas
-- ⬜ Relatório de fechamento mensal narrado pelo expert (5.G)
 
 **Tempo:** ~3 semanas (5.0 a 5.F concluídas)
 
@@ -801,13 +800,13 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ### FASE 9 — Agente Proativo e Notificações (Semanas 22-23)
 
-**Objetivo:** o sistema não espera o cliente perguntar — proativamente envia alertas e insights.
+**Objetivo:** o sistema não espera o cliente perguntar — proativamente envia alertas, insights e o fechamento mensal narrado.
 
 **Deliverables:**
 - Job diário que analisa o estado da empresa e gera "insights"
 - Tipos de insight: anomalia (valor incomum), oportunidade (caixa parado), risco (projeção de estouro), padrão (gasto crescente)
 - Envio por WhatsApp (via Twilio API ou similar) e e-mail
-- Fechamento mensal automático: no dia 5 de cada mês, sistema gera narrativa do mês anterior
+- **Fechamento mensal automático (ex-5.G):** no dia 5 de cada mês, expert gera narrativa do mês anterior em 5 seções (abertura, resultado, posição, atenções, recomendações) — disponível em tela dedicada e enviado por e-mail
 
 **Prompt template:**
 > *"Vamos construir o agente proativo. Job diário às 7h: pra cada organização ativa, roda uma análise. Análise é uma cadeia de tools que Claude Sonnet executa: detect_anomalies(últimos 7 dias), check_idle_cash(saldo > X por mais de N dias), forecast_cashflow_risks(próximos 90 dias), detect_spending_patterns(comparação trimestral). Cada finding vira um registro em insights. Insights com prioridade alta disparam notificação por WhatsApp (Twilio) e e-mail (Resend ou SendGrid). No dia 5 de cada mês, dispara job de fechamento: Claude gera uma narrativa do mês anterior usando os dados — formato 'Olá [nome], aqui está o fechamento de [mês]: [análise em prosa]'. Envia por e-mail e disponibiliza em /reports."*
