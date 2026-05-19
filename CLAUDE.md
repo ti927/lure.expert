@@ -163,15 +163,45 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0 e 5.A concluídas).
+
+Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próxima fase:** Fase 5 — DRE interativo com filtros por dimensão.
+**Próximas sessões:**
+- **5.B** — Dashboard `/dashboard` com KPI cards + gráfico de fluxo de caixa 90 dias
+- **5.C** — Drill-down no DRE: clicar num valor abre transações por trás (server action `getDreDrillDown` já existe)
+- **5.D** — Indicadores financeiros (margem EBITDA, liquidez, cobertura de dívida)
 
-## Pendências antes de iniciar a Fase 5
+---
 
-- [x] **Corrigir deploy Vercel** — ✅ resolvido (ESLint: imports não utilizados em `contas-client.tsx` causavam build fatal).
+### ✅ Sessão 5.A — Página `/dre` com tabela 12 meses e filtros por dimensão *(concluída)*
+
+**O que mudou:**
+- **`src/lib/dre-types.ts`** (criado na 5.0) — tipos e constantes públicos do DRE: `DreType`, `DRE_TYPES`, `DRE_TYPE_LABELS`, `BP_TYPES`, interfaces `DreFilters`, `DreCategoryRow`, `DreMonthSubtotals`, `DreData`, `DrillDownTransaction`. Sem `'use server'` — importável por client e server components.
+- **`src/server/dre.ts`** (criado na 5.0) — server actions: `getDreData(filters)` (aggregation principal com JOIN categorias/pais, agrupamento mensal, filtros de dimensão) e `getDreDrillDown(categoryId, month, filters)` (transações individuais para drill-down).
+- **`src/app/(authenticated)/dre/dre-client.tsx`** (novo) — client component com:
+  - Filtros de período: dois `<input type="month">` + botão "Filtrar"
+  - 3 multi-selects de dimensão (Centro de Custo, Unidade de Negócio, Entidade Jurídica) — aparecem apenas se a org tiver itens cadastrados; aplicam imediatamente via `useTransition`
+  - Tabela DRE hierárquica: Tipo da Natureza → Pai → Filho, 12 colunas mensais
+  - Subtotais em destaque: Receita Bruta, Receita Líquida, Lucro Bruto, EBITDA, LAIR, Lucro Líquido (fundo escuro `slate-800`), Variação de Caixa
+  - Separador tracejado entre P&L e abaixo-da-linha
+  - Sticky header (meses) e primeira coluna sticky (nome da conta)
+  - Cores semânticas: `emerald-700` (positivo), `rose-600` (negativo), `—` (zero)
+  - EmptyState quando não há dados para o período/filtros selecionados
+- **`src/app/(authenticated)/dre/page.tsx`** (reescrito) — server component: busca paralela de data DRE + 3 listas de dimensão; janela padrão de 12 meses completos (1º do mês 11 meses atrás → último dia do mês atual); filtra apenas dimensões ativas para o filter bar.
+
+**Convenção de sinal (net_amount):**
+- `net_amount = SUM(inflow) − SUM(outflow)` — sinal positivo = mais entradas (bom para receitas)
+- Subtotais são puramente aditivos (sem inversão de sinal na camada de exibição)
+- Drill-down retorna `netAmount = direction === 'inflow' ? amount : -amount`
+
+---
+
+### ✅ Sessão 5.0 — Queries de aggregação DRE *(concluída)*
+
+Criação da infra de dados para o DRE: `src/lib/dre-types.ts` + `src/server/dre.ts` + placeholder diagnóstico em `page.tsx`.
 
 ---
 
