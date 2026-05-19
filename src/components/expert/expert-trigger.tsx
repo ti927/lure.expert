@@ -82,7 +82,7 @@ export function ExpertTrigger({ collapsed }: ExpertTriggerProps) {
 
   const window_ = (
     <div
-      style={{ left: pos.x, top: pos.y, width: WINDOW_W }}
+      style={{ left: pos.x, top: pos.y, width: WINDOW_W, height: WINDOW_H }}
       className={cn(
         'fixed z-50 flex flex-col rounded-xl border border-border bg-background shadow-2xl transition-opacity duration-200',
         open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
@@ -92,7 +92,7 @@ export function ExpertTrigger({ collapsed }: ExpertTriggerProps) {
       {/* Barra de título — arrastável */}
       <div
         onMouseDown={onDragStart}
-        className="flex h-11 items-center justify-between border-b border-border px-4 rounded-t-xl select-none cursor-grab active:cursor-grabbing bg-muted/40"
+        className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 rounded-t-xl select-none cursor-grab active:cursor-grabbing bg-muted/40"
       >
         <div className="flex items-center gap-2">
           <GripHorizontal size={14} className="text-muted-foreground/60" />
@@ -108,7 +108,7 @@ export function ExpertTrigger({ collapsed }: ExpertTriggerProps) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-hidden rounded-b-xl" style={{ height: WINDOW_H - 44 }}>
+      <div className="flex flex-col flex-1 min-h-0 rounded-b-xl overflow-hidden">
         <ExpertChat />
       </div>
     </div>

@@ -107,7 +107,7 @@ export function ExpertChat() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {msgs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 py-12 text-center">
             <p className="text-sm font-medium text-foreground">Como posso ajudar?</p>
