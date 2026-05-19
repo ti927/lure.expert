@@ -37,7 +37,7 @@ import {
   triggerManualSync,
 } from '@/server/connections'
 import type { DataSource } from '@/db/schema'
-import type { PendingSource, PendingTransaction } from '@/server/connections'
+import type { PendingSource } from '@/server/connections'
 
 const PluggyConnect = dynamic(
   () => import('react-pluggy-connect').then(m => m.PluggyConnect),
@@ -216,7 +216,7 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
               description="Nenhum lançamento aguardando confirmação."
             />
           ) : (
-            <PendingExtractTab sources={pendingSources} onRefresh={handleRefresh} />
+            <PendingExtractTab sources={pendingSources} />
           )}
         </TabsContent>
       </Tabs>
@@ -431,10 +431,8 @@ function formatBRL(amount: string) {
 
 function PendingExtractTab({
   sources,
-  onRefresh,
 }: {
   sources: PendingSource[]
-  onRefresh: () => void
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
