@@ -11,8 +11,9 @@ import {
   businessUnits,
   legalEntities,
   transactions,
+  categories,
 } from '@/db/schema'
-import { eq, and, isNotNull, count } from 'drizzle-orm'
+import { eq, and, isNotNull, count, asc } from 'drizzle-orm'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -230,4 +231,25 @@ export async function getLegalEntityLinkedCount(id: string) {
     .from(transactions)
     .where(and(eq(transactions.legalEntityId, id), eq(transactions.organizationId, organizationId)))
   return total
+}
+
+// ─── CATEGORIAS FOLHA ────────────────────────────────────────────────────────
+
+export async function getLeafCategories() {
+  const { organizationId } = await getAuthContext()
+  return db
+    .select({
+      id:       categories.id,
+      name:     categories.name,
+      code:     categories.code,
+      type:     categories.type,
+      parentId: categories.parentId,
+    })
+    .from(categories)
+    .where(and(
+      eq(categories.organizationId, organizationId),
+      isNotNull(categories.parentId),
+      eq(categories.isActive, true),
+    ))
+    .orderBy(asc(categories.code))
 }

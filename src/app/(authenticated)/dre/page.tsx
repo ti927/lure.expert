@@ -1,5 +1,5 @@
 import { getDreData } from '@/server/dre'
-import { getCostCenters, getBusinessUnits, getLegalEntities } from '@/server/dimensions'
+import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories } from '@/server/dimensions'
 import { DreClient } from './dre-client'
 
 function defaultRange() {
@@ -17,11 +17,12 @@ function defaultRange() {
 export default async function DrePage() {
   const { from, to } = defaultRange()
 
-  const [data, costCenters, businessUnits, legalEntities] = await Promise.all([
+  const [data, costCenters, businessUnits, legalEntities, leafCategories] = await Promise.all([
     getDreData({ from, to }),
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
+    getLeafCategories(),
   ])
 
   return (
@@ -32,6 +33,7 @@ export default async function DrePage() {
       costCenters={costCenters.filter(c => c.isActive)}
       businessUnits={businessUnits.filter(b => b.isActive)}
       legalEntities={legalEntities.filter(l => l.isActive)}
+      leafCategories={leafCategories}
     />
   )
 }

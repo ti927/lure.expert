@@ -92,10 +92,26 @@ export interface DreData {
 }
 
 export interface DrillDownTransaction {
-  id:          string
-  date:        string
-  description: string
-  direction:   string
-  amount:      number
-  netAmount:   number  // positivo=inflow, negativo=outflow
+  id:               string
+  date:             string
+  description:      string
+  direction:        string
+  amount:           number
+  netAmount:        number
+  categoryId:       string | null
+  categoryName:     string | null
+  costCenterId:     string | null
+  costCenterName:   string | null
+  businessUnitId:   string | null
+  businessUnitName: string | null
+  legalEntityId:    string | null
+  legalEntityName:  string | null
+}
+
+export interface LeafCategory {
+  id:       string
+  name:     string
+  code:     string | null
+  type:     string
+  parentId: string | null
 }

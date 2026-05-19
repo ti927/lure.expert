@@ -161,21 +161,41 @@ export async function getDreDrillDown(
   const monthTo   = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
 
   type TxRow = {
-    id:          string
-    date:        string
-    description: string
-    direction:   string
-    amount:      string
+    id:               string
+    date:             string
+    description:      string
+    direction:        string
+    amount:           string
+    category_id:      string | null
+    category_name:    string | null
+    cost_center_id:   string | null
+    cost_center_name: string | null
+    business_unit_id:   string | null
+    business_unit_name: string | null
+    legal_entity_id:    string | null
+    legal_entity_name:  string | null
   }
 
   const result = await db.execute<TxRow>(sql`
     SELECT
-      t.id::text        AS id,
-      t.date            AS date,
-      t.description     AS description,
-      t.direction       AS direction,
-      t.amount::numeric AS amount
+      t.id::text               AS id,
+      t.date                   AS date,
+      t.description            AS description,
+      t.direction              AS direction,
+      t.amount::numeric        AS amount,
+      t.category_id::text      AS category_id,
+      c.name                   AS category_name,
+      t.cost_center_id::text   AS cost_center_id,
+      cc.name                  AS cost_center_name,
+      t.business_unit_id::text AS business_unit_id,
+      bu.name                  AS business_unit_name,
+      t.legal_entity_id::text  AS legal_entity_id,
+      le.name                  AS legal_entity_name
     FROM transactions t
+    LEFT JOIN categories c     ON t.category_id     = c.id
+    LEFT JOIN cost_centers cc  ON t.cost_center_id  = cc.id
+    LEFT JOIN business_units bu ON t.business_unit_id = bu.id
+    LEFT JOIN legal_entities le ON t.legal_entity_id  = le.id
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.category_id     = ${categoryId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')
@@ -190,12 +210,20 @@ export async function getDreDrillDown(
   const transactions: DrillDownTransaction[] = result.map(r => {
     const amount = Number(r.amount)
     return {
-      id:          r.id,
-      date:        String(r.date),
-      description: r.description,
-      direction:   r.direction,
+      id:               r.id,
+      date:             String(r.date),
+      description:      r.description,
+      direction:        r.direction,
       amount,
-      netAmount:   r.direction === 'inflow' ? amount : -amount,
+      netAmount:        r.direction === 'inflow' ? amount : -amount,
+      categoryId:       r.category_id ?? null,
+      categoryName:     r.category_name ?? null,
+      costCenterId:     r.cost_center_id ?? null,
+      costCenterName:   r.cost_center_name ?? null,
+      businessUnitId:   r.business_unit_id ?? null,
+      businessUnitName: r.business_unit_name ?? null,
+      legalEntityId:    r.legal_entity_id ?? null,
+      legalEntityName:  r.legal_entity_name ?? null,
     }
   })
 
