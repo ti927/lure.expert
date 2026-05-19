@@ -144,7 +144,7 @@ export const syncPluggyItem = inngest.createFunction(
           lastSyncStatus: 'SUCCESS',
           metadata: {
             ...existingMeta,
-            lastTransactionFetchedAt: new Date().toISOString(),
+            lastTransactionFetchedAt: dateFrom,
             accounts: accountIds.map(a => ({
               id: a.id,
               name: a.name,

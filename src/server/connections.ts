@@ -122,6 +122,7 @@ export type PendingTransaction = {
   accountName: string | null
   accountSubtype: string | null
   accountNumber: string | null
+  pluggyCategory: string | null
 }
 
 export type PendingSource = {
@@ -186,6 +187,7 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       accountName: meta.accountName ?? null,
       accountSubtype: meta.accountSubtype ?? null,
       accountNumber: meta.accountNumber ?? null,
+      pluggyCategory: meta.pluggyCategory ?? null,
     })
   }
 

@@ -1000,14 +1000,14 @@ export default function TransacoesClient({ data, options, documents, searchParam
         />
       ) : (
         <div className="border rounded-lg overflow-x-auto">
-          <table className="w-full text-sm table-fixed min-w-[900px]">
+          <table className="w-full text-sm table-fixed min-w-[1150px]">
             <colgroup>
               <col className="w-10" />
               <col className="w-[80px]" />
-              <col />
+              <col className="w-[220px]" />
               <col className="w-28" />
+              <col className="w-52" />
               <col className="w-44" />
-              <col className="w-36" />
               <col className="w-36" />
               <col className="w-36" />
               <col className="w-10" />

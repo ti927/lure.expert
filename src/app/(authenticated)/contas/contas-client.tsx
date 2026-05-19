@@ -625,19 +625,36 @@ function PendingExtractTab({
           className="h-8 w-36 text-sm"
           title="Data final"
         />
-        <div className="ml-auto flex items-center gap-2">
-          {selectedCount > 0 && (
-            <Button size="sm" variant="outline" onClick={handleConfirmSelected} disabled={isPending}>
-              {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
-              Confirmar {selectedCount} selecionado{selectedCount !== 1 ? 's' : ''}
-            </Button>
-          )}
+        {selectedCount > 0 ? (
+          <Button size="sm" variant="outline" onClick={handleConfirmSelected} disabled={isPending}>
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
+            Confirmar {selectedCount} selecionado{selectedCount !== 1 ? 's' : ''}
+          </Button>
+        ) : (
           <Button size="sm" onClick={handleConfirmAll} disabled={isPending}>
             {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
             Confirmar todos ({filtered.length})
           </Button>
-        </div>
+        )}
       </div>
+
+      {/* Paginação superior */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>
+            Exibindo {Math.min((currentPage - 1) * PAGE_SIZE + 1, filtered.length)}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} de {filtered.length} lançamento{filtered.length !== 1 ? 's' : ''}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" disabled={currentPage <= 1 || isPending} onClick={() => setPage(p => Math.max(1, p - 1))}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="px-2 text-xs">Página {currentPage} de {totalPages}</span>
+            <Button variant="outline" size="sm" disabled={currentPage >= totalPages || isPending} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Tabela */}
       <div className="rounded-lg border overflow-hidden">
@@ -703,8 +720,11 @@ function PendingExtractTab({
                         {accountLabel}
                       </td>
                     )}
-                    <td className="px-3 py-2.5 max-w-xs truncate" title={tx.description}>
-                      {tx.description}
+                    <td className="px-3 py-2.5 max-w-xs" title={tx.description}>
+                      <div className="truncate">{tx.description}</div>
+                      {tx.pluggyCategory && (
+                        <div className="truncate text-xs text-muted-foreground/60">{tx.pluggyCategory}</div>
+                      )}
                     </td>
                     <td className="px-3 py-2.5">
                       <Badge variant={isInflow ? 'default' : 'secondary'} className={`text-xs ${isInflow ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100' : ''}`}>

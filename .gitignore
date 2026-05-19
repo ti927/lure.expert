@@ -37,3 +37,5 @@ next-env.d.ts
 
 # claude code (local-machine overrides)
 .claude/settings.local.json
+
+.vercel

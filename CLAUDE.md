@@ -171,7 +171,34 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 
 ## Pendências antes de iniciar a Fase 5
 
-- [ ] **Corrigir deploy Vercel** — build ou runtime com problema (investigar logs no painel Vercel antes de qualquer outra coisa). Possíveis causas: variável de ambiente faltando em produção (`PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`, `INNGEST_*`), erro de ESLint tratado como fatal, ou import de módulo incompatível com Edge runtime.
+- [x] **Corrigir deploy Vercel** — ✅ resolvido (ESLint: imports não utilizados em `contas-client.tsx` causavam build fatal).
+
+---
+
+### ✅ Sessão pós-4 — UX polish geral *(concluída)*
+
+**O que mudou:**
+
+- **`src/components/expert/expert-trigger.tsx`** — ExpertTrigger movido de FAB flutuante (`fixed bottom-6 right-6`) para item de navegação na sidebar. Usa `createPortal` para renderizar o drawer em `document.body`, escapando o contexto de `transform` da sidebar (bug: `position: fixed` dentro de `transform` fica relativo ao ancestral, não ao viewport).
+
+- **`src/components/layout/sidebar.tsx`** — `<ExpertTrigger collapsed={collapsed} />` adicionado na seção de navegação inferior (abaixo de Configurações).
+
+- **`src/components/layout/app-shell.tsx`** — ExpertTrigger removido (era o FAB antigo).
+
+- **`src/app/(authenticated)/transacoes/revisao/`** — filtros completos adicionados (mesma barra da `/transacoes`): busca, De/Até, direção, categoria multi-select agrupada, centro de custo, unidade de negócio, entidade jurídica. Paginação dupla (topo + rodapé). Estado vazio diferencia sem dados de sem resultados com filtro.
+
+- **`src/server/review.ts`** — `ReviewFilters` (interface exportada), `getReviewQueue` refatorado para aceitar filtros completos com `buildWhere()`.
+
+- **`src/app/(authenticated)/transacoes/transacoes-client.tsx`** — larguras das colunas da tabela rebalanceadas: Descrição `w-[220px]` (antes sem limite), Categoria `w-52` (antes `w-44`), C. custo `w-44` (antes `w-36`). `min-w` da tabela `1150px` (antes `900px`).
+
+- **`src/jobs/sync-pluggy-item.ts`** — **bug fix:** `lastTransactionFetchedAt` estava sendo gravado com `new Date().toISOString()` (data/hora do sync) em vez de `dateFrom` (data de corte escolhida pelo usuário). Corrigido para `dateFrom`.
+
+- **`src/server/connections.ts`** — `PendingTransaction` inclui `pluggyCategory: string | null`; extraído de `metadata.pluggyCategory` no `getPendingTransactionsBySource`.
+
+- **`src/app/(authenticated)/contas/contas-client.tsx`**:
+  - Extrato pendente exibe `pluggyCategory` abaixo da descrição (texto `text-xs text-muted-foreground/60`), mesmo padrão de `/transacoes`.
+  - Paginação duplicada no topo da tabela (aparece quando `totalPages > 1`).
+  - Botão "Confirmar todos" movido da área da paginação para a linha de filtros (evita clique acidental ao navegar páginas). Quando há selecionados, "Confirmar todos" é substituído por "Confirmar X selecionados" — nunca aparecem juntos.
 
 ---
 
