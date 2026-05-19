@@ -1,0 +1,266 @@
+'use server'
+
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { db } from '@/db'
+import { memberships } from '@/db/schema'
+import { eq, and, isNotNull, sql } from 'drizzle-orm'
+import type {
+  DreFilters,
+  DreCategoryRow,
+  DreMonthSubtotals,
+  DreData,
+  DrillDownTransaction,
+} from '@/lib/dre-types'
+import { BP_TYPES } from '@/lib/dre-types'
+
+// Re-exporta tipos para uso em server e client components
+export type {
+  DreFilters,
+  DreCategoryRow,
+  DreMonthSubtotals,
+  DreData,
+  DrillDownTransaction,
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+async function getAuthContext() {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const [membership] = await db
+    .select({ organizationId: memberships.organizationId })
+    .from(memberships)
+    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
+    .limit(1)
+  if (!membership) redirect('/onboarding')
+
+  return { userId: user.id, organizationId: membership.organizationId }
+}
+
+// ─── Query principal ──────────────────────────────────────────────────────────
+
+export async function getDreData(filters: DreFilters): Promise<DreData> {
+  const { organizationId } = await getAuthContext()
+  const { from, to, costCenterIds, businessUnitIds, legalEntityIds } = filters
+
+  const ccFilter = costCenterIds?.length
+    ? sql`AND t.cost_center_id::text = ANY(${costCenterIds})`
+    : sql``
+
+  const buFilter = businessUnitIds?.length
+    ? sql`AND t.business_unit_id::text = ANY(${businessUnitIds})`
+    : sql``
+
+  const leFilter = legalEntityIds?.length
+    ? sql`AND t.legal_entity_id::text = ANY(${legalEntityIds})`
+    : sql``
+
+  type AggRow = {
+    category_id:       string
+    category_name:     string
+    category_code:     string
+    category_type:     string
+    parent_id:         string
+    parent_name:       string
+    parent_code:       string
+    month:             string
+    net_amount:        string
+    total_inflow:      string
+    total_outflow:     string
+    transaction_count: number
+  }
+
+  const result = await db.execute<AggRow>(sql`
+    SELECT
+      c.id::text                                                              AS category_id,
+      c.name                                                                  AS category_name,
+      c.code                                                                  AS category_code,
+      c.type                                                                  AS category_type,
+      c.parent_id::text                                                       AS parent_id,
+      p.name                                                                  AS parent_name,
+      p.code                                                                  AS parent_code,
+      TO_CHAR(DATE_TRUNC('month', t.date::date), 'YYYY-MM')                  AS month,
+      COALESCE(SUM(
+        CASE WHEN t.direction = 'inflow'
+             THEN  t.amount::numeric
+             ELSE -t.amount::numeric END
+      ), 0)                                                                   AS net_amount,
+      COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0) AS total_inflow,
+      COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0) AS total_outflow,
+      COUNT(*)::int                                                           AS transaction_count
+    FROM transactions t
+    JOIN categories c ON t.category_id = c.id
+    JOIN categories p ON c.parent_id   = p.id
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.status NOT IN ('pending', 'duplicate')
+      AND t.date::date >= ${from}::date
+      AND t.date::date <= ${to}::date
+      AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
+      ${ccFilter}
+      ${buFilter}
+      ${leFilter}
+    GROUP BY
+      c.id, c.name, c.code, c.type,
+      c.parent_id, p.name, p.code,
+      DATE_TRUNC('month', t.date::date)
+    ORDER BY
+      c.type,
+      p.code  NULLS LAST,
+      c.code,
+      month
+  `)
+
+  const rows: DreCategoryRow[] = result.map(r => ({
+    categoryId:       r.category_id,
+    categoryName:     r.category_name,
+    categoryCode:     r.category_code,
+    categoryType:     r.category_type as DreCategoryRow['categoryType'],
+    parentId:         r.parent_id,
+    parentName:       r.parent_name,
+    parentCode:       r.parent_code,
+    month:            r.month,
+    netAmount:        Number(r.net_amount),
+    totalInflow:      Number(r.total_inflow),
+    totalOutflow:     Number(r.total_outflow),
+    transactionCount: Number(r.transaction_count),
+  }))
+
+  const months    = generateMonthRange(from, to)
+  const subtotals = months.map(month => computeSubtotals(month, rows))
+
+  return { months, rows, subtotals }
+}
+
+// ─── Drill-down ───────────────────────────────────────────────────────────────
+
+export async function getDreDrillDown(
+  categoryId: string,
+  month: string,   // YYYY-MM
+  filters: Pick<DreFilters, 'costCenterIds' | 'businessUnitIds' | 'legalEntityIds'>,
+): Promise<{ transactions: DrillDownTransaction[]; total: number }> {
+  const { organizationId } = await getAuthContext()
+  const { costCenterIds, businessUnitIds, legalEntityIds } = filters
+
+  const ccFilter = costCenterIds?.length
+    ? sql`AND t.cost_center_id::text = ANY(${costCenterIds})`
+    : sql``
+
+  const buFilter = businessUnitIds?.length
+    ? sql`AND t.business_unit_id::text = ANY(${businessUnitIds})`
+    : sql``
+
+  const leFilter = legalEntityIds?.length
+    ? sql`AND t.legal_entity_id::text = ANY(${legalEntityIds})`
+    : sql``
+
+  const [y, m]    = month.split('-').map(Number)
+  const monthFrom = `${month}-01`
+  const monthTo   = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+
+  type TxRow = {
+    id:          string
+    date:        string
+    description: string
+    direction:   string
+    amount:      string
+  }
+
+  const result = await db.execute<TxRow>(sql`
+    SELECT
+      t.id::text        AS id,
+      t.date            AS date,
+      t.description     AS description,
+      t.direction       AS direction,
+      t.amount::numeric AS amount
+    FROM transactions t
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.category_id     = ${categoryId}::uuid
+      AND t.status NOT IN ('pending', 'duplicate')
+      AND t.date::date >= ${monthFrom}::date
+      AND t.date::date <= ${monthTo}::date
+      ${ccFilter}
+      ${buFilter}
+      ${leFilter}
+    ORDER BY t.date DESC, t.created_at DESC
+  `)
+
+  const transactions: DrillDownTransaction[] = result.map(r => {
+    const amount = Number(r.amount)
+    return {
+      id:          r.id,
+      date:        String(r.date),
+      description: r.description,
+      direction:   r.direction,
+      amount,
+      netAmount:   r.direction === 'inflow' ? amount : -amount,
+    }
+  })
+
+  return { transactions, total: transactions.length }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function generateMonthRange(from: string, to: string): string[] {
+  const months: string[] = []
+  const start = new Date(from)
+  start.setDate(1)
+  const end = new Date(to)
+  end.setDate(1)
+
+  const cur = new Date(start)
+  while (cur <= end) {
+    months.push(
+      `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`,
+    )
+    cur.setMonth(cur.getMonth() + 1)
+  }
+  return months
+}
+
+function sumByTypes(month: string, rows: DreCategoryRow[], types: DreCategoryRow['categoryType'][]): number {
+  return rows
+    .filter(r => r.month === month && types.includes(r.categoryType))
+    .reduce((acc, r) => acc + r.netAmount, 0)
+}
+
+function computeSubtotals(month: string, rows: DreCategoryRow[]): DreMonthSubtotals {
+  const receitaBruta        = sumByTypes(month, rows, ['receita_operacional'])
+  const deducoes            = sumByTypes(month, rows, ['deducoes_tributarias', 'deducoes_operacionais'])
+  const receitaLiquida      = receitaBruta + deducoes
+  const cpv                 = sumByTypes(month, rows, ['cpv'])
+  const lucroBruto          = receitaLiquida + cpv
+  const sga                 = sumByTypes(month, rows, ['sga'])
+  const ebitda              = lucroBruto + sga
+  const resultadoFinanceiro = sumByTypes(month, rows, ['resultado_financeiro'])
+  const lair                = ebitda + resultadoFinanceiro
+  const ir                  = sumByTypes(month, rows, ['ir'])
+  const lucroLiquido        = lair + ir
+
+  const emprestimosAmortizacoes = sumByTypes(month, rows, ['emprestimos_amortizacoes'])
+  const investimentosRetiradas  = sumByTypes(month, rows, ['investimentos_retiradas'])
+  const transferencias          = sumByTypes(month, rows, ['transfer'])
+  const variacaoCaixa           = lucroLiquido + emprestimosAmortizacoes + investimentosRetiradas + transferencias
+
+  return {
+    month,
+    receitaBruta,
+    deducoes,
+    receitaLiquida,
+    cpv,
+    lucroBruto,
+    sga,
+    ebitda,
+    resultadoFinanceiro,
+    lair,
+    ir,
+    lucroLiquido,
+    emprestimosAmortizacoes,
+    investimentosRetiradas,
+    transferencias,
+    variacaoCaixa,
+  }
+}
