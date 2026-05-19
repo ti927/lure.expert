@@ -173,6 +173,13 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - **5.F** — Fluxo de Caixa Projetado em `/fluxo` (projeção 30/60/90 dias baseada em recorrências detectadas)
 - **5.G** — Relatório de fechamento mensal gerado pelo expert (PDF/texto)
 
+**Fase futura — Ampliação de contexto do expert:**
+Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
+- DRE completo do mês atual (e comparativo com mês anterior): receita bruta, deduções, CPV, lucro bruto, SGA, EBITDA, resultado financeiro, LAIR, lucro líquido — via `getDreData` já existente
+- BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
+- Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
+- `organization_facts` curados como memória de longo prazo do expert
+
 ---
 
 ### ✅ Sessão 5.E — Expert drawer com chat real *(concluída)*
