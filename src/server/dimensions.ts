@@ -12,6 +12,7 @@ import {
   legalEntities,
   transactions,
   categories,
+  categorizationRules,
 } from '@/db/schema'
 import { eq, and, isNotNull, count, asc } from 'drizzle-orm'
 
@@ -96,11 +97,13 @@ export async function deleteCostCenter(id: string) {
 
 export async function getCostCenterLinkedCount(id: string) {
   const { organizationId } = await getAuthContext()
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(transactions)
-    .where(and(eq(transactions.costCenterId, id), eq(transactions.organizationId, organizationId)))
-  return total
+  const [[{ txCount }], [{ ruleCount }]] = await Promise.all([
+    db.select({ txCount: count() }).from(transactions)
+      .where(and(eq(transactions.costCenterId, id), eq(transactions.organizationId, organizationId))),
+    db.select({ ruleCount: count() }).from(categorizationRules)
+      .where(and(eq(categorizationRules.targetCostCenterId, id), eq(categorizationRules.organizationId, organizationId))),
+  ])
+  return txCount + ruleCount
 }
 
 // ─── UNIDADES DE NEGÓCIO ────────────────────────────────────────────────────
@@ -160,11 +163,13 @@ export async function deleteBusinessUnit(id: string) {
 
 export async function getBusinessUnitLinkedCount(id: string) {
   const { organizationId } = await getAuthContext()
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(transactions)
-    .where(and(eq(transactions.businessUnitId, id), eq(transactions.organizationId, organizationId)))
-  return total
+  const [[{ txCount }], [{ ruleCount }]] = await Promise.all([
+    db.select({ txCount: count() }).from(transactions)
+      .where(and(eq(transactions.businessUnitId, id), eq(transactions.organizationId, organizationId))),
+    db.select({ ruleCount: count() }).from(categorizationRules)
+      .where(and(eq(categorizationRules.targetBusinessUnitId, id), eq(categorizationRules.organizationId, organizationId))),
+  ])
+  return txCount + ruleCount
 }
 
 // ─── ENTIDADES JURÍDICAS ─────────────────────────────────────────────────────
@@ -226,11 +231,13 @@ export async function deleteLegalEntity(id: string) {
 
 export async function getLegalEntityLinkedCount(id: string) {
   const { organizationId } = await getAuthContext()
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(transactions)
-    .where(and(eq(transactions.legalEntityId, id), eq(transactions.organizationId, organizationId)))
-  return total
+  const [[{ txCount }], [{ ruleCount }]] = await Promise.all([
+    db.select({ txCount: count() }).from(transactions)
+      .where(and(eq(transactions.legalEntityId, id), eq(transactions.organizationId, organizationId))),
+    db.select({ ruleCount: count() }).from(categorizationRules)
+      .where(and(eq(categorizationRules.targetLegalEntityId, id), eq(categorizationRules.organizationId, organizationId))),
+  ])
+  return txCount + ruleCount
 }
 
 // ─── CATEGORIAS FOLHA ────────────────────────────────────────────────────────
