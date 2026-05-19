@@ -47,15 +47,15 @@ export async function getDreData(filters: DreFilters): Promise<DreData> {
   const { from, to, costCenterIds, businessUnitIds, legalEntityIds } = filters
 
   const ccFilter = costCenterIds?.length
-    ? sql`AND t.cost_center_id::text = ANY(${costCenterIds})`
+    ? sql`AND t.cost_center_id IN (${sql.join(costCenterIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
   const buFilter = businessUnitIds?.length
-    ? sql`AND t.business_unit_id::text = ANY(${businessUnitIds})`
+    ? sql`AND t.business_unit_id IN (${sql.join(businessUnitIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
   const leFilter = legalEntityIds?.length
-    ? sql`AND t.legal_entity_id::text = ANY(${legalEntityIds})`
+    ? sql`AND t.legal_entity_id IN (${sql.join(legalEntityIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
   type AggRow = {
@@ -145,15 +145,15 @@ export async function getDreDrillDown(
   const { costCenterIds, businessUnitIds, legalEntityIds } = filters
 
   const ccFilter = costCenterIds?.length
-    ? sql`AND t.cost_center_id::text = ANY(${costCenterIds})`
+    ? sql`AND t.cost_center_id IN (${sql.join(costCenterIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
   const buFilter = businessUnitIds?.length
-    ? sql`AND t.business_unit_id::text = ANY(${businessUnitIds})`
+    ? sql`AND t.business_unit_id IN (${sql.join(businessUnitIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
   const leFilter = legalEntityIds?.length
-    ? sql`AND t.legal_entity_id::text = ANY(${legalEntityIds})`
+    ? sql`AND t.legal_entity_id IN (${sql.join(legalEntityIds.map(id => sql`${id}::uuid`), sql`, `)})`
     : sql``
 
   const [y, m]    = month.split('-').map(Number)

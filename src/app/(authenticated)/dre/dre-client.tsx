@@ -1,16 +1,24 @@
 'use client'
 
 import { useState, useTransition, useMemo } from 'react'
-import { Check, ChevronsUpDown, X, Loader2, BarChart3 } from 'lucide-react'
+import {
+  Check, ChevronsUpDown, X, Loader2, BarChart3,
+  ChevronRight, ChevronDown,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from '@/components/ui/command'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
-import { getDreData } from '@/server/dre'
-import type { DreData, DreMonthSubtotals, DreCategoryRow, DreType } from '@/lib/dre-types'
+import { getDreData, getDreDrillDown } from '@/server/dre'
+import type {
+  DreData, DreMonthSubtotals, DreCategoryRow, DreType, DrillDownTransaction,
+} from '@/lib/dre-types'
 import { DRE_TYPE_LABELS } from '@/lib/dre-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
@@ -46,40 +54,21 @@ type SectionBlock = {
   parents: ParentNode[]
 }
 
+type DrillDownState = {
+  categoryId: string
+  categoryName: string
+  month: string
+}
+
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
 const LAYOUT: LayoutSection[] = [
-  {
-    types: ['receita_operacional'],
-    subtotalKey: 'receitaBruta',
-    subtotalLabel: 'Receita Bruta',
-  },
-  {
-    types: ['deducoes_tributarias', 'deducoes_operacionais'],
-    subtotalKey: 'receitaLiquida',
-    subtotalLabel: 'Receita Líquida',
-  },
-  {
-    types: ['cpv'],
-    subtotalKey: 'lucroBruto',
-    subtotalLabel: 'Lucro Bruto',
-  },
-  {
-    types: ['sga'],
-    subtotalKey: 'ebitda',
-    subtotalLabel: 'EBITDA',
-  },
-  {
-    types: ['resultado_financeiro'],
-    subtotalKey: 'lair',
-    subtotalLabel: 'LAIR',
-  },
-  {
-    types: ['ir'],
-    subtotalKey: 'lucroLiquido',
-    subtotalLabel: 'Lucro Líquido',
-    keyMetric: true,
-  },
+  { types: ['receita_operacional'], subtotalKey: 'receitaBruta', subtotalLabel: 'Receita Bruta' },
+  { types: ['deducoes_tributarias', 'deducoes_operacionais'], subtotalKey: 'receitaLiquida', subtotalLabel: 'Receita Líquida' },
+  { types: ['cpv'], subtotalKey: 'lucroBruto', subtotalLabel: 'Lucro Bruto' },
+  { types: ['sga'], subtotalKey: 'ebitda', subtotalLabel: 'EBITDA' },
+  { types: ['resultado_financeiro'], subtotalKey: 'lair', subtotalLabel: 'LAIR' },
+  { types: ['ir'], subtotalKey: 'lucroLiquido', subtotalLabel: 'Lucro Líquido', keyMetric: true },
 ]
 
 const BELOW_LAYOUT: LayoutSection = {
@@ -89,7 +78,7 @@ const BELOW_LAYOUT: LayoutSection = {
 }
 
 const PT_MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-const COL_W = 96  // px per month column
+const COL_W = 96
 const LABEL_W = 260
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -103,6 +92,11 @@ function fmtNum(v: number): string {
   return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v)
 }
 
+function fmtDate(dateStr: string): string {
+  const d = new Date(dateStr)
+  return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`
+}
+
 function buildBlocks(rows: DreCategoryRow[], types: DreType[]): SectionBlock[] {
   return types.map(type => {
     const parentMap = new Map<string, { parent: ParentNode; childMap: Map<string, ChildNode> }>()
@@ -110,12 +104,7 @@ function buildBlocks(rows: DreCategoryRow[], types: DreType[]): SectionBlock[] {
     rows.filter(r => r.categoryType === type).forEach(row => {
       if (!parentMap.has(row.parentId)) {
         parentMap.set(row.parentId, {
-          parent: {
-            parentId: row.parentId,
-            parentName: row.parentName,
-            parentCode: row.parentCode,
-            children: [],
-          },
+          parent: { parentId: row.parentId, parentName: row.parentName, parentCode: row.parentCode, children: [] },
           childMap: new Map(),
         })
       }
@@ -148,10 +137,7 @@ function buildBlocks(rows: DreCategoryRow[], types: DreType[]): SectionBlock[] {
 type DimOption = { id: string; name: string; code?: string | null }
 
 function DimFilter({
-  label,
-  options,
-  selected,
-  onChange,
+  label, options, selected, onChange,
 }: {
   label: string
   options: DimOption[]
@@ -159,7 +145,6 @@ function DimFilter({
   onChange: (ids: string[]) => void
 }) {
   const [open, setOpen] = useState(false)
-
   if (options.length === 0) return null
 
   const displayText = selected.length === 0
@@ -174,10 +159,7 @@ function DimFilter({
         <Button
           variant="outline"
           size="sm"
-          className={cn(
-            'h-8 gap-1.5 text-xs font-normal',
-            selected.length > 0 && 'border-primary/30 bg-primary/5',
-          )}
+          className={cn('h-8 gap-1.5 text-xs font-normal', selected.length > 0 && 'border-primary/30 bg-primary/5')}
         >
           <span className="truncate max-w-[140px]">{displayText}</span>
           {selected.length > 0 ? (
@@ -204,20 +186,11 @@ function DimFilter({
                   <CommandItem
                     key={opt.id}
                     value={`${opt.code ?? ''} ${opt.name}`}
-                    onSelect={() => {
-                      const next = checked
-                        ? selected.filter(s => s !== opt.id)
-                        : [...selected, opt.id]
-                      onChange(next)
-                    }}
+                    onSelect={() => onChange(checked ? selected.filter(s => s !== opt.id) : [...selected, opt.id])}
                     className="text-xs"
                   >
                     <Check className={cn('mr-2 h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
-                    {opt.code && (
-                      <span className="text-muted-foreground mr-1 font-mono text-[10px] shrink-0">
-                        {opt.code}
-                      </span>
-                    )}
+                    {opt.code && <span className="text-muted-foreground mr-1 font-mono text-[10px] shrink-0">{opt.code}</span>}
                     <span className="truncate">{opt.name}</span>
                   </CommandItem>
                 )
@@ -233,20 +206,20 @@ function DimFilter({
 // ─── Amount cell ──────────────────────────────────────────────────────────────
 
 function Num({
-  value,
-  bold,
-  light,
-  inverted,
+  value, bold, light, inverted, onClick,
 }: {
   value: number
   bold?: boolean
-  light?: boolean  // show faint dashes instead of zero
-  inverted?: boolean  // for dark bg rows
+  light?: boolean
+  inverted?: boolean
+  onClick?: () => void
 }) {
   const isZero = value === 0
+  const clickable = !isZero && !!onClick
+
   let colorClass: string
   if (isZero) {
-    colorClass = light ? 'text-muted-foreground/30' : 'text-muted-foreground/50'
+    colorClass = light ? 'text-muted-foreground/25' : 'text-muted-foreground/40'
   } else if (inverted) {
     colorClass = value > 0 ? 'text-emerald-300' : 'text-rose-300'
   } else {
@@ -254,9 +227,95 @@ function Num({
   }
 
   return (
-    <td className={cn('px-3 py-[3px] text-right tabular-nums text-xs', bold && 'font-semibold', colorClass)}>
+    <td
+      className={cn(
+        'px-3 py-[3px] text-right tabular-nums text-xs',
+        bold && 'font-semibold',
+        colorClass,
+        clickable && 'cursor-pointer hover:underline underline-offset-2',
+      )}
+      onClick={clickable ? onClick : undefined}
+    >
       {isZero ? '—' : fmtNum(value)}
     </td>
+  )
+}
+
+// ─── Drill-down Dialog ────────────────────────────────────────────────────────
+
+function DrillDownDialog({
+  state,
+  data,
+  loading,
+  onClose,
+}: {
+  state: DrillDownState
+  data: DrillDownTransaction[] | null
+  loading: boolean
+  onClose: () => void
+}) {
+  const totalNet = data ? data.reduce((s, t) => s + t.netAmount, 0) : 0
+
+  return (
+    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
+      <DialogContent className="max-w-xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="text-sm">
+            {state.categoryName}
+            <span className="font-normal text-muted-foreground ml-2">
+              {monthLabel(state.month)}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center py-10">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : !data || data.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Sem transações para exibir.
+          </p>
+        ) : (
+          <div className="flex flex-col min-h-0 flex-1 gap-3">
+            <div className="overflow-y-auto flex-1 min-h-0">
+              <table className="w-full border-collapse text-xs">
+                <thead className="sticky top-0 bg-background">
+                  <tr className="border-b text-muted-foreground">
+                    <th className="text-left py-1.5 font-medium pr-3 whitespace-nowrap">Data</th>
+                    <th className="text-left py-1.5 font-medium">Descrição</th>
+                    <th className="text-right py-1.5 font-medium pl-3 whitespace-nowrap">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map(tx => (
+                    <tr key={tx.id} className="border-b border-slate-50">
+                      <td className="py-1.5 pr-3 text-muted-foreground whitespace-nowrap">
+                        {fmtDate(tx.date)}
+                      </td>
+                      <td className="py-1.5 text-foreground">{tx.description}</td>
+                      <td className={cn(
+                        'py-1.5 pl-3 text-right tabular-nums font-medium',
+                        tx.netAmount > 0 ? 'text-emerald-700' : 'text-rose-600',
+                      )}>
+                        {fmtNum(tx.netAmount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between border-t pt-2.5 text-xs shrink-0">
+              <span className="text-muted-foreground">{data.length} transações</span>
+              <span className={cn('font-semibold tabular-nums', totalNet >= 0 ? 'text-emerald-700' : 'text-rose-600')}>
+                Total: {fmtNum(totalNet)}
+              </span>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -264,29 +323,33 @@ function Num({
 
 interface Props {
   initialData: DreData
-  initialFrom: string  // YYYY-MM-DD
-  initialTo: string    // YYYY-MM-DD
+  initialFrom: string
+  initialTo: string
   costCenters: CostCenter[]
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
 }
 
 export function DreClient({
-  initialData,
-  initialFrom,
-  initialTo,
-  costCenters,
-  businessUnits,
-  legalEntities,
+  initialData, initialFrom, initialTo, costCenters, businessUnits, legalEntities,
 }: Props) {
   const [data, setData] = useState(initialData)
   const [isPending, startTransition] = useTransition()
 
+  // Filters
   const [fromMonth, setFromMonth] = useState(initialFrom.slice(0, 7))
   const [toMonth, setToMonth]     = useState(initialTo.slice(0, 7))
   const [selCc, setSelCc]         = useState<string[]>([])
   const [selBu, setSelBu]         = useState<string[]>([])
   const [selLe, setSelLe]         = useState<string[]>([])
+
+  // Collapse state — parentId → collapsed
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set())
+
+  // Drill-down state
+  const [drillDown, setDrillDown] = useState<DrillDownState | null>(null)
+  const [drillDownData, setDrillDownData] = useState<DrillDownTransaction[] | null>(null)
+  const [isDrillLoading, startDrillTransition] = useTransition()
 
   function fetchData(params: { fm?: string; tm?: string; cc?: string[]; bu?: string[]; le?: string[] } = {}) {
     const fm = params.fm ?? fromMonth
@@ -303,14 +366,40 @@ export function DreClient({
 
     startTransition(async () => {
       const d = await getDreData({
-        from,
-        to,
+        from, to,
         costCenterIds: cc.length ? cc : undefined,
         businessUnitIds: bu.length ? bu : undefined,
         legalEntityIds: le.length ? le : undefined,
       })
       setData(d)
     })
+  }
+
+  function toggleParent(parentId: string) {
+    setCollapsedParents(prev => {
+      const next = new Set(prev)
+      if (next.has(parentId)) next.delete(parentId)
+      else next.add(parentId)
+      return next
+    })
+  }
+
+  function openDrillDown(categoryId: string, categoryName: string, month: string) {
+    setDrillDown({ categoryId, categoryName, month })
+    setDrillDownData(null)
+    startDrillTransition(async () => {
+      const result = await getDreDrillDown(categoryId, month, {
+        costCenterIds: selCc.length ? selCc : undefined,
+        businessUnitIds: selBu.length ? selBu : undefined,
+        legalEntityIds: selLe.length ? selLe : undefined,
+      })
+      setDrillDownData(result.transactions)
+    })
+  }
+
+  function closeDrillDown() {
+    setDrillDown(null)
+    setDrillDownData(null)
   }
 
   const subtotalsByMonth = useMemo(() => {
@@ -337,7 +426,6 @@ export function DreClient({
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
-          {/* Date range */}
           <div className="flex items-center gap-1.5">
             <input
               type="month"
@@ -354,17 +442,11 @@ export function DreClient({
               onChange={e => setToMonth(e.target.value)}
               className="h-8 px-2 text-xs border rounded-md bg-background text-foreground"
             />
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-8 text-xs"
-              onClick={() => fetchData()}
-            >
+            <Button size="sm" variant="secondary" className="h-8 text-xs" onClick={() => fetchData()}>
               Filtrar
             </Button>
           </div>
 
-          {/* Dimension separador */}
           {(costCenters.length > 0 || businessUnits.length > 0 || legalEntities.length > 0) && (
             <div className="h-5 w-px bg-border mx-0.5" />
           )}
@@ -390,18 +472,11 @@ export function DreClient({
 
           {hasDimFilters && (
             <Button
-              size="sm"
-              variant="ghost"
+              size="sm" variant="ghost"
               className="h-8 text-xs text-muted-foreground gap-1"
-              onClick={() => {
-                setSelCc([])
-                setSelBu([])
-                setSelLe([])
-                fetchData({ cc: [], bu: [], le: [] })
-              }}
+              onClick={() => { setSelCc([]); setSelBu([]); setSelLe([]); fetchData({ cc: [], bu: [], le: [] }) }}
             >
-              <X className="h-3 w-3" />
-              Limpar
+              <X className="h-3 w-3" /> Limpar
             </Button>
           )}
         </div>
@@ -417,12 +492,7 @@ export function DreClient({
           />
         </div>
       ) : (
-        <div
-          className={cn(
-            'flex-1 overflow-auto min-h-0',
-            isPending && 'opacity-50 pointer-events-none',
-          )}
-        >
+        <div className={cn('flex-1 overflow-auto min-h-0', isPending && 'opacity-50 pointer-events-none')}>
           <table
             className="border-collapse"
             style={{ minWidth: LABEL_W + months.length * COL_W, width: '100%' }}
@@ -432,17 +502,13 @@ export function DreClient({
               {months.map(m => <col key={m} style={{ width: COL_W, minWidth: COL_W }} />)}
             </colgroup>
 
-            {/* Sticky header */}
             <thead className="sticky top-0 z-20 bg-background border-b border-slate-200 shadow-[0_1px_0_0_#e2e8f0]">
               <tr>
                 <th className="text-left text-xs font-medium text-muted-foreground px-4 py-2">
                   Conta
                 </th>
                 {months.map(m => (
-                  <th
-                    key={m}
-                    className="text-right text-xs font-medium text-muted-foreground px-3 py-2 whitespace-nowrap"
-                  >
+                  <th key={m} className="text-right text-xs font-medium text-muted-foreground px-3 py-2 whitespace-nowrap">
                     {monthLabel(m)}
                   </th>
                 ))}
@@ -450,7 +516,6 @@ export function DreClient({
             </thead>
 
             <tbody>
-              {/* P&L sections */}
               {LAYOUT.map(section => (
                 <LayoutBlock
                   key={section.subtotalKey}
@@ -458,26 +523,40 @@ export function DreClient({
                   rows={rows}
                   months={months}
                   subtotalsByMonth={subtotalsByMonth}
+                  collapsedParents={collapsedParents}
+                  toggleParent={toggleParent}
+                  openDrillDown={openDrillDown}
                 />
               ))}
 
-              {/* Below-the-line separator */}
               <tr>
                 <td colSpan={months.length + 1} className="py-2 px-4">
                   <div className="border-t-2 border-dashed border-slate-200" />
                 </td>
               </tr>
 
-              {/* Below-the-line */}
               <LayoutBlock
                 section={BELOW_LAYOUT}
                 rows={rows}
                 months={months}
                 subtotalsByMonth={subtotalsByMonth}
+                collapsedParents={collapsedParents}
+                toggleParent={toggleParent}
+                openDrillDown={openDrillDown}
               />
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* ── Drill-down dialog ── */}
+      {drillDown && (
+        <DrillDownDialog
+          state={drillDown}
+          data={drillDownData}
+          loading={isDrillLoading}
+          onClose={closeDrillDown}
+        />
       )}
     </div>
   )
@@ -485,55 +564,43 @@ export function DreClient({
 
 // ─── LayoutBlock ──────────────────────────────────────────────────────────────
 
-function LayoutBlock({
-  section,
-  rows,
-  months,
-  subtotalsByMonth,
-}: {
+interface BlockProps {
   section: LayoutSection
   rows: DreCategoryRow[]
   months: string[]
   subtotalsByMonth: Map<string, DreMonthSubtotals>
-}) {
+  collapsedParents: Set<string>
+  toggleParent: (id: string) => void
+  openDrillDown: (categoryId: string, categoryName: string, month: string) => void
+}
+
+function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents, toggleParent, openDrillDown }: BlockProps) {
   const blocks = useMemo(() => buildBlocks(rows, section.types), [rows, section.types])
 
   return (
     <>
       {blocks.map(block => (
-        <TypeBlock key={block.type} block={block} months={months} />
+        <TypeBlock
+          key={block.type}
+          block={block}
+          months={months}
+          collapsedParents={collapsedParents}
+          toggleParent={toggleParent}
+          openDrillDown={openDrillDown}
+        />
       ))}
 
-      {/* Subtotal row */}
-      <tr
-        className={cn(
-          'border-y',
-          section.keyMetric
-            ? 'border-slate-700 bg-slate-800'
-            : 'border-slate-200 bg-slate-50',
-        )}
-      >
-        <td
-          className={cn(
-            'sticky left-0 px-4 py-2 text-xs font-semibold',
-            section.keyMetric
-              ? 'bg-slate-800 text-white'
-              : 'bg-slate-50 text-slate-700',
-          )}
-        >
+      <tr className={cn('border-y', section.keyMetric ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-slate-50')}>
+        <td className={cn(
+          'sticky left-0 px-4 py-2 text-xs font-semibold',
+          section.keyMetric ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-700',
+        )}>
           {section.subtotalLabel}
         </td>
         {months.map(m => {
           const sub = subtotalsByMonth.get(m)
           const value = sub ? (sub[section.subtotalKey] as number) : 0
-          return (
-            <Num
-              key={m}
-              value={value}
-              bold
-              inverted={section.keyMetric}
-            />
-          )
+          return <Num key={m} value={value} bold inverted={section.keyMetric} />
         })}
       </tr>
     </>
@@ -542,21 +609,32 @@ function LayoutBlock({
 
 // ─── TypeBlock ────────────────────────────────────────────────────────────────
 
-function TypeBlock({ block, months }: { block: SectionBlock; months: string[] }) {
+interface TypeBlockProps {
+  block: SectionBlock
+  months: string[]
+  collapsedParents: Set<string>
+  toggleParent: (id: string) => void
+  openDrillDown: (categoryId: string, categoryName: string, month: string) => void
+}
+
+function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDown }: TypeBlockProps) {
   return (
     <>
-      {/* Section label */}
       <tr className="bg-slate-100/70 border-t border-slate-200">
-        <td
-          colSpan={months.length + 1}
-          className="sticky left-0 bg-slate-100/70 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500"
-        >
+        <td colSpan={months.length + 1} className="sticky left-0 bg-slate-100/70 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
           {DRE_TYPE_LABELS[block.type]}
         </td>
       </tr>
 
       {block.parents.map(parent => (
-        <ParentBlock key={parent.parentId} parent={parent} months={months} />
+        <ParentBlock
+          key={parent.parentId}
+          parent={parent}
+          months={months}
+          isCollapsed={collapsedParents.has(parent.parentId)}
+          onToggle={() => toggleParent(parent.parentId)}
+          openDrillDown={openDrillDown}
+        />
       ))}
     </>
   )
@@ -564,7 +642,15 @@ function TypeBlock({ block, months }: { block: SectionBlock; months: string[] })
 
 // ─── ParentBlock ──────────────────────────────────────────────────────────────
 
-function ParentBlock({ parent, months }: { parent: ParentNode; months: string[] }) {
+interface ParentBlockProps {
+  parent: ParentNode
+  months: string[]
+  isCollapsed: boolean
+  onToggle: () => void
+  openDrillDown: (categoryId: string, categoryName: string, month: string) => void
+}
+
+function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown }: ParentBlockProps) {
   const parentByMonth = useMemo(() => {
     const result: Record<string, number> = {}
     months.forEach(m => {
@@ -573,43 +659,75 @@ function ParentBlock({ parent, months }: { parent: ParentNode; months: string[] 
     return result
   }, [parent.children, months])
 
-  // Only show children rows when there are multiple, or when the child name differs from parent
-  const showChildren =
-    parent.children.length > 1 ||
-    (parent.children.length === 1 && parent.children[0].categoryName !== parent.parentName)
+  const hasSingleChild =
+    parent.children.length === 1 && parent.children[0].categoryName === parent.parentName
+
+  // If single leaf with same name, parent row IS the drill-down target
+  const singleChild = hasSingleChild ? parent.children[0] : null
 
   return (
     <>
       {/* Parent row */}
       <tr className="border-b border-slate-100">
-        <td className="sticky left-0 bg-background px-4 py-[3px] text-xs font-medium text-foreground pl-6 whitespace-nowrap overflow-hidden text-ellipsis max-w-0">
-          {parent.parentCode && (
-            <span className="text-muted-foreground/50 mr-1.5 font-mono text-[10px]">
-              {parent.parentCode}
-            </span>
-          )}
-          {parent.parentName}
+        <td className="sticky left-0 bg-background px-4 py-[3px] text-xs font-medium text-foreground">
+          <div className="flex items-center gap-1 pl-2">
+            {!hasSingleChild && (
+              <button
+                onClick={onToggle}
+                className="shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
+                aria-label={isCollapsed ? 'Expandir' : 'Recolher'}
+              >
+                {isCollapsed
+                  ? <ChevronRight className="h-3 w-3" />
+                  : <ChevronDown className="h-3 w-3" />
+                }
+              </button>
+            )}
+            {parent.parentCode && (
+              <span className="text-muted-foreground/50 font-mono text-[10px] shrink-0">
+                {parent.parentCode}
+              </span>
+            )}
+            <span className="truncate">{parent.parentName}</span>
+          </div>
         </td>
         {months.map(m => {
           const v = parentByMonth[m] ?? 0
-          return <Num key={m} value={v} bold light />
+          return (
+            <Num
+              key={m}
+              value={v}
+              bold
+              light
+              onClick={singleChild ? () => openDrillDown(singleChild.categoryId, singleChild.categoryName, m) : undefined}
+            />
+          )
         })}
       </tr>
 
-      {/* Child rows */}
-      {showChildren && parent.children.map(child => (
+      {/* Child rows — hidden when collapsed */}
+      {!isCollapsed && !hasSingleChild && parent.children.map(child => (
         <tr key={child.categoryId} className="border-b border-slate-50">
-          <td className="sticky left-0 bg-background px-4 py-[3px] text-xs text-muted-foreground pl-10 whitespace-nowrap overflow-hidden text-ellipsis max-w-0">
-            {child.categoryCode && (
-              <span className="text-muted-foreground/30 mr-1.5 font-mono text-[10px]">
-                {child.categoryCode}
-              </span>
-            )}
-            {child.categoryName}
+          <td className="sticky left-0 bg-background px-4 py-[3px] text-xs text-muted-foreground">
+            <div className="flex items-center gap-1 pl-8">
+              {child.categoryCode && (
+                <span className="text-muted-foreground/30 font-mono text-[10px] shrink-0">
+                  {child.categoryCode}
+                </span>
+              )}
+              <span className="truncate">{child.categoryName}</span>
+            </div>
           </td>
           {months.map(m => {
             const v = child.byMonth[m] ?? 0
-            return <Num key={m} value={v} light />
+            return (
+              <Num
+                key={m}
+                value={v}
+                light
+                onClick={() => openDrillDown(child.categoryId, child.categoryName, m)}
+              />
+            )
           })}
         </tr>
       ))}
