@@ -1,8 +1,8 @@
 # Guia Operacional — lure.expert
 
 **Documento de protocolo de execução do MVP com Claude Code.**
-**Versão:** 1.0
-**Última atualização:** 16/05/2026
+**Versão:** 1.1
+**Última atualização:** 19/05/2026
 
 ---
 
@@ -317,72 +317,34 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 
 ---
 
-### FASE 5 — Expert: chat agentivo (8-12 sessões)
+### FASE 5 — Analytics + Expert Chat (sessões concluídas)
+
+> **Nota de execução:** esta fase foi recortada diferente do plano original. O que foi entregue cobre analytics financeiro + expert drawer com chat Sonnet simples. Tool use agentivo fica para fase futura.
 
 **Texto pro CLAUDE.md:**
-> Iniciando Fase 5 — Expert. Chat agentivo com Sonnet 4.6 + prompt caching agressivo. Tools de leitura (Tipo A), composição (fechamento mensal narrado sob demanda) e mutação supervisionada (Tipo B com pattern preview+confirm). Memória híbrida: conversacional (conversations+messages) + curada (organization_facts). Tipo C de mutações está FORA do escopo.
+> Fase 5 concluída (5.0 a 5.F). Analytics entregues: Dashboard KPIs, DRE 12 meses, Indicadores Financeiros, Fluxo de Caixa projetado. Expert: drawer com Sonnet, contexto KPIs do mês, histórico persistente. Pendente: 5.G (relatório fechamento mensal).
 
-**Sessão 5.1 — Backend do chat (sem tools)**
-- Endpoint `/api/chat` usando Anthropic SDK com streaming
-- System prompt base + voz do expert (referência ao `docs/AI_VOICE.md`)
-- DoD: conversa básica funciona, resposta em streaming no console
+**✅ Sessão 5.0 — Queries DRE** — `dre-types.ts` + `server/dre.ts` (aggregação + drill-down)
 
-**Sessão 5.2 — Drawer + persistência de conversas**
-- Componente `ExpertDrawer` integrado ao layout principal (abre/fecha pelo ícone flutuante)
-- Persistência em `conversations` + `messages`
-- Lista de conversas no drawer (topo), pesquisável; criar nova, abrir antiga
-- DoD: trocar de conversa, histórico carrega corretamente
+**✅ Sessão 5.A — Página DRE** — tabela 12 meses, filtros de dimensão, drill-down por célula e por Total
 
-**Sessão 5.3 — System prompt completo + prompt caching**
-- System prompt carrega: plano de contas da org, `data_sources`, top N contacts, `organization_facts` ativos, voz do expert
-- Prompt caching agressivo (system prompt + contexto da org)
-- DoD: segunda mensagem da mesma conversa 80% mais barata (medido em `agent_events.cost_usd`)
+**✅ Sessão 5.B — Dashboard** — KPI cards (Receita, Despesas, Lucro, Saldo) + gráfico de barras semanal Recharts
 
-**Sessão 5.4 — Tools de leitura (Tipo A)**
-- Buscar/filtrar transações por dimensão
-- Agregar por período/categoria/fornecedor/conta
-- Saldos consolidados
-- Comparar períodos (MoM, YoY, YTD)
-- Calcular indicadores (liquidez, margem, endividamento)
-- DoD: "quanto gastei com fornecedor X em junho?" responde com valor correto
+**✅ Sessão 5.D — Indicadores Financeiros** — Margem EBITDA, Liquidez Corrente, DCSR com semáforo verde/âmbar/vermelho
 
-**Sessão 5.5 — Composição do fechamento mensal narrado**
-- Tool específico que gera estrutura em 5 seções (abertura, resultado, posição, atenções, recomendações)
-- Renderização via `ReportCanvas`
-- DoD: "compõe meu fechamento de maio" → relatório completo, renderizado, dados reais
+**✅ Sessão 5.E — Expert drawer** — chat Sonnet 4.6 com contexto KPI, histórico persistente, "Nova conversa"
 
-**Sessão 5.6 — Anomalias e projeções sob demanda**
-- Tools: detectar anomalias do período, projetar fluxo de caixa 30/60/90 dias
-- DoD: "tem algo estranho neste mês?" → resposta com casos concretos
+**✅ Sessão 5.F — Fluxo de Caixa Projetado** — detecção de recorrências via SQL, projeção 90d, KPIs 30/60/90d
 
-**Sessão 5.7 — Mutação supervisionada (Tipo B): infraestrutura**
-- Pattern propose → preview → confirm → apply implementado
-- Registro em `agent_events` com `proposed_change`, depois `confirmed_at`, depois `applied_at`
-- `DiffPreview` component renderiza o before/after no chat
-- DoD: tool de recategorização propõe sem executar, preview aparece no chat
+**⬜ Sessão 5.G — Relatório de fechamento mensal** — próxima sessão
+- Expert gera narrativa estruturada (abertura, resultado, posição, atenções, recomendações)
+- Renderização em tela dedicada ou no drawer
+- DoD: "compõe fechamento de maio" → relatório com dados reais
 
-**Sessão 5.8 — Mutação supervisionada: tools concretas**
-- Recategorizar lote, marcar duplicatas, editar transação, criar regra de categorização
-- Cliente confirma preview → mutação aplicada
-- DoD: confirmar preview → mutação aplicada no banco → `agent_events.applied_at` preenchido
-
-**Sessão 5.9 — Undo (reverter mutação)**
-- Lógica de `reversed_at` + reversão real da mutação anterior
-- DoD: aplicar recategorização, depois desfazer, ver dados voltarem ao estado anterior
-
-**Sessão 5.10 — Memória curada (organization_facts)**
-- Fluxo: cliente menciona fato no chat → expert detecta valor e propõe registrar → cliente confirma → fato persistido com `confirmed_at`
-- Inclusão de facts ativos no system prompt das próximas conversas
-- Tela `/settings/facts` permite cliente listar e arquivar
-- DoD: "lembra que Pedro cuida do comercial" → expert propõe → cliente confirma → próxima conversa lembra
-
-**Sessão 5.11 — Salvar relatórios**
-- Botão "salvar como relatório" no `ReportCanvas` preserva análises em `/reports`
-- DoD: salvar fechamento, fechar conversa, abrir em `/reports` depois
-
-**Sessão 5.12 (folga) — Tuning de prompts + redução de custo**
-- Ajuste fino dos prompts pra reduzir custo médio por conversa
-- Garantir custo médio abaixo de US$ 0,05 por conversa
+**Fase futura — Expert agentivo com tool use:**
+- Tools: `search_transactions`, `aggregate_by_period`, `compare_periods`, `get_balance`
+- Responde perguntas via SQL dinâmico; prompt caching no system prompt
+- DoD: "quanto gastei com X em junho?" → valor correto; custo < US$ 0,03/conversa
 
 ---
 
@@ -545,3 +507,4 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 ## Histórico de versões
 
 - **v1.0** (16/05/2026) — Documento criado. Subdivisão das 8 fases do MVP em 43-65 sessões concretas, com ritual de início/fim, template de sessão, checklists e procedimento pra erros.
+- **v1.1** (19/05/2026) — Fase 5 reescrita para refletir execução real: analytics financeiro (Dashboard, DRE, Indicadores, Fluxo de Caixa) + expert drawer com Sonnet. Sessões 5.0 a 5.F marcadas ✅. Chat agentivo com tool use diferido para fase futura. Próxima sessão: 5.G (relatório fechamento mensal).

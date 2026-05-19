@@ -648,48 +648,95 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - `src/app/api/webhooks/pluggy/route.ts` — `POST /api/webhooks/pluggy`; eventos `item/updated` (despacha sync incremental com `fromDate = lastTransactionFetchedAt - 1d`) e `item/error` (atualiza `status='error'`); segurança por lookup de `external_item_id` (sem HMAC)
 - `src/jobs/sync-all-pluggy-items.ts` — cron `0 6 * * *` (03h BRT); busca todos `data_sources` com `provider='pluggy'`, `status='active'`, `external_item_id IS NOT NULL`; despacha `pluggy/item.connected` com `fromDate = daysAgoISO(7)` para cada um
 
-**4.D — Reconciliação:**
-- Para cada transação ingerida via Pluggy, procurar match em `transactions` já importadas via upload manual (chave: org + valor + ±2 dias + descrição similaridade trigram > 0.6)
-- Match >85% → automático (marca a manual como duplicata, mantém a Pluggy como fonte da verdade); 50-85% → fila de revisão; <50% → mantém ambas
-- Política espelha a regra 11 do CLAUDE.md
+**✅ 4.D — Reconciliação (concluída):**
+- `src/jobs/reconcile-pluggy-transactions.ts` — função Inngest acionada por `pluggy/reconcile.requested`
+- Para cada transação Pluggy recém-inserida: query SQL com `pg_trgm similarity()` buscando matches em outras fontes (mesma org, direção, valor, data ±2 dias)
+- Score ≥ 0,85 → `status='duplicate'` + `duplicateOf` automático; 0,50–0,84 → `needsReview=true` + candidato no metadata; <50% → mantém ambas
+- Processamento em lotes de 50 por `step.run`; concurrency `limit: 1` por org
+
+**✅ 4.E — UX /contas: número de conta, filtros e sync com data de corte (concluída):**
+- `PendingTransaction` inclui `accountNumber` extraído de `metadata.accountNumber`
+- Extrato pendente: filtro por conta (subtype + number), filtro De/Até, coluna "Conta" com número
+- Cards de conexão: exibem número de conta junto ao tipo
+- Botão de sync abre dialog pedindo data de corte (default: 90 dias atrás); `triggerManualSync(dataSourceId, fromDate?)` repassa ao job
+
+**✅ 4.F — Categoria Pluggy como hint IA (concluída):**
+- `metadata` da transação passa a incluir `pluggyCategory`, `pluggyCategoryId`, `merchantName`, `merchantCategory`
+- `classifyWithLLM` em `src/lib/categorizer.ts` aceita `pluggyCategory?: string | null`; quando presente, injeta no user message como dica ao Haiku
+- `/transacoes`: célula de descrição exibe `pluggyCategory` como texto secundário cinza (`text-xs text-muted-foreground/60`)
 
 **Pré-requisitos de conta (cliente):**
 - Conta no [dashboard.pluggy.ai](https://dashboard.pluggy.ai) (sandbox)
 - Credenciais `PLUGGY_CLIENT_ID` e `PLUGGY_CLIENT_SECRET` no `.env.local`
 - Para produção: contratar plano, gerar credenciais de produção e migrar `PLUGGY_ENVIRONMENT=production`
 
-**Definition of Done:**
-- Cliente conecta uma conta PJ real (sandbox primeiro) pelo widget
-- Transações dos últimos 30 dias aparecem em `/transacoes` já com categorização IA aplicada
-- Próximo dia (via webhook ou cron), novas movimentações entram sozinhas
-- Reconciliação com upload manual evita duplicatas
-- Status de erro do item é visível em `/contas` com fluxo de reautenticação
+**Definition of Done — ✅ FASE 4 COMPLETA:**
+- ✅ Cliente conecta uma conta PJ real (sandbox) pelo widget
+- ✅ Transações aparecem em `/transacoes` já com categorização IA aplicada
+- ✅ Próximo dia (via webhook ou cron), novas movimentações entram sozinhas
+- ✅ Reconciliação com upload manual evita duplicatas (tela `/transacoes/reconciliacao`)
+- ✅ Status de erro do item é visível em `/contas` com fluxo de reautenticação
+- ✅ Extrato pendente filtrado por conta, data, com número de conta exibido
+- ✅ Categoria do banco (Pluggy) usada como hint na categorização IA
 
-**Tempo:** 2-3 semanas (4.A em 3-4 dias; 4.B em 4-5 dias; 4.C em 3 dias; 4.D em 3-4 dias)
+**Tempo:** concluída em ~3 semanas
 
 ---
 
-### FASE 5 — Interface Conversacional (Semanas 11-13)
+### FASE 5 — Analytics + Expert Chat (Semanas 11-13)
 
-**Objetivo:** cliente faz qualquer pergunta financeira em linguagem natural e recebe resposta certa, com dados reais.
+> **Nota de execução:** esta fase foi recortada diferente do plano original. O que foi chamado de "Fase 5" no desenvolvimento cobre as funcionalidades de analytics financeiro (Dashboard, DRE, Indicadores, Fluxo de Caixa) e um chat expert com contexto KPI. A interface conversacional com tool use (consultas via SQL dinâmico) fica para fase futura.
 
-**Deliverables:**
-- Página /chat com interface de conversa
-- Backend que recebe a pergunta e usa Claude (Sonnet) com "tool use" pra consultar o banco
-- Tools disponíveis pra IA: `search_transactions`, `aggregate_by_period`, `get_balance`, `forecast_cashflow`, `compare_periods`
-- Histórico de conversas persistente
-- Prompt caching ativado pra reduzir custo
+**Objetivo:** entregar as telas analíticas centrais do produto + expert com contexto financeiro básico.
 
-**Prompt template:**
-> *"Vamos construir a interface conversacional. Página /chat: lista de conversas anteriores + janela de chat ativa. Backend: quando usuário envia mensagem, chamamos Claude Sonnet com um system prompt que descreve o contexto da organização (plano de contas, principais fornecedores/clientes, período de dados disponível). Damos a ele estas tools: search_transactions(filters), aggregate_by_period(group_by, metric), get_balance(account, date), forecast_cashflow(horizon_days), compare_periods(period_a, period_b). Cada tool é uma função que executa SQL real no banco e retorna JSON. Claude pode chamar várias tools sequencialmente até ter a resposta. Resposta final é texto natural com referências aos dados consultados. ATIVA prompt caching no system prompt e no contexto da organização — isso reduz custo em ~80% nas chamadas seguintes. Salve toda a conversa em conversations + messages."*
+**Deliverables — ✅ TODOS ENTREGUES:**
 
-**Definition of Done:**
-- "Quanto gastei com fornecedor X em junho?" → resposta correta com valor
-- "Qual minha projeção de caixa pros próximos 60 dias?" → mostra projeção
-- "Por que minha despesa de pessoal subiu em maio?" → investiga e explica
-- Custo por pergunta abaixo de US$ 0,03 médio
+**✅ 5.0 — Queries de aggregação DRE**
+- `src/lib/dre-types.ts`: tipos e constantes públicos (`DreType`, `DRE_TYPES`, interfaces `DreFilters`, `DreCategoryRow`, `DreData`, `DrillDownTransaction`)
+- `src/server/dre.ts`: `getDreData(filters)` (aggregação com JOIN categorias/pais, agrupamento mensal, filtros de dimensão) + `getDreDrillDown` (transações individuais)
 
-**Tempo:** 2-3 semanas
+**✅ 5.A — Página DRE 12 meses**
+- Tabela DRE hierárquica com 12 colunas mensais: Tipo → Pai → Filho
+- Filtros: período (2 inputs `type="month"`), 3 multi-selects de dimensão (CC, UN, Entidade)
+- Sticky header + sticky primeira coluna; subtotais em destaque; drill-down por célula
+- Coluna Total clicável (abre drill-down do período inteiro)
+- Fixes pós-5.A: Toaster adicionado ao layout raiz; drill-down aceitando `dateRange?`; classificação em lote corrigida (`__null__` como sentinel para remover dimensão)
+
+**✅ 5.B — Dashboard com KPI cards e gráfico de fluxo**
+- `src/server/dashboard.ts`: `getDashboardKPIs()`, `getCashFlowChart()`, tipos exportados
+- `DashboardClient`: grid 4 KPI cards + gráfico de barras semanal Recharts (entradas verde / saídas vermelho)
+- `recharts@3.8.1` adicionado
+
+**✅ 5.D — Indicadores Financeiros**
+- `getFinancialIndicators()`: Margem EBITDA, Liquidez Corrente, Cobertura do Serviço da Dívida
+- Card no dashboard com semáforo por indicador (verde/âmbar/vermelho); `null` exibe "—" com hint contextual
+- Thresholds: EBITDA ≥15%/5%; Liquidez/DCSR ≥1,5x/1,0x
+
+**✅ 5.E — Expert drawer com chat real**
+- `src/server/expert.ts`: `getOrCreateConversation()`, `sendExpertMessage()`, `startNewConversation()`
+- System prompt: nome da org, AI_VOICE.md, KPIs do mês com variação % vs. mês anterior
+- `ExpertChat` client component: histórico, otimismo, auto-scroll, "Nova conversa"
+- Modelo: `claude-sonnet-4-6`; custo interno (não exposto ao cliente)
+
+**✅ 5.F — Fluxo de Caixa Projetado em `/fluxo`**
+- `src/server/fluxo.ts`: `getFluxoData()` detecta recorrências via SQL (CTE em 3 passos: deduplicação por dia, agrupamento, intervalo médio)
+- Filtra: 2+ ocorrências, intervalo 7–40 dias, last_date nos últimos 90 dias
+- Projeta próximos 90 dias; KPI cards com Saldo Atual + Projetado 30d/60d/90d
+- Gráfico de barras: histórico (60d, cores escuras) + projeção (90d, cores claras), empilhados por `stackId`
+- Tabela de recorrências: descrição, tipo, valor médio, próxima data, intervalo
+
+**Pendente:**
+- **5.G** — Relatório de fechamento mensal gerado pelo expert
+- **Fase futura** — Expert com tool use real (queries dinâmicas ao banco via Anthropic tool use): `search_transactions`, `aggregate_by_period`, `forecast_cashflow`, etc. — funcionalidade prevista no plano original, diferida por complexidade
+
+**Definition of Done — ✅ FASE 5 EM ANDAMENTO (5.G pendente):**
+- ✅ Dashboard com KPIs, gráfico de fluxo e indicadores financeiros em tempo real
+- ✅ DRE 12 meses com filtros por dimensão, drill-down e coluna Total
+- ✅ Expert no drawer com contexto financeiro da org, histórico persistente
+- ✅ Fluxo de Caixa projetado 30/60/90 dias baseado em recorrências detectadas
+- ⬜ Relatório de fechamento mensal narrado pelo expert (5.G)
+
+**Tempo:** ~3 semanas (5.0 a 5.F concluídas)
 
 ---
 
@@ -1020,9 +1067,10 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.5** — Fase 3 fechada (3D/3E/3F + migrations 0009–0012 + fixes pós-3F). Fase 4 reescrita com **Pluggy** travado como provedor de Open Finance (decisão de 2026-05-18). Sub-plano detalhado em sessões 4.0 (scaffolding — ✅ concluída), 4.A (widget), 4.B (sync inicial), 4.C (webhooks + cron), 4.D (reconciliação). Belvo removido como alternativa.
 - **v1.6** — Sessão 4.A concluída: `react-pluggy-connect` integrado em `/contas`, fluxo de connect token → widget → `onSuccess` → upsert em `data_sources` funcionando em sandbox. Lista de conexões com reautenticação.
 - **v1.7** — Sessões 4.B e 4.C concluídas: sync inicial via Inngest (`syncPluggyItem`) e webhook `POST /api/webhooks/pluggy` + cron diário `syncAllPluggyItems` (03h BRT). Próxima: 4.D (reconciliação Pluggy × upload manual).
+- **v1.8** — Fase 4 fechada (4.D reconciliação + 4.E UX /contas + 4.F hint Pluggy IA). Fase 5 reescrita para refletir execução real: analytics financeiro (Dashboard KPIs, DRE 12 meses, Indicadores, Fluxo de Caixa projetado) + Expert drawer com chat Sonnet. Sessões 5.B, 5.D, 5.E, 5.F todas marcadas ✅. Pendente: 5.G (relatório fechamento mensal). Nota sobre divergência entre plano original (tool use) e execução atual (chat simples com KPI context) — tool use diferido para fase futura documentada.
 
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-05-18*
-*Versão: 1.7*
+*Última atualização: 2026-05-19*
+*Versão: 1.8*
