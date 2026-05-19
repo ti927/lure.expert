@@ -156,7 +156,6 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       eq(dataSources.provider, 'pluggy'),
     ))
     .orderBy(desc(transactions.date))
-    .limit(500)
 
   if (rows.length === 0) return []
 
@@ -263,7 +262,7 @@ export async function disconnectBank(dataSourceId: string): Promise<{ success: b
   return { success: true }
 }
 
-export async function triggerManualSync(dataSourceId: string): Promise<{ triggered: boolean } | { error: string }> {
+export async function triggerManualSync(dataSourceId: string, fromDate?: string): Promise<{ triggered: boolean } | { error: string }> {
   const { organizationId } = await getAuthContext()
 
   const [source] = await db
@@ -281,7 +280,7 @@ export async function triggerManualSync(dataSourceId: string): Promise<{ trigger
   try {
     await inngest.send({
       name: 'pluggy/item.connected',
-      data: { itemId: source.externalItemId, organizationId, dataSourceId: source.id },
+      data: { itemId: source.externalItemId, organizationId, dataSourceId: source.id, ...(fromDate ? { fromDate } : {}) },
     })
   } catch {
     return { error: 'Não foi possível iniciar a sincronização. Tente novamente.' }

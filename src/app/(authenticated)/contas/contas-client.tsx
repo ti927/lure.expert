@@ -103,14 +103,13 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
     handleClose()
   }
 
-  async function handleSync(dataSourceId: string) {
+  async function handleSync(dataSourceId: string, fromDate?: string) {
     setSyncingId(dataSourceId)
-    const result = await triggerManualSync(dataSourceId)
+    const result = await triggerManualSync(dataSourceId, fromDate)
     if ('error' in result) {
       toast.error(result.error)
     } else {
       toast.success('Sincronização iniciada. Novos extratos aparecerão em Extrato pendente em instantes.')
-      // Aguarda 3s e atualiza para refletir possíveis mudanças no lastSyncAt
       setTimeout(() => { router.refresh() }, 3000)
     }
     setSyncingId(null)
@@ -200,7 +199,7 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
                   onReauth={() => handleConnect(conn.externalItemId ?? undefined)}
                   isReauthing={isPending && updateItemId === conn.externalItemId}
                   isSyncing={syncingId === conn.id}
-                  onSync={() => handleSync(conn.id)}
+                  onSync={(fromDate) => handleSync(conn.id, fromDate)}
                   onDisconnect={() => router.refresh()}
                 />
               ))}
@@ -252,10 +251,16 @@ function ConnectionCard({
   onReauth: () => void
   isReauthing: boolean
   isSyncing: boolean
-  onSync: () => void
+  onSync: (fromDate?: string) => void
   onDisconnect: () => void
 }) {
   const [isDisconnecting, startDisconnect] = useTransition()
+  const [syncOpen, setSyncOpen] = useState(false)
+  const [syncFromDate, setSyncFromDate] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 90)
+    return d.toISOString().split('T')[0]
+  })
   const meta = (connection.metadata ?? {}) as ConnectionMeta
   const isError = connection.status === 'error'
   const syncedAt = connection.lastSyncAt
@@ -336,19 +341,45 @@ function ConnectionCard({
             )}
           </Button>
         ) : (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={onSync}
-            disabled={isSyncing}
-            title="Sincronizar agora"
-          >
-            {isSyncing
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <RotateCcw className="h-4 w-4" />
-            }
-          </Button>
+          <AlertDialog open={syncOpen} onOpenChange={setSyncOpen}>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground hover:text-foreground"
+                disabled={isSyncing}
+                title="Sincronizar agora"
+              >
+                {isSyncing
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <RotateCcw className="h-4 w-4" />
+                }
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Sincronizar {meta.institutionName ?? connection.name}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Buscar transações a partir de qual data? Transações anteriores a essa data não serão importadas.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <div className="py-2">
+                <Input
+                  type="date"
+                  value={syncFromDate}
+                  onChange={e => setSyncFromDate(e.target.value)}
+                  max={new Date().toISOString().split('T')[0]}
+                  className="h-9 text-sm"
+                />
+              </div>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                <AlertDialogAction onClick={() => onSync(syncFromDate)}>
+                  Sincronizar
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         )}
 
         <AlertDialog>
@@ -410,6 +441,9 @@ function PendingExtractTab({
   const [search, setSearch] = useState('')
   const [dirFilter, setDirFilter] = useState<'all' | 'inflow' | 'outflow'>('all')
   const [bankFilter, setBankFilter] = useState<string>('all')
+  const [accountFilter, setAccountFilter] = useState<string>('all')
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [page, setPage] = useState(1)
 
@@ -418,6 +452,22 @@ function PendingExtractTab({
     return sources.flatMap(s => s.transactions)
   }, [sources])
 
+  // Contas únicas filtradas pelo banco selecionado (para o select de conta)
+  const allAccounts = useMemo(() => {
+    const seen = new Map<string, string>()
+    const txsForFilter = bankFilter !== 'all'
+      ? allTransactions.filter(tx => tx.dataSourceId === bankFilter)
+      : allTransactions
+    for (const tx of txsForFilter) {
+      const key = `${tx.accountSubtype ?? ''}::${tx.accountNumber ?? ''}`
+      if (seen.has(key)) continue
+      const typeLabel = tx.accountSubtype ? (SUBTYPE_LABEL[tx.accountSubtype] ?? tx.accountName ?? '') : (tx.accountName ?? '')
+      const label = tx.accountNumber ? `${typeLabel} • ${tx.accountNumber}` : typeLabel
+      if (label) seen.set(key, label)
+    }
+    return Array.from(seen.entries()).map(([key, label]) => ({ key, label }))
+  }, [allTransactions, bankFilter])
+
   // Filtros client-side
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
@@ -425,9 +475,15 @@ function PendingExtractTab({
       if (q && !tx.description.toLowerCase().includes(q)) return false
       if (dirFilter !== 'all' && tx.direction !== dirFilter) return false
       if (bankFilter !== 'all' && tx.dataSourceId !== bankFilter) return false
+      if (accountFilter !== 'all') {
+        const key = `${tx.accountSubtype ?? ''}::${tx.accountNumber ?? ''}`
+        if (key !== accountFilter) return false
+      }
+      if (dateFrom && tx.date < dateFrom) return false
+      if (dateTo && tx.date > dateTo) return false
       return true
     })
-  }, [allTransactions, search, dirFilter, bankFilter])
+  }, [allTransactions, search, dirFilter, bankFilter, accountFilter, dateFrom, dateTo])
 
   // Paginação
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -512,7 +568,7 @@ function PendingExtractTab({
           </SelectContent>
         </Select>
         {multiplebanks && (
-          <Select value={bankFilter} onValueChange={v => { setBankFilter(v); setPage(1) }}>
+          <Select value={bankFilter} onValueChange={v => { setBankFilter(v); setAccountFilter('all'); setPage(1) }}>
             <SelectTrigger className="h-8 w-44 text-sm">
               <SelectValue />
             </SelectTrigger>
@@ -534,6 +590,34 @@ function PendingExtractTab({
             </SelectContent>
           </Select>
         )}
+        {allAccounts.length > 1 && (
+          <Select value={accountFilter} onValueChange={v => { setAccountFilter(v); setPage(1) }}>
+            <SelectTrigger className="h-8 w-44 text-sm">
+              <SelectValue placeholder="Todas as contas" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as contas</SelectItem>
+              {allAccounts.map(a => (
+                <SelectItem key={a.key} value={a.key}>{a.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <Input
+          type="date"
+          value={dateFrom}
+          onChange={e => { setDateFrom(e.target.value); setPage(1) }}
+          className="h-8 w-36 text-sm"
+          title="Data inicial"
+        />
+        <span className="text-xs text-muted-foreground">até</span>
+        <Input
+          type="date"
+          value={dateTo}
+          onChange={e => { setDateTo(e.target.value); setPage(1) }}
+          className="h-8 w-36 text-sm"
+          title="Data final"
+        />
         <div className="ml-auto flex items-center gap-2">
           {selectedCount > 0 && (
             <Button size="sm" variant="outline" onClick={handleConfirmSelected} disabled={isPending}>
