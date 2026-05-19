@@ -236,6 +236,7 @@ type ConnectionMeta = {
   institutionName?: string
   institutionImageUrl?: string
   executionStatus?: string
+  lastTransactionFetchedAt?: string
   accounts?: { id: string; name: string; type: string; subtype: string; number: string }[]
 }
 
@@ -256,12 +257,15 @@ function ConnectionCard({
 }) {
   const [isDisconnecting, startDisconnect] = useTransition()
   const [syncOpen, setSyncOpen] = useState(false)
+  const meta = (connection.metadata ?? {}) as ConnectionMeta
   const [syncFromDate, setSyncFromDate] = useState(() => {
+    if (meta.lastTransactionFetchedAt) {
+      return new Date(meta.lastTransactionFetchedAt).toISOString().split('T')[0]
+    }
     const d = new Date()
     d.setDate(d.getDate() - 90)
     return d.toISOString().split('T')[0]
   })
-  const meta = (connection.metadata ?? {}) as ConnectionMeta
   const isError = connection.status === 'error'
   const syncedAt = connection.lastSyncAt
     ? format(new Date(connection.lastSyncAt), "dd/MM/yy 'às' HH:mm", { locale: ptBR })
@@ -363,7 +367,7 @@ function ConnectionCard({
                   Buscar transações a partir de qual data? Transações anteriores a essa data não serão importadas.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <div className="py-2">
+              <div className="py-2 space-y-1.5">
                 <Input
                   type="date"
                   value={syncFromDate}
@@ -371,6 +375,11 @@ function ConnectionCard({
                   max={new Date().toISOString().split('T')[0]}
                   className="h-9 text-sm"
                 />
+                {meta.lastTransactionFetchedAt && (
+                  <p className="text-xs text-muted-foreground">
+                    Último corte utilizado: {format(new Date(meta.lastTransactionFetchedAt), 'dd/MM/yyyy', { locale: ptBR })}
+                  </p>
+                )}
               </div>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancelar</AlertDialogCancel>

@@ -13,7 +13,7 @@ import {
   businessUnits,
   legalEntities,
 } from '@/db/schema'
-import { eq, and, isNotNull, desc, count, inArray, sql } from 'drizzle-orm'
+import { eq, and, isNotNull, desc, count, inArray, sql, ilike, gte, lte, or, isNull } from 'drizzle-orm'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -32,9 +32,88 @@ async function getAuthContext() {
 
 const PAGE_SIZE = 30
 
-export async function getReviewQueue(page = 1) {
+export interface ReviewFilters {
+  page?: number
+  q?: string
+  from?: string
+  to?: string
+  direction?: string
+  category?: string
+  costCenter?: string
+  businessUnit?: string
+  legalEntity?: string
+}
+
+export async function getReviewQueue(filters: ReviewFilters = {}) {
   const { organizationId } = await getAuthContext()
+  const page = filters.page ?? 1
   const offset = (page - 1) * PAGE_SIZE
+
+  function buildWhere() {
+    const conditions = [
+      eq(transactions.organizationId, organizationId),
+      eq(transactions.needsReview, true),
+    ]
+    if (filters.q) {
+      conditions.push(ilike(transactions.description, `%${filters.q}%`))
+    }
+    if (filters.from) {
+      conditions.push(gte(transactions.date, filters.from))
+    }
+    if (filters.to) {
+      conditions.push(lte(transactions.date, filters.to))
+    }
+    if (filters.direction && filters.direction !== 'all') {
+      conditions.push(eq(transactions.direction, filters.direction as 'inflow' | 'outflow'))
+    }
+    if (filters.category) {
+      const ids = filters.category.split(',').filter(Boolean)
+      if (ids.includes('__none__')) {
+        const rest = ids.filter(id => id !== '__none__')
+        conditions.push(rest.length > 0
+          ? or(isNull(transactions.categoryId), inArray(transactions.categoryId, rest))!
+          : isNull(transactions.categoryId))
+      } else {
+        conditions.push(inArray(transactions.categoryId, ids))
+      }
+    }
+    if (filters.costCenter) {
+      const ids = filters.costCenter.split(',').filter(Boolean)
+      if (ids.includes('__none__')) {
+        const rest = ids.filter(id => id !== '__none__')
+        conditions.push(rest.length > 0
+          ? or(isNull(transactions.costCenterId), inArray(transactions.costCenterId, rest))!
+          : isNull(transactions.costCenterId))
+      } else {
+        conditions.push(inArray(transactions.costCenterId, ids))
+      }
+    }
+    if (filters.businessUnit) {
+      const ids = filters.businessUnit.split(',').filter(Boolean)
+      if (ids.includes('__none__')) {
+        const rest = ids.filter(id => id !== '__none__')
+        conditions.push(rest.length > 0
+          ? or(isNull(transactions.businessUnitId), inArray(transactions.businessUnitId, rest))!
+          : isNull(transactions.businessUnitId))
+      } else {
+        conditions.push(inArray(transactions.businessUnitId, ids))
+      }
+    }
+    if (filters.legalEntity) {
+      const ids = filters.legalEntity.split(',').filter(Boolean)
+      if (ids.includes('__none__')) {
+        const rest = ids.filter(id => id !== '__none__')
+        conditions.push(rest.length > 0
+          ? or(isNull(transactions.legalEntityId), inArray(transactions.legalEntityId, rest))!
+          : isNull(transactions.legalEntityId))
+      } else {
+        conditions.push(inArray(transactions.legalEntityId, ids))
+      }
+    }
+    return and(...conditions)
+  }
+
+  const whereClause = buildWhere()
 
   const [rows, [{ total }], cats, ccs, bus, les] = await Promise.all([
     db.select({
@@ -51,22 +130,16 @@ export async function getReviewQueue(page = 1) {
       legalEntityId: transactions.legalEntityId,
     })
       .from(transactions)
-      .where(and(
-        eq(transactions.organizationId, organizationId),
-        eq(transactions.needsReview, true),
-      ))
+      .where(whereClause)
       .orderBy(desc(transactions.date))
       .limit(PAGE_SIZE)
       .offset(offset),
 
     db.select({ total: count() })
       .from(transactions)
-      .where(and(
-        eq(transactions.organizationId, organizationId),
-        eq(transactions.needsReview, true),
-      )),
+      .where(whereClause),
 
-    db.select({ id: categories.id, code: categories.code, name: categories.name })
+    db.select({ id: categories.id, code: categories.code, name: categories.name, type: categories.type, parentId: categories.parentId })
       .from(categories)
       .where(eq(categories.organizationId, organizationId)),
 
@@ -96,9 +169,16 @@ export async function getReviewQueue(page = 1) {
       businessUnitName: r.businessUnitId ? (buMap[r.businessUnitId] ?? null) : null,
       legalEntityName: r.legalEntityId ? (leMap[r.legalEntityId] ?? null) : null,
     })),
+    options: {
+      categories: cats,
+      costCenters: ccs,
+      businessUnits: bus,
+      legalEntities: les,
+    },
     total,
     pages: Math.ceil(total / PAGE_SIZE),
     page,
+    filters,
   }
 }
 

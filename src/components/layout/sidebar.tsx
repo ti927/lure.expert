@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { signOut } from '@/server/auth'
+import { ExpertTrigger } from '@/components/expert/expert-trigger'
 import type { AppUser } from './app-shell'
 
 const NAV = [
@@ -129,6 +130,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user }
               collapsed={collapsed}
             />
           ))}
+          <ExpertTrigger collapsed={collapsed} />
         </div>
 
         {/* Avatar do usuário */}

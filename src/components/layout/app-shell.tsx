@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Sidebar } from './sidebar'
-import { ExpertTrigger } from '@/components/expert/expert-trigger'
 import { Menu } from 'lucide-react'
 
 const STORAGE_KEY = 'sidebar-collapsed'
@@ -61,8 +60,6 @@ export function AppShell({ children, user }: AppShellProps) {
 
         <main className="flex-1">{children}</main>
       </div>
-
-      <ExpertTrigger />
     </div>
   )
 }
