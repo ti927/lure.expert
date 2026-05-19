@@ -169,6 +169,10 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 
 **Próxima fase:** Fase 5 — DRE interativo com filtros por dimensão.
 
+## Pendências antes de iniciar a Fase 5
+
+- [ ] **Corrigir deploy Vercel** — build ou runtime com problema (investigar logs no painel Vercel antes de qualquer outra coisa). Possíveis causas: variável de ambiente faltando em produção (`PLUGGY_CLIENT_ID`, `PLUGGY_CLIENT_SECRET`, `INNGEST_*`), erro de ESLint tratado como fatal, ou import de módulo incompatível com Edge runtime.
+
 ---
 
 ### ✅ Sessão 4.0 — Scaffolding Pluggy *(concluída)*
