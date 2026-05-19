@@ -163,14 +163,13 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D e 5.E concluídas; 5.C entregue como parte dos fixes pós-5.A).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **em andamento** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A).
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **5.F** — Fluxo de Caixa Projetado em `/fluxo` (projeção 30/60/90 dias baseada em recorrências detectadas)
 - **5.G** — Relatório de fechamento mensal gerado pelo expert (PDF/texto)
 
 **Fase futura — Ampliação de contexto do expert:**
@@ -179,6 +178,36 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão 5.F — Fluxo de Caixa Projetado em `/fluxo` *(concluída)*
+
+**O que mudou:**
+
+- **`src/server/fluxo.ts`** (criado) — server action `getFluxoData()`:
+  - 3 queries paralelas: (1) saldo acumulado (todas as transações confirmadas); (2) histórico diário dos últimos 60 dias; (3) detecção de recorrências via SQL.
+  - Detecção de recorrências: CTE em 3 passos — `deduped` (DISTINCT ON description+direction+date para evitar dupla contagem), `grouped` (agrupa por descrição+direção, calcula avg_amount, last/first_date, contagem), `intervals` (calcula avg_days = (last_date - first_date) / (occurrences - 1)). Filtros: 2+ ocorrências, intervalo entre 7 e 40 dias, last_date nos últimos 90 dias. Limite: 20 recorrências por ordem de valor médio.
+  - Para cada recorrência detectada: avança a `next_date` até o primeiro dia futuro (cálculo com `Math.ceil` em vez de loop ingênuo). Gera ocorrências futuras para os próximos 90 dias em `projMap`.
+  - Agrega em semanas (ISO, segunda = início da semana) com 4 séries: `inflowReal`, `outflowReal`, `inflowProjetado`, `outflowProjetado`.
+  - Calcula `saldoProjetado30d`, `60d`, `90d` = `saldoAtual` + projeção de entradas − saídas no período.
+  - Tipos exportados: `RecorrenciaDetectada`, `FluxoSemana`, `FluxoData`.
+
+- **`src/app/(authenticated)/fluxo/fluxo-client.tsx`** (criado) — client component:
+  - 4 KPICards: Saldo Atual, Saldo Projetado 30d, 60d, 90d.
+  - `BarChart` com 4 séries empilhadas em pares (`stackId="in"` e `stackId="out"`): histórico escuro (emerald-600 / rose-600) + projeção clara (emerald-300 / rose-200). Para qualquer semana, apenas 2 dos 4 valores são não-zero, resultando em 2 barras por semana com cor diferente histórico vs. projeção.
+  - Nota de legenda abaixo do gráfico: "Cores escuras = histórico real · cores claras = projeção".
+  - Tabela de recorrências: descrição, badge entrada/saída, valor médio, próxima data, intervalo em dias. EmptyState quando nenhuma recorrência detectada.
+
+- **`src/app/(authenticated)/fluxo/page.tsx`** (reescrito) — server component que chama `getFluxoData()` e renderiza `FluxoClient`.
+
+**Algoritmo de detecção de recorrências:**
+- Janela de análise: 180 dias
+- Frequências detectadas: semanal (7d) a mensal (40d)
+- Threshold de atividade: última ocorrência nos últimos 90 dias
+- `next_date` calculado como `last_date + avg_days`; avança até o futuro se necessário
+
+TypeScript: 0 erros.
 
 ---
 
