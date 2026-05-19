@@ -1066,6 +1066,12 @@ export default function TransacoesClient({ data, options, documents, searchParam
                     </td>
                     <td className="px-3 py-1.5 overflow-hidden">
                       <div className="truncate text-sm">{tx.description}</div>
+                      {(() => {
+                        const meta = (tx.metadata ?? {}) as Record<string, string>
+                        return meta.pluggyCategory
+                          ? <div className="truncate text-xs text-muted-foreground/60">{meta.pluggyCategory}</div>
+                          : null
+                      })()}
                     </td>
                     <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
                       <span className={cn(

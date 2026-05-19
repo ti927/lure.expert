@@ -199,11 +199,13 @@ async function classifyWithLLM(
   amount: string,
   direction: string,
   ctx: OrgContext,
+  pluggyCategory?: string | null,
 ): Promise<LLMCallResult | null> {
   if (ctx.categories.length === 0) return null
 
   const systemPrompt = buildSystemPrompt(ctx)
-  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}`
+  const categoryHint = pluggyCategory ? `\nCategoria do banco (Pluggy): ${pluggyCategory}` : ''
+  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}`
 
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -275,7 +277,7 @@ export interface CategorizationOutput {
 }
 
 export async function categorizeTransaction(
-  tx: { id: string; organizationId: string; description: string; amount: string; direction: string },
+  tx: { id: string; organizationId: string; description: string; amount: string; direction: string; metadata?: Record<string, unknown> | null },
   ctx: OrgContext,
 ): Promise<CategorizationOutput> {
 
@@ -289,8 +291,10 @@ export async function categorizeTransaction(
 
   // Camada 3: Embeddings — não implementado
 
-  // Camada 4: Claude Haiku
-  const llm = await classifyWithLLM(tx.description, tx.amount, tx.direction, ctx)
+  // Camada 4: Claude Haiku — usa categoria Pluggy como hint quando disponível
+  const meta = (tx.metadata ?? {}) as Record<string, unknown>
+  const pluggyCategory = typeof meta.pluggyCategory === 'string' ? meta.pluggyCategory : null
+  const llm = await classifyWithLLM(tx.description, tx.amount, tx.direction, ctx, pluggyCategory)
   if (!llm) return { result: null }
 
   const { result, ...llmCost } = llm

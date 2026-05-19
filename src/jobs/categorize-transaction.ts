@@ -33,6 +33,7 @@ export const categorizeTransactions = inngest.createFunction(
           description: transactions.description,
           amount: transactions.amount,
           direction: transactions.direction,
+          metadata: transactions.metadata,
         })
         .from(transactions)
         .where(and(
@@ -46,7 +47,10 @@ export const categorizeTransactions = inngest.createFunction(
       const agentEventPromises: Promise<void>[] = []
 
       for (const tx of txList) {
-        const { result, llmCost } = await categorizeTransaction(tx, ctx)
+        const { result, llmCost } = await categorizeTransaction({
+          ...tx,
+          metadata: tx.metadata as Record<string, unknown> | null,
+        }, ctx)
 
         const hasAnyDimension = result && (
           result.categoryId || result.costCenterId ||
