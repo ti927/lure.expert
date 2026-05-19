@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/core'
 import {
   Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, X,
-  ChevronDown, ChevronRight, Tags, GripVertical, Filter,
+  ChevronDown, ChevronRight, ChevronsUpDown, Tags, GripVertical, Filter,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -222,6 +222,7 @@ export function CategoryManager({
 
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set())
+  const [collapsedPais, setCollapsedPais] = useState<Set<string>>(new Set())
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CategoryItem | null>(null)
@@ -276,6 +277,26 @@ export function CategoryManager({
       else next.add(type)
       return next
     })
+  }
+
+  function togglePaiCollapse(paiId: string) {
+    setCollapsedPais(prev => {
+      const next = new Set(prev)
+      if (next.has(paiId)) next.delete(paiId)
+      else next.add(paiId)
+      return next
+    })
+  }
+
+  const visiblePaiIds = visibleCategories.filter(c => c.parentId === null).map(c => c.id)
+  const allPaisCollapsed = visiblePaiIds.length > 0 && visiblePaiIds.every(id => collapsedPais.has(id))
+
+  function toggleAllPais() {
+    if (allPaisCollapsed) {
+      setCollapsedPais(new Set())
+    } else {
+      setCollapsedPais(new Set(visiblePaiIds))
+    }
   }
 
   function handleCreate(formData: FormData) {
@@ -393,10 +414,18 @@ export function CategoryManager({
     <div className="space-y-4">
       {/* Toolbar Row 1 */}
       <div className="flex items-center justify-between">
-        <Button size="sm" onClick={() => setShowCreateDialog(true)} disabled={isPending}>
-          <Plus className="h-4 w-4 mr-1" />
-          Nova natureza
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => setShowCreateDialog(true)} disabled={isPending}>
+            <Plus className="h-4 w-4 mr-1" />
+            Nova natureza
+          </Button>
+          {visiblePaiIds.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={toggleAllPais}>
+              <ChevronsUpDown className="h-4 w-4 mr-1" />
+              {allPaisCollapsed ? 'Expandir tudo' : 'Recolher tudo'}
+            </Button>
+          )}
+        </div>
         {archivedCount > 0 && (
           <Button variant="ghost" size="sm" onClick={() => setShowArchived(v => !v)}>
             <Archive className="h-4 w-4 mr-1" />
@@ -530,6 +559,8 @@ export function CategoryManager({
                                     key={paiNode.id}
                                     node={paiNode}
                                     activeDragId={activeDragId}
+                                    isCollapsed={collapsedPais.has(paiNode.id)}
+                                    onToggleCollapse={() => togglePaiCollapse(paiNode.id)}
                                     {...sharedProps}
                                   />
                                 ))}
@@ -613,6 +644,8 @@ export function CategoryManager({
 interface SectionProps {
   node: TreeNode
   activeDragId: string | null
+  isCollapsed: boolean
+  onToggleCollapse: () => void
   editingId: string | null
   isPending: boolean
   onEditRequest: (id: string) => void
@@ -626,6 +659,8 @@ interface SectionProps {
 function PaiSection({
   node,
   activeDragId,
+  isCollapsed,
+  onToggleCollapse,
   editingId,
   isPending,
   onEditRequest,
@@ -650,8 +685,16 @@ function PaiSection({
         showDropHighlight && 'bg-primary/5',
       )}
     >
-      <PaiRow node={node} editingId={editingId} isDropTarget={showDropHighlight} {...rowProps} />
-      {node.children.map(child => (
+      <PaiRow
+        node={node}
+        editingId={editingId}
+        isDropTarget={showDropHighlight}
+        isCollapsed={isCollapsed}
+        hasChildren={node.children.length > 0}
+        onToggleCollapse={onToggleCollapse}
+        {...rowProps}
+      />
+      {!isCollapsed && node.children.map(child => (
         <DraggableFilhoRow key={child.id} node={child} editingId={editingId} {...rowProps} />
       ))}
     </div>
@@ -664,6 +707,9 @@ interface PaiRowProps {
   node: CategoryItem
   editingId: string | null
   isDropTarget: boolean
+  isCollapsed: boolean
+  hasChildren: boolean
+  onToggleCollapse: () => void
   isPending: boolean
   onEditRequest: (id: string) => void
   onCancelEdit: () => void
@@ -677,6 +723,9 @@ function PaiRow({
   node,
   editingId,
   isDropTarget,
+  isCollapsed,
+  hasChildren,
+  onToggleCollapse,
   isPending,
   onEditRequest,
   onCancelEdit,
@@ -708,11 +757,25 @@ function PaiRow({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 px-3 py-2 transition-colors',
+        'flex items-center gap-2 px-3 py-2 transition-colors',
         !node.isActive && 'opacity-60',
         isDropTarget && 'ring-1 ring-inset ring-primary/50',
       )}
     >
+      <button
+        type="button"
+        onClick={onToggleCollapse}
+        className={cn(
+          'shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors',
+          !hasChildren && 'invisible pointer-events-none',
+        )}
+        title={isCollapsed ? 'Expandir' : 'Recolher'}
+      >
+        {isCollapsed
+          ? <ChevronRight className="h-3.5 w-3.5" />
+          : <ChevronDown className="h-3.5 w-3.5" />
+        }
+      </button>
       <span className="font-mono text-xs text-muted-foreground w-16 shrink-0">{node.code}</span>
       <span className="flex-1 text-sm font-medium text-foreground truncate">{node.name}</span>
       {node.txCount > 0 && (
