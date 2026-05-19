@@ -163,7 +163,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 5 — DRE interativo com filtros por dimensão **concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
+**Status:** Fase 5 — DRE interativo com filtros por dimensão **concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9). Sessão de correções e melhorias UX pré-Fase 6 **concluída**.
 
 Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 4.D, 4.E e 4.F concluídas).
 
@@ -178,6 +178,32 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão pré-Fase 6 — Correções e melhorias UX *(concluída)*
+
+**O que mudou:**
+
+- **Títulos dinâmicos de aba** — `src/app/layout.tsx` com `title.template: '%s | lure.expert'`; todas as `page.tsx` autenticadas receberam `export const metadata: Metadata = { title: '...' }`.
+
+- **Persistência de filtros de `/transações` no localStorage** — `src/app/(authenticated)/transacoes/transacoes-client.tsx`: chave `lure:transacoes:filters`; ao montar, restaura do storage se URL não tem parâmetros; `updateFilters` salva automaticamente; "Limpar tudo" remove a chave.
+
+- **Opção "Classificado" nos multi-selects de dimensão** — sentinel `__classified__` adicionado em todos os `MultiSelectFilter` e `CategoryMultiSelectFilter` de `/transações`. `buildMultiFilterCondition` em `src/server/transactions.ts` traduz `__classified__` → `isNotNull(column)`.
+
+- **Fix: scroll com mouse wheel no dialog "Classificar em lote"** — `<PopoverContent onWheel={(e) => e.stopPropagation()}>` nos comboboxes do dialog. Bug causado por Radix UI interceptando o evento de scroll.
+
+- **Expert chat → janela flutuante arrastável** — `src/components/expert/expert-trigger.tsx` reescrito: janela fixa `384×560px`, arrastar pela barra de título via `onMouseDown` + listeners em `document`. Posição persistida em `lure:expert:pos` no localStorage. `clampPos` impede sair do viewport. Renderiza via `createPortal` para escapar do contexto `transform` da sidebar.
+
+- **Fix: altura da janela do expert** — `min-h-0` adicionado ao container de mensagens em `expert-chat.tsx` e à div de conteúdo em `expert-trigger.tsx`. Sem `min-h-0`, flex children não encolhem abaixo do tamanho natural do conteúdo, fazendo a janela crescer verticalmente sem limite.
+
+- **Alterar tipo de Natureza Pai com cascata** — `changeParentType(parentId, newType)` em `src/server/categories.ts`: atualiza o Pai e todos os filhos em duas queries; retorna `{ updated: n }`. UI: botão com label do tipo atual na linha do Pai abre `ChangeTypeDialog` com select agrupado DRE/BP e aviso de quantos filhos serão afetados.
+
+- **Expand/collapse individual por Natureza Pai** — `src/components/settings/category-manager.tsx`: estado `collapsedPais: Set<string>`; chevron `ChevronDown`/`ChevronRight` no início de cada linha Pai (invisível se sem filhos). Botão global "Recolher tudo / Expandir tudo" na toolbar com ícone `ChevronsUpDown`.
+
+- **Fix: `getLinkedCount` para CC/UN/Entidade** — `src/server/dimensions.ts`: os três `getLinkedCount` agora contam `transactions` **e** `categorization_rules` em paralelo (`Promise.all`) e retornam a soma. O aviso no dialog de exclusão passa a incluir regras de categorização vinculadas.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
 
 ---
 
