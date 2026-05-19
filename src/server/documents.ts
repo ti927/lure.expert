@@ -69,6 +69,8 @@ const schema = z.object({
   sizeBytes: z.number().positive(),
   type: z.enum(['invoice', 'statement', 'report', 'receipt', 'contract', 'other']),
   sourceType: z.string().min(1),
+  reportType: z.enum(['income_statement', 'balance_sheet', 'other']).default('other'),
+  referenceDate: z.string().optional(),
   periodStart: z.string().optional(),
   periodEnd: z.string().optional(),
   pdfPassword: z.string().optional(),
@@ -90,7 +92,7 @@ export async function createDocumentRecord(
   const parsed = schema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
-  const { storagePath, filename, mimeType, sizeBytes, type, sourceType, periodStart, periodEnd, pdfPassword } =
+  const { storagePath, filename, mimeType, sizeBytes, type, sourceType, reportType, referenceDate, periodStart, periodEnd, pdfPassword } =
     parsed.data
 
   const [membership] = await db
@@ -117,6 +119,8 @@ export async function createDocumentRecord(
       sizeBytes,
       extractionStatus: 'pending',
       uploadedByUserId: user.id,
+      reportType,
+      referenceDate: referenceDate ?? null,
       metadata: {
         source_type: sourceType,
         ...(periodStart ? { period_start: periodStart } : {}),

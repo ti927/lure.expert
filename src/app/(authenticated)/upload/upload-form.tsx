@@ -13,12 +13,13 @@ import { cn } from '@/lib/utils'
 import { UploadCloud, FileText, CheckCircle2, AlertCircle, X, ArrowRight } from 'lucide-react'
 
 const SOURCE_TYPES = [
-  { value: 'bank', label: 'Extrato bancário', docType: 'statement' },
-  { value: 'erp', label: 'Relatório ERP', docType: 'report' },
-  { value: 'acquirer', label: 'Adquirente (Cielo, Stone, etc.)', docType: 'report' },
-  { value: 'credit_card', label: 'Fatura de cartão corporativo', docType: 'statement' },
-  { value: 'sefaz', label: 'Nota fiscal (SEFAZ)', docType: 'invoice' },
-  { value: 'other', label: 'Outro', docType: 'other' },
+  { value: 'bank', label: 'Extrato bancário', docType: 'statement', reportType: 'other' },
+  { value: 'erp', label: 'Relatório ERP', docType: 'report', reportType: 'other' },
+  { value: 'acquirer', label: 'Adquirente (Cielo, Stone, etc.)', docType: 'report', reportType: 'other' },
+  { value: 'credit_card', label: 'Fatura de cartão corporativo', docType: 'statement', reportType: 'other' },
+  { value: 'sefaz', label: 'Nota fiscal (SEFAZ)', docType: 'invoice', reportType: 'other' },
+  { value: 'balance_sheet', label: 'Balanço Patrimonial', docType: 'report', reportType: 'balance_sheet' },
+  { value: 'other', label: 'Outro', docType: 'other', reportType: 'other' },
 ] as const
 
 const ACCEPTED_MIME_TYPES = [
@@ -44,6 +45,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
   const [sourceType, setSourceType] = useState('')
   const [periodStart, setPeriodStart] = useState('')
   const [periodEnd, setPeriodEnd] = useState('')
+  const [referenceDate, setReferenceDate] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const [status, setStatus] = useState<UploadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -52,6 +54,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const isPdf = file?.type === 'application/pdf'
+  const isBp = SOURCE_TYPES.find(s => s.value === sourceType)?.reportType === 'balance_sheet'
 
   function validateFile(f: File): string | null {
     if (!ACCEPTED_MIME_TYPES.includes(f.type)) {
@@ -117,6 +120,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
     }
 
     const source = SOURCE_TYPES.find(s => s.value === sourceType)!
+    const isBp = source.reportType === 'balance_sheet'
     const result = await createDocumentRecord({
       storagePath,
       filename: file.name,
@@ -124,8 +128,10 @@ export function UploadForm({ orgId }: { orgId: string }) {
       sizeBytes: file.size,
       type: source.docType as 'invoice' | 'statement' | 'report' | 'receipt' | 'contract' | 'other',
       sourceType,
-      periodStart: periodStart || undefined,
-      periodEnd: periodEnd || undefined,
+      reportType: source.reportType as 'income_statement' | 'balance_sheet' | 'other',
+      referenceDate: isBp ? referenceDate || undefined : undefined,
+      periodStart: !isBp ? periodStart || undefined : undefined,
+      periodEnd: !isBp ? periodEnd || undefined : undefined,
       pdfPassword: pdfPassword || undefined,
     })
 
@@ -145,6 +151,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
     setSourceType('')
     setPeriodStart('')
     setPeriodEnd('')
+    setReferenceDate('')
     setPdfPassword('')
     setStatus('idle')
     setError(null)
@@ -200,26 +207,41 @@ export function UploadForm({ orgId }: { orgId: string }) {
         </Select>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      {isBp ? (
         <div className="space-y-2">
-          <Label htmlFor="period-start">Início do período <span className="text-muted-foreground">(opcional)</span></Label>
+          <Label htmlFor="reference-date">Data de referência do BP <span className="text-muted-foreground">(obrigatória)</span></Label>
           <Input
-            id="period-start"
+            id="reference-date"
             type="date"
-            value={periodStart}
-            onChange={e => setPeriodStart(e.target.value)}
+            value={referenceDate}
+            onChange={e => setReferenceDate(e.target.value)}
           />
+          <p className="text-xs text-muted-foreground">
+            Data do snapshot — geralmente o último dia do mês (ex: 31/01/2026).
+          </p>
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="period-end">Fim do período <span className="text-muted-foreground">(opcional)</span></Label>
-          <Input
-            id="period-end"
-            type="date"
-            value={periodEnd}
-            onChange={e => setPeriodEnd(e.target.value)}
-          />
+      ) : (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="period-start">Início do período <span className="text-muted-foreground">(opcional)</span></Label>
+            <Input
+              id="period-start"
+              type="date"
+              value={periodStart}
+              onChange={e => setPeriodStart(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="period-end">Fim do período <span className="text-muted-foreground">(opcional)</span></Label>
+            <Input
+              id="period-end"
+              type="date"
+              value={periodEnd}
+              onChange={e => setPeriodEnd(e.target.value)}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="space-y-2">
         <Label>Arquivo</Label>
@@ -295,7 +317,7 @@ export function UploadForm({ orgId }: { orgId: string }) {
 
       <Button
         type="submit"
-        disabled={status === 'uploading' || !file || !sourceType}
+        disabled={status === 'uploading' || !file || !sourceType || (isBp && !referenceDate)}
         className="w-full"
       >
         {status === 'uploading' ? 'Enviando...' : 'Enviar arquivo'}

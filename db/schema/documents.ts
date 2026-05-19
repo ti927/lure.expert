@@ -27,6 +27,10 @@ export const documents = pgTable('documents', {
   templateId: uuid('template_id'),
   uploadedByUserId: uuid('uploaded_by_user_id'),
   metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+  // 'income_statement' | 'balance_sheet' | 'other'
+  reportType: text('report_type').notNull().default('other'),
+  // Data de referência do snapshot de BP (YYYY-MM-DD); null para não-BP
+  referenceDate: text('reference_date'),
   // sem updated_at por design: documentos não são alterados após upload
   createdAt: timestamp('created_at', tz).notNull().default(sql`now()`),
 })

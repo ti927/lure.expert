@@ -16,8 +16,10 @@ const PDF_MIME_TYPES = new Set([
   'application/pdf',
 ])
 
-// Para ambos os formatos: credit_card usa 'outflow' como padrão quando a IA retorna null
+// credit_card: outflow quando IA retorna null
 const DEFAULT_OUTFLOW_SOURCES = new Set(['credit_card'])
+// balance_sheet: sempre inflow — categoria define o sinal no BP
+const FORCE_INFLOW_SOURCES = new Set(['balance_sheet'])
 
 export const processDocument = inngest.createFunction(
   {
@@ -90,7 +92,9 @@ export const processDocument = inngest.createFunction(
                 rawData: row.rawData,
                 date: row.date,
                 amount: row.amount !== null ? String(row.amount) : null,
-                direction: DEFAULT_OUTFLOW_SOURCES.has(sourceType)
+                direction: FORCE_INFLOW_SOURCES.has(sourceType)
+                  ? 'inflow'
+                  : DEFAULT_OUTFLOW_SOURCES.has(sourceType)
                   ? (row.direction ?? 'outflow')
                   : row.direction,
                 description: row.description,
