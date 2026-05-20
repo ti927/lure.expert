@@ -173,6 +173,7 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 
 **Próximas sessões:**
 - **Fase 6 continuação** — Drill-down por tipo/pai/filho no `/balanco`; indicador BP/DRE na coluna de `/transacoes`
+- **Visibilidade por relatório nas categorias** — Dois flags por categoria: `ocultarNaDre` e `ocultarNoCaixa`. Caso de uso: empresa sobe relatório de Custo de Mercadorias (→ CMV) E relatório de fluxo de caixa (→ Pagamento de Fornecedores). CMV aparece na DRE mas não no fluxo de caixa; Pagamento de Fornecedores aparece no fluxo de caixa mas não na DRE. Sem esses flags, a mesma compra seria contabilizada duas vezes — uma vez em cada fonte. Implementação: dois campos booleanos em `categories` (`hide_in_dre`, `hide_in_cashflow`); filtro nos queries de `getDreData` e `getFluxoData`; toggles na UI de `/configuracoes/categorias`.
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
