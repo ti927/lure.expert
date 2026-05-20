@@ -973,6 +973,28 @@ TypeScript: 0 erros. Testado: CSV sem cabeçalho + CSV com BOM/acessibilidade + 
 
 ---
 
+## Infraestrutura de Produção (Vercel + Supabase)
+
+### DATABASE_URL — usar Transaction Pooler, nunca conexão direta
+
+A variável `DATABASE_URL` no Vercel **deve** usar a URL do **Transaction Pooler** do Supabase:
+```
+postgresql://postgres.qwouuvgndiggoglfrmvr:[SENHA]@aws-1-sa-east-1.pooler.supabase.com:6543/postgres
+```
+
+**NÃO usar** a conexão direta:
+```
+postgresql://postgres:[SENHA]@db.qwouuvgndiggoglfrmvr.supabase.co:5432/postgres
+```
+
+O hostname `db.qwouuvgndiggoglfrmvr.supabase.co` falha com `ENOTFOUND` no ambiente serverless do Vercel (Node.js). O pooler (`aws-1-sa-east-1.pooler.supabase.com:6543`) é IPv4-compatível e funciona corretamente.
+
+**Como obter a URL correta:** Supabase Dashboard → botão "Connect" (topo da página) → aba "Connection string" → "Transaction pooler".
+
+**Após atualizar a variável no Vercel, é necessário fazer redeploy** — deployments existentes usam os valores da época em que foram criados.
+
+---
+
 ## Decisões já tomadas que não revisitamos
 - Produto: lure.expert / domínio lure.expert
 - Agentes chamados: **expert**
