@@ -639,6 +639,30 @@ export function DreClient({
 
   const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set())
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('lure:dre:filters')
+      if (!saved) return
+      const p = JSON.parse(saved) as { fromMonth?: string; toMonth?: string; selCc?: string[]; selBu?: string[]; selLe?: string[] }
+      const validCcIds = new Set(costCenters.map(c => c.id))
+      const validBuIds = new Set(businessUnits.map(b => b.id))
+      const validLeIds = new Set(legalEntities.map(l => l.id))
+      const fm = p.fromMonth ?? fromMonth
+      const tm = p.toMonth ?? toMonth
+      const cc = (p.selCc ?? []).filter(id => validCcIds.has(id))
+      const bu = (p.selBu ?? []).filter(id => validBuIds.has(id))
+      const le = (p.selLe ?? []).filter(id => validLeIds.has(id))
+      setFromMonth(fm)
+      setToMonth(tm)
+      setSelCc(cc)
+      setSelBu(bu)
+      setSelLe(le)
+      const diffDate = fm !== initialFrom.slice(0, 7) || tm !== initialTo.slice(0, 7)
+      const diffDims = cc.length > 0 || bu.length > 0 || le.length > 0
+      if (diffDate || diffDims) fetchData({ fm, tm, cc, bu, le })
+    } catch {}
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const [drillDown, setDrillDown]         = useState<DrillDownState | null>(null)
   const [drillDownData, setDrillDownData] = useState<DrillDownTransaction[] | null>(null)
   const [isDrillLoading, startDrillTransition] = useTransition()
@@ -665,6 +689,10 @@ export function DreClient({
     const cc = params.cc ?? selCc
     const bu = params.bu ?? selBu
     const le = params.le ?? selLe
+
+    try {
+      localStorage.setItem('lure:dre:filters', JSON.stringify({ fromMonth: fm, toMonth: tm, selCc: cc, selBu: bu, selLe: le }))
+    } catch {}
 
     const [y1, m1] = fm.split('-').map(Number)
     const [y2, m2] = tm.split('-').map(Number)

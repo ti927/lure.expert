@@ -8,8 +8,21 @@ import {
   legalEntities,
   agentEvents,
 } from '@/db/schema'
-import { eq, and, isNotNull, ne, ilike, desc } from 'drizzle-orm'
+import { eq, and, isNotNull, ne, ilike, desc, inArray } from 'drizzle-orm'
 import { anthropic } from '@/lib/anthropic'
+import { BP_TYPES } from '@/lib/bp-types'
+
+const BP_TYPE_SET = new Set<string>(BP_TYPES)
+
+export type DocumentDomain = 'bp' | 'dre'
+
+function isBpType(type: string): boolean {
+  return BP_TYPE_SET.has(type)
+}
+
+export function domainFromReportType(reportType: string | null | undefined): DocumentDomain {
+  return reportType === 'balance_sheet' ? 'bp' : 'dre'
+}
 
 export interface CategorizationResult {
   categoryId: string | null
@@ -31,14 +44,14 @@ export interface OrgContext {
     targetBusinessUnitId: string | null
     targetLegalEntityId: string | null
   }>
-  categories: Array<{ id: string; code: string; name: string; type: string }>
+  categories: Array<{ id: string; code: string | null; name: string; type: string }>
   costCenters: Array<{ id: string; name: string; code: string | null }>
   businessUnits: Array<{ id: string; name: string; code: string | null }>
   legalEntities: Array<{ id: string; name: string; cnpj: string | null }>
 }
 
 export async function loadOrgContext(organizationId: string): Promise<OrgContext> {
-  const [rules, cats, ccs, bus, les] = await Promise.all([
+  const [rules, allCats, ccs, bus, les] = await Promise.all([
     db.select({
       id: categorizationRules.id,
       conditions: categorizationRules.conditions,
@@ -54,12 +67,18 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
       ))
       .orderBy(desc(categorizationRules.priority)),
 
-    db.select({ id: categories.id, code: categories.code, name: categories.name, type: categories.type })
+    // Carrega TODAS as categorias ativas (DRE + BP, Pai e Filho)
+    db.select({
+      id: categories.id,
+      code: categories.code,
+      name: categories.name,
+      type: categories.type,
+      parentId: categories.parentId,
+    })
       .from(categories)
       .where(and(
         eq(categories.organizationId, organizationId),
         eq(categories.isActive, true),
-        isNotNull(categories.parentId),
       )),
 
     db.select({ id: costCenters.id, name: costCenters.name, code: costCenters.code })
@@ -75,10 +94,17 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
       .where(and(eq(legalEntities.organizationId, organizationId), eq(legalEntities.isActive, true))),
   ])
 
+  // Nós folha = categorias cujo id não aparece como parentId de nenhuma outra categoria.
+  // Isso inclui: todos os Filhos (parentId != null) + Pais sem filhos (caso de uso BP).
+  const parentIdSet = new Set(allCats.map(c => c.parentId).filter((p): p is string => p !== null))
+  const leafCats = allCats
+    .filter(c => !parentIdSet.has(c.id))
+    .map(c => ({ id: c.id, code: c.code, name: c.name, type: c.type }))
+
   return {
     organizationId,
     rules: rules as OrgContext['rules'],
-    categories: cats,
+    categories: leafCats,
     costCenters: ccs,
     businessUnits: bus,
     legalEntities: les,
@@ -87,33 +113,45 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
 
 // ─── Camada 1: Regras explícitas ─────────────────────────────────────────────
 
-function applyRules(description: string, rules: OrgContext['rules']): CategorizationResult | null {
+// Regras com targetCategoryId só disparam no mesmo domínio (BP↔BP, DRE↔DRE).
+// Regras sem targetCategoryId (só CC/UN/Entidade) são domínio-agnósticas.
+function applyRules(
+  description: string,
+  rules: OrgContext['rules'],
+  domainCategoryIds: Set<string>,
+): CategorizationResult | null {
   for (const rule of rules) {
     const c = rule.conditions as { field?: string; op?: string; value?: string }
-    if (c.field === 'description' && c.op === 'contains' && c.value) {
-      if (description.toLowerCase().includes(c.value.toLowerCase())) {
-        return {
-          categoryId: rule.targetCategoryId,
-          costCenterId: rule.targetCostCenterId,
-          businessUnitId: rule.targetBusinessUnitId,
-          legalEntityId: rule.targetLegalEntityId,
-          confidence: 1.0,
-          method: 'rule',
-          needsReview: false,
-        }
-      }
+    if (c.field !== 'description' || c.op !== 'contains' || !c.value) continue
+    if (!description.toLowerCase().includes(c.value.toLowerCase())) continue
+
+    // Se a regra aponta para uma categoria fora do domínio atual, pula.
+    if (rule.targetCategoryId !== null && !domainCategoryIds.has(rule.targetCategoryId)) continue
+
+    return {
+      categoryId: rule.targetCategoryId,
+      costCenterId: rule.targetCostCenterId,
+      businessUnitId: rule.targetBusinessUnitId,
+      legalEntityId: rule.targetLegalEntityId,
+      confidence: 1.0,
+      method: 'rule',
+      needsReview: false,
     }
   }
   return null
 }
 
-// ─── Camada 2: Recorrência (mesma descrição já classificada) ─────────────────
+// ─── Camada 2: Recorrência (mesma descrição já classificada no mesmo domínio) ─
 
 async function checkRecurrence(
   organizationId: string,
   transactionId: string,
   description: string,
+  validCategoryIds: string[],
 ): Promise<CategorizationResult | null> {
+  // Sem categorias válidas no domínio, recorrência não se aplica.
+  if (validCategoryIds.length === 0) return null
+
   const [prev] = await db
     .select({
       categoryId: transactions.categoryId,
@@ -125,7 +163,7 @@ async function checkRecurrence(
     .where(and(
       eq(transactions.organizationId, organizationId),
       ilike(transactions.description, description),
-      isNotNull(transactions.categoryId),
+      inArray(transactions.categoryId, validCategoryIds),
       ne(transactions.id, transactionId),
     ))
     .orderBy(desc(transactions.date))
@@ -145,14 +183,16 @@ async function checkRecurrence(
 }
 
 // ─── Camada 3: Embedding similarity (não implementado ainda) ─────────────────
-// Requer setup de API de embeddings (Voyage AI ou similar).
-// Stub: retorna null — a camada 4 (LLM) cobre o gap.
 
 // ─── Camada 4: Claude Haiku ──────────────────────────────────────────────────
 
-function buildSystemPrompt(ctx: OrgContext): string {
+function buildSystemPrompt(ctx: OrgContext, domain: DocumentDomain): string {
+  const domainNote = domain === 'bp'
+    ? 'CONTEXTO: Este lançamento pertence a um relatório de Balanço Patrimonial (BP). Use SOMENTE categorias de BP listadas abaixo (ativo, passivo, patrimônio líquido). Não sugira categorias de DRE.'
+    : 'CONTEXTO: Este lançamento pertence a um extrato bancário ou relatório de DRE. Use SOMENTE categorias de DRE listadas abaixo (receitas, custos, despesas, etc.). Não sugira categorias de Balanço Patrimonial.'
+
   const catList = ctx.categories
-    .map(c => `${c.code}: ${c.name} (${c.type})`)
+    .map(c => `${c.code ?? '—'}: ${c.name} (${c.type})`)
     .join('\n')
 
   const ccList = ctx.costCenters.length > 0
@@ -168,7 +208,7 @@ function buildSystemPrompt(ctx: OrgContext): string {
     : '\nEntidades jurídicas: nenhuma cadastrada — retorne null'
 
   return `Você é um categorizador de transações financeiras para PMEs brasileiras.
-Dado uma transação, retorne a melhor classificação em JSON.
+${domainNote}
 
 Categorias disponíveis (código: nome):
 ${catList}
@@ -199,11 +239,12 @@ async function classifyWithLLM(
   amount: string,
   direction: string,
   ctx: OrgContext,
+  domain: DocumentDomain,
   pluggyCategory?: string | null,
 ): Promise<LLMCallResult | null> {
   if (ctx.categories.length === 0) return null
 
-  const systemPrompt = buildSystemPrompt(ctx)
+  const systemPrompt = buildSystemPrompt(ctx, domain)
   const categoryHint = pluggyCategory ? `\nCategoria do banco (Pluggy): ${pluggyCategory}` : ''
   const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}`
 
@@ -279,22 +320,34 @@ export interface CategorizationOutput {
 export async function categorizeTransaction(
   tx: { id: string; organizationId: string; description: string; amount: string; direction: string; metadata?: Record<string, unknown> | null },
   ctx: OrgContext,
+  documentDomain: DocumentDomain = 'dre',
 ): Promise<CategorizationOutput> {
 
-  // Camada 1: Regras
-  const ruleResult = applyRules(tx.description, ctx.rules)
+  // Filtra categorias pelo domínio do documento: BP só vê BP, DRE só vê DRE.
+  const domainCats = ctx.categories.filter(c =>
+    documentDomain === 'bp' ? isBpType(c.type) : !isBpType(c.type),
+  )
+  const domainCategoryIds = new Set(domainCats.map(c => c.id))
+  const domainCtx: OrgContext = { ...ctx, categories: domainCats }
+
+  // Camada 1: Regras (domain-aware)
+  const ruleResult = applyRules(tx.description, ctx.rules, domainCategoryIds)
   if (ruleResult) return { result: ruleResult }
 
-  // Camada 2: Recorrência
-  const recurrenceResult = await checkRecurrence(ctx.organizationId, tx.id, tx.description)
+  // Camada 2: Recorrência (mesmo domínio)
+  const recurrenceResult = await checkRecurrence(
+    ctx.organizationId, tx.id, tx.description, Array.from(domainCategoryIds),
+  )
   if (recurrenceResult) return { result: recurrenceResult }
 
   // Camada 3: Embeddings — não implementado
 
-  // Camada 4: Claude Haiku — usa categoria Pluggy como hint quando disponível
+  // Camada 4: Claude Haiku — só oferece categorias do domínio correto
   const meta = (tx.metadata ?? {}) as Record<string, unknown>
   const pluggyCategory = typeof meta.pluggyCategory === 'string' ? meta.pluggyCategory : null
-  const llm = await classifyWithLLM(tx.description, tx.amount, tx.direction, ctx, pluggyCategory)
+  const llm = await classifyWithLLM(
+    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory,
+  )
   if (!llm) return { result: null }
 
   const { result, ...llmCost } = llm

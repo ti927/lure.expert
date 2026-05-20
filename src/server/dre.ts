@@ -242,17 +242,12 @@ export async function getDreDrillDown(
 
 function generateMonthRange(from: string, to: string): string[] {
   const months: string[] = []
-  const start = new Date(from)
-  start.setDate(1)
-  const end = new Date(to)
-  end.setDate(1)
-
-  const cur = new Date(start)
-  while (cur <= end) {
-    months.push(
-      `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`,
-    )
-    cur.setMonth(cur.getMonth() + 1)
+  let [y, m] = from.slice(0, 7).split('-').map(Number)
+  const [toY, toM] = to.slice(0, 7).split('-').map(Number)
+  while (y < toY || (y === toY && m <= toM)) {
+    months.push(`${y}-${String(m).padStart(2, '0')}`)
+    m++
+    if (m > 12) { m = 1; y++ }
   }
   return months
 }

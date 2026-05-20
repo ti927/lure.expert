@@ -163,7 +163,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload de relatório + migration 0016) **concluída**. Sessões de melhorias UX de categorias e fixes de classificação **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage e fix do bug de fuso horário no DRE **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -172,7 +172,7 @@ Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **Fase 6 continuação** — Tela `/balanco` com visualização do BP por data de referência (drill-down por tipo/pai/filho, comparativo entre datas)
+- **Fase 6 continuação** — Drill-down por tipo/pai/filho no `/balanco`; indicador BP/DRE na coluna de `/transacoes`
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
@@ -180,6 +180,41 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão Fase 6 — Persistência de filtros + fixes DRE/BP *(concluída)*
+
+**O que mudou:**
+
+- **Persistência de filtros no localStorage — `/dre`** — `src/app/(authenticated)/dre/dre-client.tsx`:
+  - `fetchData()` salva na chave `lure:dre:filters` os campos `{ fromMonth, toMonth, selCc, selBu, selLe }`.
+  - `useEffect` no mount lê o storage, valida os IDs de dimensão contra as opções disponíveis da org (cross-org safety), restaura estado e dispara `fetchData` se os filtros diferem dos defaults do servidor.
+
+- **Persistência de filtros no localStorage — `/balanco`** — `src/app/(authenticated)/balanco/balanco-client.tsx` + `page.tsx`:
+  - `handleFilter()` salva na chave `lure:balanco:filters` os campos `{ from, to }` antes do `router.push`.
+  - `useEffect` no mount redireciona para a URL salva se não há `?from=`/`?to=` na URL atual (`hasUrlParams` flag passado do `page.tsx`).
+  - Evita sobrescrever URLs compartilhadas/explícitas sem abrir mão da restauração automática.
+
+- **Fix: coluna "Dez/25" aparecia em filtro "Jan/26–Dez/26"** — `src/server/dre.ts`:
+  - `generateMonthRange` usava `new Date('2026-01-01')`, que JavaScript interpreta como UTC midnight.
+  - Em UTC-3 (Brasil), isso vira `2025-12-31T21:00` local → `getFullYear()` retorna 2025 → primeira coluna "Dez/25".
+  - Fix: parsear `y/m` direto da string (`from.slice(0, 7).split('-').map(Number)`) sem passar pelo construtor `Date`, igual ao padrão já usado em `balance-sheet.ts`.
+
+- **Redesign `/balanco` — tabela multi-coluna estilo DRE** *(implementado na sessão anterior)*:
+  - `getBpAllDates(from, to)` em `src/server/balance-sheet.ts` — retorna todas as categorias BP, documentos deduplicados por mês (mais recente por mês) e somas por `(yearMonth, categoryId)`.
+  - Todos os meses do intervalo De/Até aparecem como colunas, mesmo sem dados (zeros).
+  - Patrimônio Líquido calculado client-side como `ATIVO[i] − PASSIVO[i]` por coluna; valor negativo em `text-rose-400`.
+  - Filtro De/Até com `<input type="month">`, igual ao DRE.
+
+- **Isolamento de domínio BP/DRE na categorização IA** *(implementado na sessão anterior)*:
+  - `src/lib/categorizer.ts`: `loadOrgContext` carrega **todas** as categorias ativas (leaf nodes); `categorizeTransaction(tx, ctx, documentDomain)` filtra para o domínio do documento antes de executar as 4 camadas.
+  - Regras de categorização com `targetCategoryId` fora do domínio são ignoradas.
+  - Recorrência só encontra precedentes no mesmo domínio (`inArray(categoryId, domainCategoryIds)`).
+  - Prompt do Claude Haiku recebe nota de domínio (`CONTEXTO: BP` ou `DRE`).
+  - `src/jobs/categorize-transaction.ts`: busca `reportType` do documento e passa `documentDomain` ao categorizador.
+
+TypeScript: 0 erros.
 
 ---
 

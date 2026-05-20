@@ -5,8 +5,8 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, transactions, categorizationRules, categories } from '@/db/schema'
-import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL } from 'drizzle-orm'
+import { memberships, transactions, categorizationRules, categories, documents } from '@/db/schema'
+import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -65,11 +65,12 @@ interface GetTransactionsParams {
   legalEntity?: string
   documentId?: string
   sort?: string
+  reportType?: string
 }
 
 export async function getTransactions(params: GetTransactionsParams = {}) {
   const { organizationId } = await getAuthContext()
-  const { page = 1, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, sort } = params
+  const { page = 1, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, sort, reportType } = params
   const offset = (page - 1) * PAGE_SIZE
 
   const conditions: SQL[] = [
@@ -97,6 +98,12 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   const docFilter = parseMultiFilter(documentId)
   if (docFilter.ids.length > 0) conditions.push(inArray(transactions.documentId, docFilter.ids))
 
+  if (reportType === 'balance_sheet') {
+    conditions.push(eq(documents.reportType, 'balance_sheet'))
+  } else if (reportType === 'other') {
+    conditions.push(ne(documents.reportType, 'balance_sheet'))
+  }
+
   const whereClause = and(...conditions)
 
   // Ordenação
@@ -109,13 +116,31 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     }
   })()
 
-  const [rows, [{ total }], [totals]] = await Promise.all([
-    db.select().from(transactions).where(whereClause).orderBy(...orderBy).limit(PAGE_SIZE).offset(offset),
-    db.select({ total: count() }).from(transactions).where(whereClause),
-    db.select({
+  const baseQuery = db
+    .select({
+      ...getTableColumns(transactions),
+      documentReportType: documents.reportType,
+    })
+    .from(transactions)
+    .leftJoin(documents, eq(transactions.documentId, documents.id))
+
+  const countQuery = db
+    .select({ total: count() })
+    .from(transactions)
+    .leftJoin(documents, eq(transactions.documentId, documents.id))
+
+  const totalsQuery = db
+    .select({
       inflow: sql<string>`COALESCE(SUM(CASE WHEN ${transactions.direction} = 'inflow' THEN ${transactions.amount}::numeric ELSE 0 END), 0)`,
       outflow: sql<string>`COALESCE(SUM(CASE WHEN ${transactions.direction} = 'outflow' THEN ${transactions.amount}::numeric ELSE 0 END), 0)`,
-    }).from(transactions).where(whereClause),
+    })
+    .from(transactions)
+    .leftJoin(documents, eq(transactions.documentId, documents.id))
+
+  const [rows, [{ total }], [totals]] = await Promise.all([
+    baseQuery.where(whereClause).orderBy(...orderBy).limit(PAGE_SIZE).offset(offset),
+    countQuery.where(whereClause),
+    totalsQuery.where(whereClause),
   ])
 
   return {

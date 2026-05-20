@@ -1,11 +1,12 @@
 import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
-import { transactions } from '@/db/schema'
+import { transactions, documents } from '@/db/schema'
 import { eq, and, inArray } from 'drizzle-orm'
 import {
   loadOrgContext,
   categorizeTransaction,
   logCategorizationEvent,
+  domainFromReportType,
 } from '@/lib/categorizer'
 
 export const categorizeTransactions = inngest.createFunction(
@@ -34,6 +35,7 @@ export const categorizeTransactions = inngest.createFunction(
           amount: transactions.amount,
           direction: transactions.direction,
           metadata: transactions.metadata,
+          documentId: transactions.documentId,
         })
         .from(transactions)
         .where(and(
@@ -41,16 +43,28 @@ export const categorizeTransactions = inngest.createFunction(
           inArray(transactions.id, transactionIds),
         ))
 
+      // Deriva o domínio (bp/dre) a partir do report_type do documento de cada transação.
+      const docIds = Array.from(new Set(txList.map(tx => tx.documentId).filter((id): id is string => id !== null)))
+      const docRows = docIds.length > 0
+        ? await db
+          .select({ id: documents.id, reportType: documents.reportType })
+          .from(documents)
+          .where(inArray(documents.id, docIds))
+        : []
+      const docDomainMap = new Map(docRows.map(d => [d.id, domainFromReportType(d.reportType)]))
+
       let categorized = 0
       let needsReview = 0
       let skipped = 0
       const agentEventPromises: Promise<void>[] = []
 
       for (const tx of txList) {
+        const documentDomain = tx.documentId ? (docDomainMap.get(tx.documentId) ?? 'dre') : 'dre'
+
         const { result, llmCost } = await categorizeTransaction({
           ...tx,
           metadata: tx.metadata as Record<string, unknown> | null,
-        }, ctx)
+        }, ctx, documentDomain)
 
         const hasAnyDimension = result && (
           result.categoryId || result.costCenterId ||

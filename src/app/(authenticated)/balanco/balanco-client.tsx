@@ -1,110 +1,101 @@
 'use client'
 
-import { useState, useTransition, useMemo } from 'react'
+import { useState, useTransition, useMemo, useEffect, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Scale, UploadCloud } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
-import type { BpData } from '@/server/balance-sheet'
-import { type BpType, BP_TYPE_LABELS } from '@/lib/bp-types'
+import type { BpAllData, BpPai } from '@/server/balance-sheet'
 
-function fmt(value: number) {
-  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const LABEL_W = 260
+const COL_W = 96
+
+function fmtBRL(v: number): string {
+  if (v === 0) return '—'
+  return v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
 
-function fmtDate(d: string) {
-  const [y, m, day] = d.split('-')
-  return `${day}/${m}/${y}`
+function monthLabel(date: string): string {
+  const [y, m] = date.split('-')
+  const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+  return `${monthNames[parseInt(m, 10) - 1]}/${y.slice(2)}`
 }
 
-const BP_GROUPS: { label: string; types: BpType[]; section: 'ativo' | 'passivo_pl' }[] = [
-  { label: 'Ativo Circulante', types: ['ativo_circulante'], section: 'ativo' },
-  { label: 'Ativo Não-Circulante', types: ['ativo_nao_circulante'], section: 'ativo' },
-  { label: 'Passivo Circulante', types: ['passivo_circulante'], section: 'passivo_pl' },
-  { label: 'Passivo Não-Circulante', types: ['passivo_nao_circulante'], section: 'passivo_pl' },
-  { label: 'Patrimônio Líquido', types: ['patrimonio_liquido'], section: 'passivo_pl' },
-]
+function getLeafIds(pai: BpPai): string[] {
+  return pai.filhos.length > 0 ? pai.filhos.map(f => f.id) : [pai.id]
+}
+
+function sumLeaves(leafIds: string[], date: string, amounts: BpAllData['amounts']): number {
+  const byDate = amounts[date] ?? {}
+  return leafIds.reduce((acc, id) => acc + (byDate[id] ?? 0), 0)
+}
 
 interface Props {
-  initialData: BpData | null
-  initialDate: string
+  data: BpAllData
+  defaultFrom: string
+  defaultTo: string
+  hasUrlParams: boolean
 }
 
-export function BalancoClient({ initialData, initialDate }: Props) {
+export function BalancoClient({ data, defaultFrom, defaultTo, hasUrlParams }: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  const [date, setDate] = useState(initialDate)
-  const [data, setData] = useState<BpData | null>(initialData)
-  const [notFound, setNotFound] = useState(initialData === null && !!initialDate)
+  const [from, setFrom] = useState(defaultFrom)
+  const [to, setTo] = useState(defaultTo)
+
+  useEffect(() => {
+    if (hasUrlParams) return
+    try {
+      const saved = localStorage.getItem('lure:balanco:filters')
+      if (!saved) return
+      const { from: f, to: t } = JSON.parse(saved) as { from?: string; to?: string }
+      if (!f || !t) return
+      if (f === defaultFrom && t === defaultTo) return
+      startTransition(() => {
+        router.push(`/balanco?from=${f}&to=${t}`)
+      })
+    } catch {}
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleFilter() {
+    try {
+      localStorage.setItem('lure:balanco:filters', JSON.stringify({ from, to }))
+    } catch {}
     startTransition(() => {
       const params = new URLSearchParams()
-      if (date) params.set('date', date)
+      if (from) params.set('from', from)
+      if (to) params.set('to', to)
       router.push(`/balanco?${params.toString()}`)
     })
   }
 
-  const totals = useMemo(() => {
-    if (!data) return null
-    const sum = (types: BpType[]) =>
-      data.rows.filter(r => types.includes(r.parentType)).reduce((acc, r) => acc + r.total, 0)
-
-    const ativoCirc = sum(['ativo_circulante'])
-    const ativoNaoCirc = sum(['ativo_nao_circulante'])
-    const passivoCirc = sum(['passivo_circulante'])
-    const passivoNaoCirc = sum(['passivo_nao_circulante'])
-    const pl = sum(['patrimonio_liquido'])
-
-    const totalAtivo = ativoCirc + ativoNaoCirc
-    const totalPassivo = passivoCirc + passivoNaoCirc
-    const totalPassivoMaisPl = totalPassivo + pl
-
-    return { ativoCirc, ativoNaoCirc, passivoCirc, passivoNaoCirc, pl, totalAtivo, totalPassivo, totalPassivoMaisPl }
+  // Totais das seções ATIVO e PASSIVO por data
+  const sectionTotals = useMemo(() => {
+    return data.sections.map(section => {
+      const allLeafIds = section.groups.flatMap(g => g.pais.flatMap(p => getLeafIds(p)))
+      return data.dates.map(date => sumLeaves(allLeafIds, date, data.amounts))
+    })
   }, [data])
 
-  return (
-    <div className="space-y-6">
-      {/* Filtro de data */}
-      <div className="flex items-end gap-3">
-        <div>
-          <Label htmlFor="bp-date" className="text-xs mb-1 block">Data de referência</Label>
-          <Input
-            id="bp-date"
-            type="date"
-            value={date}
-            onChange={e => setDate(e.target.value)}
-            className="w-44"
-          />
-        </div>
-        <Button size="sm" onClick={handleFilter} disabled={isPending || !date}>
-          {isPending ? 'Carregando...' : 'Ver BP'}
-        </Button>
-      </div>
+  // Patrimônio Líquido = ATIVO − PASSIVO (calculado; seções [0] e [1] respectivamente)
+  const plByDate = useMemo(() => {
+    const ativo   = sectionTotals[0] ?? []
+    const passivo = sectionTotals[1] ?? []
+    return data.dates.map((_, i) => (ativo[i] ?? 0) - (passivo[i] ?? 0))
+  }, [sectionTotals, data.dates])
 
-      {!date && (
+  if (data.dates.length === 0) {
+    return (
+      <div className="space-y-4">
+        <FilterBar from={from} to={to} onFromChange={setFrom} onToChange={setTo} onFilter={handleFilter} isPending={isPending} />
         <div className="flex flex-col items-center py-16 px-6 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
             <Scale className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />
           </div>
-          <h3 className="text-base font-semibold text-foreground">Selecione uma data de referência</h3>
+          <h3 className="text-base font-semibold text-foreground">Nenhum Balanço Patrimonial importado</h3>
           <p className="mt-1 text-sm text-muted-foreground max-w-xs">
-            Escolha a data do snapshot de BP que deseja visualizar acima.
-          </p>
-        </div>
-      )}
-
-      {date && notFound && !isPending && (
-        <div className="flex flex-col items-center py-16 px-6 text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
-            <Scale className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />
-          </div>
-          <h3 className="text-base font-semibold text-foreground">Nenhum BP encontrado</h3>
-          <p className="mt-1 text-sm text-muted-foreground max-w-xs">
-            Não há nenhum relatório de Balanço Patrimonial importado com data de referência até {fmtDate(date)}.
+            Importe um relatório de BP com data de referência para visualizar o balanço aqui.
           </p>
           <Button asChild size="sm" variant="outline" className="mt-4">
             <Link href="/upload">
@@ -113,137 +104,186 @@ export function BalancoClient({ initialData, initialDate }: Props) {
             </Link>
           </Button>
         </div>
-      )}
+      </div>
+    )
+  }
 
-      {data && totals && (
-        <div className="space-y-1 text-sm text-muted-foreground">
-          <p>Snapshot de <span className="font-medium text-foreground">{fmtDate(data.referenceDate)}</span></p>
-        </div>
-      )}
+  return (
+    <div className="space-y-4">
+      <FilterBar from={from} to={to} onFromChange={setFrom} onToChange={setTo} onFilter={handleFilter} isPending={isPending} />
 
-      {data && totals && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* ATIVO */}
-          <BpSection
-            title="ATIVO"
-            groups={BP_GROUPS.filter(g => g.section === 'ativo')}
-            rows={data.rows}
-            total={totals.totalAtivo}
-            totalLabel="Total Ativo"
-          />
+      <div className="border rounded-lg overflow-x-auto">
+        <table
+          className="text-sm border-collapse"
+          style={{ width: LABEL_W + COL_W * data.dates.length + 'px', minWidth: '100%' }}
+        >
+          <colgroup>
+            <col style={{ width: LABEL_W }} />
+            {data.dates.map(d => <col key={d} style={{ width: COL_W }} />)}
+          </colgroup>
 
-          {/* PASSIVO + PL */}
-          <BpSection
-            title="PASSIVO E PATRIMÔNIO LÍQUIDO"
-            groups={BP_GROUPS.filter(g => g.section === 'passivo_pl')}
-            rows={data.rows}
-            total={totals.totalPassivoMaisPl}
-            totalLabel="Total Passivo + PL"
-          />
-        </div>
-      )}
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-slate-800 text-white">
+              <th className="px-4 py-2.5 text-left text-xs font-semibold" style={{ width: LABEL_W }}>
+                Conta
+              </th>
+              {data.dates.map(d => (
+                <th key={d} className="px-2 py-2.5 text-right text-xs font-semibold tabular-nums">
+                  {monthLabel(d)}
+                </th>
+              ))}
+            </tr>
+          </thead>
 
-      {data && totals && (
-        <BalanceCheck totalAtivo={totals.totalAtivo} totalPassivoMaisPl={totals.totalPassivoMaisPl} />
-      )}
+          <tbody>
+            {data.sections.map((section, sIdx) => {
+              const isPL = section.label === 'PATRIMÔNIO LÍQUIDO'
+              // Seção PL: usa valores calculados; demais seções: soma das folhas
+              const sectionValues = isPL ? plByDate : sectionTotals[sIdx]
+
+              return (
+                <Fragment key={section.label}>
+                  {/* Separador entre seções */}
+                  {sIdx > 0 && (
+                    <tr>
+                      <td colSpan={data.dates.length + 1} className="h-2 bg-muted/20" />
+                    </tr>
+                  )}
+
+                  {/* Linha de seção */}
+                  <tr className="bg-slate-800 text-white">
+                    <td className="px-4 py-2 text-xs font-bold tracking-wide uppercase sticky left-0 bg-slate-800">
+                      {section.label}
+                    </td>
+                    {sectionValues.map((val, dIdx) => (
+                      <td
+                        key={data.dates[dIdx]}
+                        className={cn(
+                          'px-2 py-2 text-right text-xs font-bold tabular-nums',
+                          val === 0 && 'text-slate-400',
+                          isPL && val < 0 && 'text-rose-400',
+                        )}
+                      >
+                        {fmtBRL(val)}
+                      </td>
+                    ))}
+                  </tr>
+
+                  {/* ATIVO e PASSIVO: grupos, pais e filhos. PL exibe só o total calculado. */}
+                  {!isPL && section.groups.map(group => {
+                    const groupLeafIds = group.pais.flatMap(p => getLeafIds(p))
+                    const groupTotals = data.dates.map(d => sumLeaves(groupLeafIds, d, data.amounts))
+
+                    return (
+                      <Fragment key={group.bpType}>
+                        {/* Linha de grupo */}
+                        <tr className="bg-slate-100/70 border-b border-slate-200">
+                          <td className="px-4 py-1.5 text-xs font-semibold text-foreground sticky left-0 bg-slate-100/70">
+                            {group.label}
+                          </td>
+                          {groupTotals.map((total, dIdx) => (
+                            <td key={data.dates[dIdx]} className={cn('px-2 py-1.5 text-right text-xs font-semibold tabular-nums', total === 0 && 'text-muted-foreground/40')}>
+                              {fmtBRL(total)}
+                            </td>
+                          ))}
+                        </tr>
+
+                        {group.pais.length === 0 && (
+                          <tr>
+                            <td colSpan={data.dates.length + 1} className="px-10 py-1.5 text-xs text-muted-foreground italic">
+                              Sem categorias cadastradas
+                            </td>
+                          </tr>
+                        )}
+
+                        {group.pais.map(pai => {
+                          const paiLeafIds = getLeafIds(pai)
+                          const paiTotals = data.dates.map(d => sumLeaves(paiLeafIds, d, data.amounts))
+                          const hasFilhos = pai.filhos.length > 0
+
+                          return (
+                            <Fragment key={pai.id}>
+                              <tr className="border-b border-border/40 hover:bg-muted/10">
+                                <td className="py-1.5 text-xs font-medium text-foreground sticky left-0 bg-background" style={{ paddingLeft: 40 }}>
+                                  {pai.code && <span className="text-muted-foreground mr-1.5">{pai.code}</span>}
+                                  {pai.name}
+                                </td>
+                                {paiTotals.map((total, dIdx) => (
+                                  <td key={data.dates[dIdx]} className={cn('px-2 py-1.5 text-right text-xs font-medium tabular-nums', total === 0 && 'text-muted-foreground/40')}>
+                                    {fmtBRL(total)}
+                                  </td>
+                                ))}
+                              </tr>
+
+                              {hasFilhos && pai.filhos.map(filho => {
+                                const filhoTotals = data.dates.map(d => (data.amounts[d] ?? {})[filho.id] ?? 0)
+                                return (
+                                  <tr key={filho.id} className="border-b border-border/20 hover:bg-muted/10">
+                                    <td className="py-1 text-xs text-muted-foreground sticky left-0 bg-background" style={{ paddingLeft: 56 }}>
+                                      {filho.code && <span className="mr-1.5">{filho.code}</span>}
+                                      {filho.name}
+                                    </td>
+                                    {filhoTotals.map((total, dIdx) => (
+                                      <td key={data.dates[dIdx]} className={cn('px-2 py-1 text-right text-xs tabular-nums', total === 0 && 'text-muted-foreground/30')}>
+                                        {fmtBRL(total)}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                )
+                              })}
+                            </Fragment>
+                          )
+                        })}
+                      </Fragment>
+                    )
+                  })}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        * Patrimônio Líquido calculado como Ativo − Passivo.
+      </p>
     </div>
   )
 }
 
-function BpSection({
-  title,
-  groups,
-  rows,
-  total,
-  totalLabel,
+function FilterBar({
+  from, to, onFromChange, onToChange, onFilter, isPending,
 }: {
-  title: string
-  groups: typeof BP_GROUPS
-  rows: BpData['rows']
-  total: number
-  totalLabel: string
+  from: string
+  to: string
+  onFromChange: (v: string) => void
+  onToChange: (v: string) => void
+  onFilter: () => void
+  isPending: boolean
 }) {
   return (
-    <div className="rounded-lg border overflow-hidden">
-      <div className="px-4 py-2.5 bg-slate-800 text-white">
-        <span className="text-xs font-semibold tracking-wide uppercase">{title}</span>
+    <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-1.5">
+        <label className="text-xs text-muted-foreground">De</label>
+        <input
+          type="month"
+          value={from}
+          onChange={e => onFromChange(e.target.value)}
+          className="h-8 rounded-md border border-input px-2 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+        />
       </div>
-      <div className="divide-y">
-        {groups.map(group => {
-          const groupRows = rows.filter(r => group.types.includes(r.parentType))
-          const groupTotal = groupRows.reduce((acc, r) => acc + r.total, 0)
-
-          const byParent = groupRows.reduce<Record<string, { parentName: string; parentCode: string | null; rows: typeof rows }>>((acc, r) => {
-            if (!acc[r.parentId]) acc[r.parentId] = { parentName: r.parentName, parentCode: r.parentCode, rows: [] }
-            acc[r.parentId].rows.push(r)
-            return acc
-          }, {})
-
-          return (
-            <div key={group.label}>
-              {/* Cabeçalho do grupo */}
-              <div className="flex items-center justify-between px-4 py-2 bg-muted/40">
-                <span className="text-xs font-semibold text-foreground">{BP_TYPE_LABELS[group.types[0]]}</span>
-                <span className="text-xs font-semibold tabular-nums text-foreground">{fmt(groupTotal)}</span>
-              </div>
-
-              {Object.keys(byParent).length === 0 && (
-                <div className="px-4 py-2 text-xs text-muted-foreground italic">Sem lançamentos</div>
-              )}
-
-              {/* Naturezas Pai */}
-              {Object.entries(byParent).map(([parentId, { parentName, parentCode, rows: childRows }]) => {
-                const parentTotal = childRows.reduce((acc, r) => acc + r.total, 0)
-                return (
-                  <div key={parentId}>
-                    <div className="flex items-center justify-between px-4 py-1.5 bg-muted/20">
-                      <span className="text-xs font-medium text-foreground">
-                        {parentCode && <span className="text-muted-foreground mr-1.5">{parentCode}</span>}
-                        {parentName}
-                      </span>
-                      <span className="text-xs font-medium tabular-nums">{fmt(parentTotal)}</span>
-                    </div>
-                    {/* Naturezas Filho */}
-                    {childRows.map(r => (
-                      <div key={r.childId} className="flex items-center justify-between px-6 py-1.5 hover:bg-muted/10">
-                        <span className="text-xs text-muted-foreground">
-                          {r.childCode && <span className="mr-1.5">{r.childCode}</span>}
-                          {r.childName}
-                        </span>
-                        <span className="text-xs tabular-nums">{fmt(r.total)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
-          )
-        })}
+      <div className="flex items-center gap-1.5">
+        <label className="text-xs text-muted-foreground">Até</label>
+        <input
+          type="month"
+          value={to}
+          onChange={e => onToChange(e.target.value)}
+          className="h-8 rounded-md border border-input px-2 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+        />
       </div>
-      {/* Total da seção */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800 text-white">
-        <span className="text-xs font-semibold tracking-wide uppercase">{totalLabel}</span>
-        <span className="text-sm font-bold tabular-nums">{fmt(total)}</span>
-      </div>
-    </div>
-  )
-}
-
-function BalanceCheck({ totalAtivo, totalPassivoMaisPl }: { totalAtivo: number; totalPassivoMaisPl: number }) {
-  const diff = Math.abs(totalAtivo - totalPassivoMaisPl)
-  const balanced = diff < 0.01
-
-  return (
-    <div className={cn(
-      'flex items-center justify-between rounded-lg border px-4 py-3 text-sm',
-      balanced ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800',
-    )}>
-      <span className="font-medium">
-        {balanced ? 'Balanço conferido — Ativo = Passivo + PL' : 'Atenção: Ativo ≠ Passivo + PL'}
-      </span>
-      {!balanced && (
-        <span className="tabular-nums font-medium">Diferença: {fmt(diff)}</span>
-      )}
+      <Button size="sm" onClick={onFilter} disabled={isPending}>
+        {isPending ? 'Carregando...' : 'Filtrar'}
+      </Button>
     </div>
   )
 }

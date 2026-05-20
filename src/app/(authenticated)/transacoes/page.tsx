@@ -23,6 +23,7 @@ interface SearchParams {
   legalEntity?: string
   documentId?: string
   sort?: string
+  reportType?: string
 }
 
 interface Props {
@@ -45,6 +46,7 @@ export default async function TransacoesPage({ searchParams }: Props) {
       legalEntity: searchParams.legalEntity,
       documentId: searchParams.documentId,
       sort: searchParams.sort,
+      reportType: searchParams.reportType,
     }),
     getCategories(),
     getCostCenters(),
@@ -56,7 +58,7 @@ export default async function TransacoesPage({ searchParams }: Props) {
 
   const hasAnyFilter = !!(searchParams.q || searchParams.from || searchParams.to ||
     searchParams.direction || searchParams.category || searchParams.costCenter ||
-    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId)
+    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId || searchParams.reportType)
 
   if (txData.total === 0 && !hasAnyFilter) {
     return (

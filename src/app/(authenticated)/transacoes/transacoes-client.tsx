@@ -41,6 +41,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   erp: 'ERP',
   acquirer: 'Adquirente',
   sefaz: 'SEFAZ',
+  balance_sheet: 'Balanço',
   other: 'Arquivo',
 }
 
@@ -82,6 +83,7 @@ interface SearchParams {
   legalEntity?: string
   documentId?: string
   sort?: string
+  reportType?: string
 }
 
 interface DimensionOptions {
@@ -91,8 +93,10 @@ interface DimensionOptions {
   legalEntities: LegalEntity[]
 }
 
+type TxRow = Transaction & { documentReportType?: string | null }
+
 interface Props {
-  data: { rows: Transaction[]; total: number; pages: number; page: number; totals: { inflow: string; outflow: string } }
+  data: { rows: TxRow[]; total: number; pages: number; page: number; totals: { inflow: string; outflow: string } }
   options: DimensionOptions
   documents: DocumentOption[]
   searchParams: SearchParams
@@ -694,6 +698,35 @@ function FilterBar({ searchParams, options, documents, onUpdate, onClear, hasFil
           options={leOptions}
           onUpdate={(v) => onUpdate({ legalEntity: v, page: undefined })}
         />
+
+        {/* Tipo de relatório */}
+        <div className="relative">
+          <Select
+            value={searchParams.reportType ?? '__all__'}
+            onValueChange={(v) => onUpdate({ reportType: v === '__all__' ? undefined : v, page: undefined })}
+          >
+            <SelectTrigger className={cn(
+              'h-8 text-xs w-44',
+              searchParams.reportType && 'border-primary/50 bg-primary/5 pr-7',
+            )}>
+              <SelectValue placeholder="Tipo de relatório" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__" className="text-xs">Todos os tipos</SelectItem>
+              <SelectItem value="other" className="text-xs">DRE / Extrato</SelectItem>
+              <SelectItem value="balance_sheet" className="text-xs">Balanço Patrimonial</SelectItem>
+            </SelectContent>
+          </Select>
+          {searchParams.reportType && (
+            <button
+              onClick={() => onUpdate({ reportType: undefined, page: undefined })}
+              className="absolute right-7 top-1/2 -translate-y-1/2 h-4 w-4 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted z-10"
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          )}
+        </div>
+
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={onClear} className="h-8 text-xs gap-1.5 shrink-0">
             <X className="h-3.5 w-3.5" />
@@ -854,7 +887,7 @@ function SortHeader({
 
 const LS_FILTERS_KEY = 'lure:transacoes:filters'
 
-const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'documentId', 'sort'] as const
+const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'documentId', 'sort', 'reportType'] as const
 
 function saveFiltersToStorage(sp: SearchParams) {
   try {
@@ -876,7 +909,7 @@ function loadFiltersFromStorage(): Record<string, string> {
 
 export default function TransacoesClient({ data, options, documents, searchParams }: Props) {
   const router = useRouter()
-  const [localRows, setLocalRows] = useState<Transaction[]>(data.rows)
+  const [localRows, setLocalRows] = useState<TxRow[]>(data.rows)
   const serverRowsRef = useRef(data.rows)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [classifyingId, setClassifyingId] = useState<string | null>(null)
@@ -896,7 +929,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
   useEffect(() => {
     const hasUrlFilters = !!(searchParams.q || searchParams.from || searchParams.to ||
       searchParams.direction || searchParams.category || searchParams.costCenter ||
-      searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId || searchParams.sort)
+      searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId || searchParams.sort || searchParams.reportType)
     if (hasUrlFilters) return
     const saved = loadFiltersFromStorage()
     if (Object.keys(saved).length === 0) return
@@ -909,7 +942,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
 
   const hasFilters = !!(searchParams.q || searchParams.from || searchParams.to ||
     searchParams.direction || searchParams.category || searchParams.costCenter ||
-    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId)
+    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId || searchParams.reportType)
 
   function updateFilters(updates: Record<string, string | undefined>) {
     const params = new URLSearchParams()
@@ -925,6 +958,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
       ...(searchParams.documentId && { documentId: searchParams.documentId }),
       ...(searchParams.page && { page: searchParams.page }),
       ...(searchParams.sort && { sort: searchParams.sort }),
+      ...(searchParams.reportType && { reportType: searchParams.reportType }),
     }
     Object.assign(current, Object.fromEntries(
       Object.entries(updates).filter(([, v]) => v !== undefined) as [string, string][],
@@ -1103,12 +1137,13 @@ export default function TransacoesClient({ data, options, documents, searchParam
         />
       ) : (
         <div className="border rounded-lg overflow-x-auto">
-          <table className="w-full text-sm table-fixed min-w-[1150px]">
+          <table className="w-full text-sm table-fixed min-w-[1202px]">
             <colgroup>
               <col className="w-10" />
               <col className="w-[80px]" />
               <col className="w-[220px]" />
               <col className="w-28" />
+              <col className="w-[52px]" />
               <col className="w-52" />
               <col className="w-44" />
               <col className="w-36" />
@@ -1144,6 +1179,7 @@ export default function TransacoesClient({ data, options, documents, searchParam
                     className="justify-end"
                   />
                 </th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Tipo</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Categoria</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">C. custo</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Un. negócio</th>
@@ -1183,6 +1219,13 @@ export default function TransacoesClient({ data, options, documents, searchParam
                       )}>
                         {tx.direction === 'outflow' && '−'}{formatBRL(tx.amount)}
                       </span>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      {tx.documentReportType === 'balance_sheet' ? (
+                        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-sky-100 text-sky-700">BP</span>
+                      ) : (
+                        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600">DRE</span>
+                      )}
                     </td>
                     <td className="px-1.5 py-1">
                       <CategoryCellCombobox
