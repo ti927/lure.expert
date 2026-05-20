@@ -8,7 +8,7 @@ import {
   legalEntities,
   agentEvents,
 } from '@/db/schema'
-import { eq, and, isNotNull, ne, ilike, desc, inArray } from 'drizzle-orm'
+import { eq, and, ne, ilike, desc, inArray } from 'drizzle-orm'
 import { anthropic } from '@/lib/anthropic'
 import { BP_TYPES } from '@/lib/bp-types'
 
