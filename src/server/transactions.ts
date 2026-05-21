@@ -197,6 +197,8 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     const autoLogo = typeof meta.institutionImageUrl === 'string' ? meta.institutionImageUrl : null
     const customLogo = r.dataSourceId ? signedMap.get(r.dataSourceId) ?? null : null
     const badge = (meta.customBadge as { text?: string } | undefined)?.text || null
+    // dataSourceMetadata é só usado para derivar logo/badge — não vaza no payload
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { dataSourceMetadata: _meta, ...rest } = r
     return {
       ...rest,

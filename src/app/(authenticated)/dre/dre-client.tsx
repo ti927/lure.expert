@@ -74,13 +74,6 @@ type DrillDownState = {
   dateRange?: { from: string; to: string }
 }
 
-type ComboOption = {
-  id: string
-  name: string
-  code?: string | null
-  group?: string
-}
-
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
 const LAYOUT: LayoutSection[] = [
