@@ -1,6 +1,6 @@
 import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
-import { transactions, documents } from '@/db/schema'
+import { transactions, documents, organizations } from '@/db/schema'
 import { eq, and, inArray } from 'drizzle-orm'
 import {
   loadOrgContext,
@@ -17,12 +17,25 @@ export const categorizeTransactions = inngest.createFunction(
     concurrency: { limit: 1, key: 'event.data.organizationId' },
   },
   async ({ event, step }) => {
-    const { transactionIds, organizationId } = event.data as {
+    const { transactionIds, organizationId, forceRun } = event.data as {
       transactionIds: string[]
       organizationId: string
+      forceRun?: boolean
     }
 
     if (transactionIds.length === 0) return { categorized: 0, needsReview: 0, skipped: 0 }
+
+    if (!forceRun) {
+      const [org] = await db
+        .select({ settings: organizations.settings })
+        .from(organizations)
+        .where(eq(organizations.id, organizationId))
+        .limit(1)
+      const s = (org?.settings ?? {}) as Record<string, unknown>
+      if (s.autoCategorize === false) {
+        return { categorized: 0, needsReview: 0, skipped: transactionIds.length, reason: 'disabled' }
+      }
+    }
 
     const results = await step.run('categorize-all', async () => {
       const ctx = await loadOrgContext(organizationId)

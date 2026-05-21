@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
-import { classifyTransaction, batchClassifyTransactions, deleteTransactions } from '@/server/transactions'
+import { classifyTransaction, batchClassifyTransactions, deleteTransactions, triggerCategorization } from '@/server/transactions'
 import type { DataSourceOption } from '@/server/connections'
 import type { Transaction } from '@/db/schema/transactions'
 import type { Category } from '@/db/schema/categories'
@@ -670,6 +670,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
   const [isBatching, setIsBatching] = useState(false)
   const [deleteTargetIds, setDeleteTargetIds] = useState<string[]>([])
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isCategorizing, setIsCategorizing] = useState(false)
   const [fromLocal, setFromLocal] = useState(searchParams.from ?? '')
   const [toLocal, setToLocal] = useState(searchParams.to ?? '')
 
@@ -805,6 +806,15 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
   const outflow = Number(data.totals.outflow)
   const net     = inflow - outflow
 
+  async function handleTriggerCategorization() {
+    setIsCategorizing(true)
+    const result = await triggerCategorization()
+    setIsCategorizing(false)
+    if ('error' in result) { toast.error(result.error); return }
+    if (!result.triggered) { toast.info('Não há lançamentos sem categoria.'); return }
+    toast.success(`Categorizando ${result.count} lançamento${result.count !== 1 ? 's' : ''}...`)
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
@@ -818,6 +828,16 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTriggerCategorization}
+            disabled={isCategorizing}
+            className="gap-2"
+          >
+            <Bot className="h-4 w-4" />
+            {isCategorizing ? 'Iniciando...' : 'Categorizar agora'}
+          </Button>
           {reviewCount > 0 && (
             <Link
               href="/transacoes/revisao"

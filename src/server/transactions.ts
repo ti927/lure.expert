@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, transactions, categorizationRules, categories, documents, costCenters, businessUnits, legalEntities } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
+import { inngest } from '@/lib/inngest'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -336,4 +337,30 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
 
   revalidatePath('/transacoes')
   return { success: true, updated: txList.length }
+}
+
+export async function triggerCategorization(): Promise<{ triggered: boolean; count: number } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const uncategorized = await db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(
+      eq(transactions.organizationId, organizationId),
+      ne(transactions.status, 'pending'),
+      isNull(transactions.categoryId),
+    ))
+
+  if (uncategorized.length === 0) return { triggered: false, count: 0 }
+
+  try {
+    await inngest.send({
+      name: 'transaction/batch-inserted',
+      data: { transactionIds: uncategorized.map(t => t.id), organizationId, forceRun: true },
+    })
+  } catch {
+    return { error: 'Não foi possível iniciar a categorização. Verifique se o Inngest está rodando.' }
+  }
+
+  return { triggered: true, count: uncategorized.length }
 }

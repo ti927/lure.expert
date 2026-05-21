@@ -9,6 +9,8 @@ import { memberships, organizations } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrgForm } from '@/components/settings/org-form'
+import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
+import { getAutoCategorize } from '@/server/settings'
 import { Tags, Building2, Briefcase, Landmark, ChevronRight } from 'lucide-react'
 
 const NAV_SECTIONS = [
@@ -43,12 +45,15 @@ export default async function ConfiguracoesPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [result] = await db
-    .select({ org: organizations })
-    .from(memberships)
-    .innerJoin(organizations, eq(memberships.organizationId, organizations.id))
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
+  const [[result], autoCategorize] = await Promise.all([
+    db
+      .select({ org: organizations })
+      .from(memberships)
+      .innerJoin(organizations, eq(memberships.organizationId, organizations.id))
+      .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
+      .limit(1),
+    getAutoCategorize(),
+  ])
 
   if (!result) redirect('/onboarding')
 
@@ -71,6 +76,19 @@ export default async function ConfiguracoesPage() {
         </CardHeader>
         <CardContent>
           <OrgForm org={org} />
+        </CardContent>
+      </Card>
+
+      {/* Automação */}
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base">Automação</CardTitle>
+          <CardDescription>
+            Controle como o expert processa os lançamentos ao importar ou sincronizar.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AutoCategorizeToggle initialValue={autoCategorize} />
         </CardContent>
       </Card>
 
