@@ -28,6 +28,16 @@ export function getPluggyClient(): PluggyClient {
 export const PLUGGY_ENVIRONMENT =
   (process.env.PLUGGY_ENVIRONMENT as 'sandbox' | 'production' | undefined) ?? 'sandbox'
 
+// Conectores genéricos do Pluggy (MeuPluggy, Sandbox) onde connector.isSandbox
+// vem inconsistente. Quando o conector tem um desses nomes, forçamos o badge
+// sandbox no UI. Não bloqueamos esses conectores — no plano trial da Pluggy,
+// MeuPluggy é o único que funciona em sandbox.
+const GENERIC_CONNECTOR_NAMES = ['MeuPluggy', 'Sandbox']
+
+export function isGenericPluggyConnector(name: string): boolean {
+  return GENERIC_CONNECTOR_NAMES.includes(name)
+}
+
 /**
  * Gera um connect_token de curta duração para o widget no browser.
  * Pode ser amarrado a um itemId existente (modo "atualizar credenciais")

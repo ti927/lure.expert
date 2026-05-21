@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useTransition, useMemo } from 'react'
+import { useState, useTransition, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
 import {
   Landmark, Plus, RefreshCw, Loader2, AlertCircle, GitCompare,
-  Trash2, Check, RotateCcw, ChevronLeft, ChevronRight,
+  Trash2, Check, RotateCcw, ChevronLeft, ChevronRight, Pencil,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -27,6 +28,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import {
   generateConnectToken,
@@ -35,25 +44,30 @@ import {
   confirmSelectedTransactions,
   disconnectBank,
   triggerManualSync,
+  updateConnectionCustomization,
+  setConnectionLogoPath,
+  removeConnectionLogo,
 } from '@/server/connections'
-import type { DataSource } from '@/db/schema'
-import type { PendingSource } from '@/server/connections'
+import { deleteTransactions } from '@/server/transactions'
+import { createClient } from '@/lib/supabase/client'
+import type { PendingSource, OrgConnection } from '@/server/connections'
 
 const PluggyConnect = dynamic(
   () => import('react-pluggy-connect').then(m => m.PluggyConnect),
   { ssr: false },
 )
 
-const PAGE_SIZE = 25
+const PAGE_SIZE = 500
 
 interface ContasClientProps {
-  connections: DataSource[]
+  connections: OrgConnection[]
   includeSandbox: boolean
   reconciliationCount: number
   pendingSources: PendingSource[]
+  orgId: string
 }
 
-export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources }: ContasClientProps) {
+export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources, orgId }: ContasClientProps) {
   const router = useRouter()
   const [connectToken, setConnectToken] = useState<string | null>(null)
   const [isWidgetOpen, setIsWidgetOpen] = useState(false)
@@ -88,9 +102,13 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
 
   async function handleSuccess(data: { item: { id: string } }) {
     try {
-      await registerPluggyItem(data.item.id)
-      toast.success('Banco conectado! Buscando extratos, pode levar alguns instantes.')
-      router.refresh()
+      const result = await registerPluggyItem(data.item.id)
+      if ('error' in result) {
+        toast.error(result.error)
+      } else {
+        toast.success('Conta conectada. Clique no ícone de sincronizar para escolher a data inicial dos extratos.')
+        router.refresh()
+      }
     } catch {
       toast.error('Banco autenticado, mas não foi possível salvar a conexão. Tente novamente.')
     } finally {
@@ -196,6 +214,7 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
                 <ConnectionCard
                   key={conn.id}
                   connection={conn}
+                  orgId={orgId}
                   onReauth={() => handleConnect(conn.externalItemId ?? undefined)}
                   isReauthing={isPending && updateItemId === conn.externalItemId}
                   isSyncing={syncingId === conn.id}
@@ -238,18 +257,24 @@ type ConnectionMeta = {
   isSandbox?: boolean
   executionStatus?: string
   lastTransactionFetchedAt?: string
-  accounts?: { id: string; name: string; type: string; subtype: string; number: string }[]
+  accounts?: { id: string; name: string; marketingName: string | null; type: string; subtype: string; number: string }[]
+  customLabel?: string
+  customBadge?: { text: string }
+  customLogoPath?: string
+  awaitingFirstSync?: boolean
 }
 
 function ConnectionCard({
   connection,
+  orgId,
   onReauth,
   isReauthing,
   isSyncing,
   onSync,
   onDisconnect,
 }: {
-  connection: DataSource
+  connection: OrgConnection
+  orgId: string
   onReauth: () => void
   isReauthing: boolean
   isSyncing: boolean
@@ -258,6 +283,7 @@ function ConnectionCard({
 }) {
   const [isDisconnecting, startDisconnect] = useTransition()
   const [syncOpen, setSyncOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
   const meta = (connection.metadata ?? {}) as ConnectionMeta
   const [syncFromDate, setSyncFromDate] = useState(() => {
     if (meta.lastTransactionFetchedAt) {
@@ -271,6 +297,17 @@ function ConnectionCard({
   const syncedAt = connection.lastSyncAt
     ? format(new Date(connection.lastSyncAt), "dd/MM/yy 'às' HH:mm", { locale: ptBR })
     : null
+  const firstAcc = meta.accounts?.[0]
+  const bankName =
+    firstAcc?.marketingName?.trim()
+    || firstAcc?.name?.trim()
+    || meta.institutionName
+    || connection.name
+  const displayLabel = meta.customLabel?.trim() || bankName
+  const displayBadge: { text: string; tone: 'sandbox' | 'custom' } | null =
+    meta.customBadge?.text
+      ? { text: meta.customBadge.text, tone: 'custom' }
+      : meta.isSandbox ? { text: 'sandbox', tone: 'sandbox' } : null
   const accountSummary = (meta.accounts ?? [])
     .map(a => {
       const label = SUBTYPE_LABEL[a.subtype] ?? a.name
@@ -294,11 +331,11 @@ function ConnectionCard({
   return (
     <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
       <div className="flex items-center gap-3">
-        {meta.institutionImageUrl ? (
+        {(connection.customLogoUrl || meta.institutionImageUrl) ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={meta.institutionImageUrl}
-            alt={meta.institutionName ?? ''}
+            src={connection.customLogoUrl ?? meta.institutionImageUrl ?? ''}
+            alt={displayLabel}
             className="h-8 w-8 rounded object-contain"
           />
         ) : (
@@ -308,23 +345,31 @@ function ConnectionCard({
         )}
         <div>
           <div className="flex items-center gap-2">
-            <p className="text-sm font-medium">{meta.institutionName ?? connection.name}</p>
-            {meta.isSandbox && (
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 ring-1 ring-amber-200">
-                sandbox
+            <p className="text-sm font-medium">{displayLabel}</p>
+            {displayBadge && (
+              <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${
+                displayBadge.tone === 'custom'
+                  ? 'bg-slate-100 text-slate-700 ring-slate-200'
+                  : 'bg-amber-100 text-amber-700 ring-amber-200'
+              }`}>
+                {displayBadge.text}
               </span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground flex items-center gap-1">
+          <p className="text-xs flex items-center gap-1">
             {isSyncing ? (
-              <>
+              <span className="text-muted-foreground flex items-center gap-1">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 Sincronizando...
-              </>
+              </span>
+            ) : meta.awaitingFirstSync ? (
+              <span className="text-amber-700">
+                Pronto. Clique em sincronizar para escolher a data inicial.
+              </span>
             ) : syncedAt ? (
-              `Sincronizado ${syncedAt}`
+              <span className="text-muted-foreground">Sincronizado {syncedAt}</span>
             ) : (
-              'Aguardando sincronização'
+              <span className="text-muted-foreground">Aguardando sincronização</span>
             )}
           </p>
           {accountSummary && (
@@ -370,7 +415,7 @@ function ConnectionCard({
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Sincronizar {meta.institutionName ?? connection.name}</AlertDialogTitle>
+                <AlertDialogTitle>Sincronizar {displayLabel}</AlertDialogTitle>
                 <AlertDialogDescription>
                   Buscar transações a partir de qual data? Transações anteriores a essa data não serão importadas.
                 </AlertDialogDescription>
@@ -399,6 +444,29 @@ function ConnectionCard({
           </AlertDialog>
         )}
 
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground hover:text-foreground"
+          onClick={() => setEditOpen(true)}
+          title="Editar nome e badge"
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
+
+        <EditConnectionDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          dataSourceId={connection.id}
+          orgId={orgId}
+          initialLabel={meta.customLabel ?? ''}
+          initialBadge={meta.customBadge?.text ?? ''}
+          autoLabel={bankName}
+          autoBadge={meta.isSandbox ? 'sandbox' : null}
+          currentLogoUrl={connection.customLogoUrl ?? meta.institutionImageUrl ?? null}
+          hasCustomLogo={!!meta.customLogoPath}
+        />
+
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button
@@ -418,7 +486,7 @@ function ConnectionCard({
             <AlertDialogHeader>
               <AlertDialogTitle>Desconectar banco?</AlertDialogTitle>
               <AlertDialogDescription>
-                A conexão com <strong>{meta.institutionName ?? connection.name}</strong> será removida.
+                A conexão com <strong>{displayLabel}</strong> será removida.
                 Os lançamentos já confirmados serão mantidos em Transações.
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -432,6 +500,247 @@ function ConnectionCard({
         </AlertDialog>
       </div>
     </div>
+  )
+}
+
+// --- EditConnectionDialog ---
+
+const LOGO_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+const LOGO_MAX_BYTES = 500 * 1024 // 500 KB
+
+function EditConnectionDialog({
+  open,
+  onOpenChange,
+  dataSourceId,
+  orgId,
+  initialLabel,
+  initialBadge,
+  autoLabel,
+  autoBadge,
+  currentLogoUrl,
+  hasCustomLogo,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  dataSourceId: string
+  orgId: string
+  initialLabel: string
+  initialBadge: string
+  autoLabel: string
+  autoBadge: string | null
+  currentLogoUrl: string | null
+  hasCustomLogo: boolean
+}) {
+  const router = useRouter()
+  const [label, setLabel] = useState(initialLabel)
+  const [badge, setBadge] = useState(initialBadge)
+  const [isPending, startTransition] = useTransition()
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Reinicializa o estado quando o dialog abre
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      setLabel(initialLabel)
+      setBadge(initialBadge)
+    }
+    onOpenChange(next)
+  }
+
+  function persist(nextLabel: string | null, nextBadge: string | null, successMsg: string) {
+    startTransition(async () => {
+      const result = await updateConnectionCustomization(dataSourceId, {
+        customLabel: nextLabel,
+        customBadge: nextBadge,
+      })
+      if ('error' in result) {
+        toast.error(result.error)
+        return
+      }
+      toast.success(successMsg)
+      onOpenChange(false)
+      router.refresh()
+    })
+  }
+
+  function handleSave() {
+    persist(label, badge, 'Conexão atualizada.')
+  }
+
+  function handleReset() {
+    setLabel('')
+    setBadge('')
+    persist(null, null, 'Padrão restaurado.')
+  }
+
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!LOGO_ACCEPTED_TYPES.includes(file.type)) {
+      toast.error('Use PNG, JPG ou WebP.')
+      return
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      toast.error('Imagem muito grande. Limite: 500 KB.')
+      return
+    }
+
+    setIsUploadingLogo(true)
+    try {
+      const supabase = createClient()
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
+      const uuid = crypto.randomUUID()
+      const storagePath = `${orgId}/connection-logos/${dataSourceId}-${uuid}.${ext}`
+
+      const { error: storageError } = await supabase.storage
+        .from('documents')
+        .upload(storagePath, file, { contentType: file.type, upsert: false })
+
+      if (storageError) {
+        toast.error(`Erro ao enviar imagem: ${storageError.message}`)
+        return
+      }
+
+      const result = await setConnectionLogoPath(dataSourceId, storagePath)
+      if ('error' in result) {
+        // Limpa o arquivo se a server action falhou
+        await supabase.storage.from('documents').remove([storagePath])
+        toast.error(result.error)
+        return
+      }
+
+      toast.success('Logo atualizado.')
+      router.refresh()
+    } finally {
+      setIsUploadingLogo(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  function handleRemoveLogo() {
+    startTransition(async () => {
+      const result = await removeConnectionLogo(dataSourceId)
+      if ('error' in result) {
+        toast.error(result.error)
+        return
+      }
+      toast.success('Logo removido.')
+      router.refresh()
+    })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Editar conexão</DialogTitle>
+          <DialogDescription>
+            Apelido, badge e logo para identificar essa conexão. Não são sobrescritos pelas próximas sincronizações.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Logo</Label>
+            <div className="flex items-center gap-3">
+              {currentLogoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={currentLogoUrl}
+                  alt="Logo atual"
+                  className="h-12 w-12 rounded border bg-muted object-contain"
+                />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded border bg-muted">
+                  <Landmark className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={LOGO_ACCEPTED_TYPES.join(',')}
+                  className="hidden"
+                  onChange={handleLogoUpload}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploadingLogo || isPending}
+                >
+                  {isUploadingLogo ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : null}
+                  Carregar imagem
+                </Button>
+                {hasCustomLogo && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleRemoveLogo}
+                    disabled={isUploadingLogo || isPending}
+                    className="text-muted-foreground"
+                  >
+                    Remover
+                  </Button>
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">PNG, JPG ou WebP — até 500 KB.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="custom-label">Nome do banco</Label>
+            <Input
+              id="custom-label"
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder={autoLabel}
+              maxLength={80}
+              className="h-9"
+            />
+            <p className="text-xs text-muted-foreground">
+              Em branco volta ao padrão automático: <span className="font-medium">{autoLabel}</span>
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="custom-badge">Badge (opcional)</Label>
+            <Input
+              id="custom-badge"
+              value={badge}
+              onChange={e => setBadge(e.target.value)}
+              placeholder="ex: Pessoal, Empresa, Teste"
+              maxLength={20}
+              className="h-9"
+            />
+            {autoBadge && !badge.trim() && (
+              <p className="text-xs text-muted-foreground">
+                Em branco volta ao padrão automático: <span className="font-medium">{autoBadge}</span>
+              </p>
+            )}
+          </div>
+        </div>
+        <DialogFooter className="flex items-center justify-between sm:justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleReset}
+            disabled={isPending || isUploadingLogo || (!initialLabel && !initialBadge)}
+            className="text-muted-foreground"
+          >
+            Restaurar nome e badge
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending || isUploadingLogo}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSave} disabled={isPending || isUploadingLogo}>
+              {isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : null}
+              Salvar
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -544,6 +853,20 @@ function PendingExtractTab({
     })
   }
 
+  function handleDeleteSelected() {
+    const ids = Array.from(selectedIds)
+    startTransition(async () => {
+      const result = await deleteTransactions(ids)
+      if ('error' in result) {
+        toast.error(result.error)
+      } else {
+        toast.success(`${result.deleted} lançamento${result.deleted !== 1 ? 's' : ''} apagado${result.deleted !== 1 ? 's' : ''}.`)
+        setSelectedIds(new Set())
+        router.refresh()
+      }
+    })
+  }
+
   function handleConfirmAll() {
     startTransition(async () => {
       let total = 0
@@ -634,10 +957,35 @@ function PendingExtractTab({
           title="Data final"
         />
         {selectedCount > 0 ? (
-          <Button size="sm" variant="outline" onClick={handleConfirmSelected} disabled={isPending}>
-            {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
-            Confirmar {selectedCount} selecionado{selectedCount !== 1 ? 's' : ''}
-          </Button>
+          <>
+            <Button size="sm" variant="outline" onClick={handleConfirmSelected} disabled={isPending}>
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
+              Confirmar {selectedCount} selecionado{selectedCount !== 1 ? 's' : ''}
+            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button size="sm" variant="outline" disabled={isPending} className="text-destructive hover:text-destructive">
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                  Apagar {selectedCount} selecionado{selectedCount !== 1 ? 's' : ''}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Apagar {selectedCount} lançamento{selectedCount !== 1 ? 's' : ''}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Os lançamentos selecionados serão removidos permanentemente do extrato pendente.
+                    Eles podem voltar em uma sincronização futura caso ainda estejam na janela de busca do banco.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleDeleteSelected} className="bg-destructive hover:bg-destructive/90">
+                    Apagar
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </>
         ) : (
           <Button size="sm" onClick={handleConfirmAll} disabled={isPending}>
             {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}

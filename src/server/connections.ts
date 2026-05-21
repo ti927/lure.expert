@@ -4,8 +4,9 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, dataSources, transactions } from '@/db/schema'
+import type { DataSource } from '@/db/schema'
 import { eq, and, isNotNull, ne, inArray, desc, count } from 'drizzle-orm'
-import { getPluggyClient, createConnectToken as pluggyCreateToken } from '@/lib/pluggy'
+import { getPluggyClient, createConnectToken as pluggyCreateToken, isGenericPluggyConnector } from '@/lib/pluggy'
 import { revalidatePath } from 'next/cache'
 import { inngest } from '@/lib/inngest'
 
@@ -35,7 +36,12 @@ export async function generateConnectToken(itemId?: string) {
   return pluggyCreateToken({ itemId, clientUserId: userId })
 }
 
-export async function registerPluggyItem(itemId: string) {
+export async function getCurrentOrgId(): Promise<string> {
+  const { organizationId } = await getAuthContext()
+  return organizationId
+}
+
+export async function registerPluggyItem(itemId: string): Promise<{ success: true } | { error: string }> {
   const { organizationId } = await getAuthContext()
 
   const client = getPluggyClient()
@@ -48,22 +54,23 @@ export async function registerPluggyItem(itemId: string) {
   const accounts = accountsResult.results.map(a => ({
     id: a.id,
     name: a.name,
+    marketingName: a.marketingName,
     type: a.type as string,
     subtype: a.subtype as string,
     number: a.number,
   }))
-  const metadata = {
+  const baseMetadata: Record<string, unknown> = {
     connectorId: item.connector.id,
     institutionName: item.connector.name,
     institutionImageUrl: item.connector.imageUrl,
-    isSandbox: item.connector.isSandbox ?? false,
+    isSandbox: (item.connector.isSandbox ?? false) || isGenericPluggyConnector(item.connector.name),
     products: item.connector.products,
     executionStatus: item.executionStatus,
     accounts,
   }
 
   const [existing] = await db
-    .select({ id: dataSources.id })
+    .select({ id: dataSources.id, metadata: dataSources.metadata })
     .from(dataSources)
     .where(and(
       eq(dataSources.organizationId, organizationId),
@@ -71,21 +78,30 @@ export async function registerPluggyItem(itemId: string) {
     ))
     .limit(1)
 
-  let dataSourceId: string
-
   if (existing) {
+    // Reconexão: preserva customizações do usuário e o flag awaitingFirstSync se ainda estava ativo
+    const existingMeta = (existing.metadata ?? {}) as Record<string, unknown>
+    const finalMetadata: Record<string, unknown> = { ...existingMeta, ...baseMetadata }
+    if (existingMeta.awaitingFirstSync !== true) {
+      delete finalMetadata.awaitingFirstSync
+    } else {
+      finalMetadata.awaitingFirstSync = true
+    }
+
     await db.update(dataSources)
       .set({
         status: 'active',
         lastSyncAt: item.lastUpdatedAt ?? null,
         lastSyncStatus: item.executionStatus as string,
-        metadata: metadata as Record<string, unknown>,
+        metadata: finalMetadata,
         updatedAt: new Date(),
       })
       .where(eq(dataSources.id, existing.id))
-    dataSourceId = existing.id
   } else {
-    const [inserted] = await db.insert(dataSources).values({
+    // Conexão nova: marca como aguardando primeiro sync manual.
+    // Sem isso, qualquer disparador (cron diário, webhook item/updated) iniciaria
+    // sync de 7-365 dias sem o usuário escolher a data de corte.
+    await db.insert(dataSources).values({
       organizationId,
       provider: 'pluggy',
       externalItemId: itemId,
@@ -94,19 +110,13 @@ export async function registerPluggyItem(itemId: string) {
       status: 'active',
       lastSyncAt: item.lastUpdatedAt ?? null,
       lastSyncStatus: item.executionStatus as string,
-      metadata: metadata as Record<string, unknown>,
-    }).returning({ id: dataSources.id })
-    dataSourceId = inserted.id
+      metadata: { ...baseMetadata, awaitingFirstSync: true },
+    })
   }
 
-  try {
-    await inngest.send({
-      name: 'pluggy/item.connected',
-      data: { itemId, organizationId, dataSourceId },
-    })
-  } catch {
-    // não bloqueia o registro se o Inngest estiver offline
-  }
+  // Sync não é disparado aqui — o usuário decide a data de corte clicando
+  // no botão de sync em /contas (triggerManualSync com forceFirstSync: true).
+  return { success: true }
 }
 
 export interface DataSourceOption {
@@ -135,22 +145,23 @@ export async function getDataSourcesWithTransactions(): Promise<DataSourceOption
     institution_name: string | null
   }
 
-  // Agrupa por conta individual (não por conexão) usando as colunas reais de transactions
+  // Agrupa por conta individual (não por conexão) usando as colunas reais de transactions.
+  // institution_name usa customLabel quando o usuário renomeou a conexão.
   const rows = await db.execute<AccRow>(rawSql`
     SELECT
       t.account_id,
       t.account_number,
       t.account_type,
       t.account_name,
-      COUNT(*)::text                          AS tx_count,
-      ds.metadata->>'institutionName'         AS institution_name
+      COUNT(*)::text                                                                              AS tx_count,
+      coalesce(ds.metadata->>'customLabel', ds.metadata->>'institutionName')                      AS institution_name
     FROM transactions t
     JOIN data_sources ds ON t.data_source_id = ds.id
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.status != 'pending'
       AND t.account_id IS NOT NULL
     GROUP BY t.account_id, t.account_number, t.account_type, t.account_name,
-             ds.metadata->>'institutionName'
+             coalesce(ds.metadata->>'customLabel', ds.metadata->>'institutionName')
     ORDER BY institution_name, t.account_type, t.account_number
   `)
 
@@ -166,9 +177,11 @@ export async function getDataSourcesWithTransactions(): Promise<DataSourceOption
   })
 }
 
-export async function getOrgConnections() {
+export type OrgConnection = DataSource & { customLogoUrl: string | null }
+
+export async function getOrgConnections(): Promise<OrgConnection[]> {
   const { organizationId } = await getAuthContext()
-  return db
+  const rows = await db
     .select()
     .from(dataSources)
     .where(and(
@@ -177,6 +190,18 @@ export async function getOrgConnections() {
       ne(dataSources.status, 'inactive'),
     ))
     .orderBy(dataSources.createdAt)
+
+  const supabase = createClient()
+  return Promise.all(rows.map(async row => {
+    const meta = (row.metadata ?? {}) as Record<string, unknown>
+    const customLogoPath = typeof meta.customLogoPath === 'string' ? meta.customLogoPath : null
+    let customLogoUrl: string | null = null
+    if (customLogoPath) {
+      const { data } = await supabase.storage.from('documents').createSignedUrl(customLogoPath, 3600)
+      customLogoUrl = data?.signedUrl ?? null
+    }
+    return { ...row, customLogoUrl }
+  }))
 }
 
 export type PendingTransaction = {
@@ -217,6 +242,7 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       dataSourceId: dataSources.id,
       dataSourceName: dataSources.name,
       dataSourceStatus: dataSources.status,
+      dataSourceMetadata: dataSources.metadata,
     })
     .from(transactions)
     .innerJoin(dataSources, eq(dataSources.id, transactions.dataSourceId))
@@ -232,10 +258,13 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
   // Agrupa em memória por data source
   const map = new Map<string, PendingSource>()
   for (const r of rows) {
+    const dsMeta = (r.dataSourceMetadata ?? {}) as Record<string, unknown>
+    const customLabel = typeof dsMeta.customLabel === 'string' ? dsMeta.customLabel.trim() : ''
+    const displayName = customLabel || r.dataSourceName
     if (!map.has(r.dataSourceId)) {
       map.set(r.dataSourceId, {
         dataSourceId: r.dataSourceId,
-        dataSourceName: r.dataSourceName,
+        dataSourceName: displayName,
         dataSourceActive: r.dataSourceStatus !== 'inactive',
         count: 0,
         transactions: [],
@@ -251,7 +280,7 @@ export async function getPendingTransactionsBySource(): Promise<PendingSource[]>
       amount: r.amount,
       direction: r.direction,
       dataSourceId: r.dataSourceId,
-      dataSourceName: r.dataSourceName,
+      dataSourceName: displayName,
       dataSourceActive: r.dataSourceStatus !== 'inactive',
       accountName: meta.accountName ?? null,
       accountSubtype: meta.accountSubtype ?? null,
@@ -351,7 +380,13 @@ export async function triggerManualSync(dataSourceId: string, fromDate?: string)
   try {
     await inngest.send({
       name: 'pluggy/item.connected',
-      data: { itemId: source.externalItemId, organizationId, dataSourceId: source.id, ...(fromDate ? { fromDate } : {}) },
+      data: {
+        itemId: source.externalItemId,
+        organizationId,
+        dataSourceId: source.id,
+        forceFirstSync: true,
+        ...(fromDate ? { fromDate } : {}),
+      },
     })
   } catch {
     return { error: 'Não foi possível iniciar a sincronização. Tente novamente.' }
@@ -376,4 +411,111 @@ export async function confirmSelectedTransactions(ids: string[]): Promise<{ conf
   revalidatePath('/contas')
   revalidatePath('/transacoes')
   return { confirmed: ids.length }
+}
+
+export async function setConnectionLogoPath(
+  dataSourceId: string,
+  storagePath: string,
+): Promise<{ success: true } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  // Path deve começar com o orgId para passar RLS do bucket
+  if (!storagePath.startsWith(`${organizationId}/`)) {
+    return { error: 'Caminho inválido.' }
+  }
+
+  const [source] = await db
+    .select({ id: dataSources.id, metadata: dataSources.metadata })
+    .from(dataSources)
+    .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.organizationId, organizationId)))
+    .limit(1)
+
+  if (!source) return { error: 'Conexão não encontrada.' }
+
+  const meta = (source.metadata ?? {}) as Record<string, unknown>
+  const previousPath = typeof meta.customLogoPath === 'string' ? meta.customLogoPath : null
+
+  await db
+    .update(dataSources)
+    .set({ metadata: { ...meta, customLogoPath: storagePath }, updatedAt: new Date() })
+    .where(eq(dataSources.id, dataSourceId))
+
+  // Limpa o arquivo antigo (best-effort)
+  if (previousPath && previousPath !== storagePath) {
+    const supabase = createClient()
+    try { await supabase.storage.from('documents').remove([previousPath]) } catch {}
+  }
+
+  revalidatePath('/contas')
+  return { success: true }
+}
+
+export async function removeConnectionLogo(
+  dataSourceId: string,
+): Promise<{ success: true } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const [source] = await db
+    .select({ id: dataSources.id, metadata: dataSources.metadata })
+    .from(dataSources)
+    .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.organizationId, organizationId)))
+    .limit(1)
+
+  if (!source) return { error: 'Conexão não encontrada.' }
+
+  const meta = (source.metadata ?? {}) as Record<string, unknown>
+  const previousPath = typeof meta.customLogoPath === 'string' ? meta.customLogoPath : null
+  if (!previousPath) return { success: true }
+
+  const next = { ...meta }
+  delete next.customLogoPath
+
+  await db
+    .update(dataSources)
+    .set({ metadata: next, updatedAt: new Date() })
+    .where(eq(dataSources.id, dataSourceId))
+
+  const supabase = createClient()
+  try { await supabase.storage.from('documents').remove([previousPath]) } catch {}
+
+  revalidatePath('/contas')
+  return { success: true }
+}
+
+export async function updateConnectionCustomization(
+  dataSourceId: string,
+  input: { customLabel: string | null; customBadge: string | null },
+): Promise<{ success: true } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const [source] = await db
+    .select({ id: dataSources.id, metadata: dataSources.metadata })
+    .from(dataSources)
+    .where(and(
+      eq(dataSources.id, dataSourceId),
+      eq(dataSources.organizationId, organizationId),
+    ))
+    .limit(1)
+
+  if (!source) return { error: 'Conexão não encontrada.' }
+
+  const meta = (source.metadata ?? {}) as Record<string, unknown>
+  const next: Record<string, unknown> = { ...meta }
+
+  const label = input.customLabel?.trim()
+  if (label) next.customLabel = label
+  else delete next.customLabel
+
+  const badge = input.customBadge?.trim()
+  if (badge) next.customBadge = { text: badge }
+  else delete next.customBadge
+
+  await db
+    .update(dataSources)
+    .set({ metadata: next, updatedAt: new Date() })
+    .where(eq(dataSources.id, dataSourceId))
+
+  revalidatePath('/contas')
+  revalidatePath('/transacoes')
+  return { success: true }
 }

@@ -166,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE e **redesign completo UX/UI da tabela de transações + padrão Data Table Pro** **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId** e **drill-down do DRE com UX igual a /transacoes** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -181,6 +181,7 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 **Migrations pendentes de aplicação no Supabase Studio:**
 - `db/migrations/rls/0017_category_visibility_flags.sql` — adiciona `hide_in_dre` e `hide_in_cashflow` em `categories`
 - `db/migrations/rls/0018_transactions_account_fields.sql` — adiciona `account_id`, `account_number`, `account_type`, `account_name` em `transactions`
+- `db/migrations/rls/0019_reset_categorization_rules.sql` — `DELETE FROM categorization_rules` (reset para introduzir escopo por accountId)
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
@@ -188,6 +189,130 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Drill-down do DRE com UX igual a `/transacoes` + extração de componentes compartilhados *(concluída)*
+
+**O que mudou:**
+
+- **`src/components/transacoes-shared/`** (criada) — pasta nova com componentes compartilhados entre `/transacoes` e o drill-down do DRE. Antes, ~530 linhas de filtros, headers, células e batch dialog viviam inline em `transacoes-client.tsx`. Extraído para:
+  - `types.ts` — `CATEGORY_TYPE_LABELS`, `ACCT_LABELS`, tipos `DimensionOption`, `CategoryItem`, `BatchFormState`
+  - `col-header.tsx` — `ColHeader` (header com sort + filter slot + clear button)
+  - `filters.tsx` — `MultiSelectFilter`, `AmountFilter`, `DescFilter`, `DirectionFilter`, `ReportTypeFilter`
+  - `cell-combobox.tsx` — `CellCombobox`, `CategoryCellCombobox`, `BatchCombobox`
+  - `batch-classify-dialog.tsx` — Dialog completo auto-contido (recebe `selectedIds`, dimensões e `onSuccess`)
+
+- **`src/app/(authenticated)/transacoes/transacoes-client.tsx`** — removeu definições inline, importa do shared. Sem regressão visual ou funcional. `BatchClassifyDialog` substituiu o Dialog inline antigo.
+
+- **`src/lib/dre-types.ts`** — `DrillDownTransaction` ganhou `accountId`, `accountName`, `accountType`, `accountNumber`, `connectionLogoUrl`, `connectionBadge`.
+
+- **`src/server/dre.ts`** — `getDreDrillDown`: JOIN com `data_sources`, signed URLs de `customLogoPath` em batch (uma chamada por dataSourceId único), mapeamento dos campos novos no resultado.
+
+- **`src/app/(authenticated)/dre/dre-client.tsx`** — `DimCellCombobox` deletado; `DrillDownDialog` reescrito do zero (de ~270 para ~450 linhas) com:
+  - Mesma UX da tabela `/transacoes`: 11 colunas (checkbox + Data + Descrição + Valor + Banco/Conta + Tipo + Categoria + CC + UN + Entidade + trash)
+  - `ColHeader` em cada coluna com sort + filter + clear
+  - Banco/Conta com logo (5x5) + nome/número + badge custom da conexão
+  - Checkbox por linha + select all
+  - Botão "Alterar X em lote" → `BatchClassifyDialog` reutilizado
+  - Trash por linha (hover) → `AlertDialog` de confirmação → `deleteTransactions`
+  - Sort e filtros 100% client-side (state local, não polui URL)
+  - Botão "Limpar filtros" global no header do dialog
+  - Dialog ocupa `w-[98vw] max-w-none` (quase toda a tela); coluna Descrição flex sem largura fixa cresce com o espaço
+
+- **`src/server/transactions.ts`** — `classifyTransaction`, `batchClassifyTransactions` e `deleteTransactions` agora chamam `revalidatePath('/dre')` além de `/transacoes` (e `/contas` no delete).
+
+TypeScript: 0 erros em todas as etapas.
+
+---
+
+### ✅ Sessão — Regras de categorização com escopo `description + accountId` *(concluída)*
+
+**Problema resolvido:** descrição "RENDIMENTOS PAGO APLIC" é genérica e aparece em todas as contas, mas CC/UN/LE são diferentes por conta. Regras antigas matchavam só por descrição → classificavam errado em contas diferentes.
+
+**O que mudou:**
+
+- **`db/migrations/rls/0019_reset_categorization_rules.sql`** (criada) — `DELETE FROM categorization_rules`. Aplicar manualmente no Supabase Studio. Regras antigas são apagadas; novas classificações criam regras com escopo correto desde o início.
+
+- **`src/lib/categorizer.ts`** — `applyRules` reescrita:
+  - Conditions agora é `{ description?: string, accountId?: string }` (formato flat, jsonb sem mudança de schema)
+  - Match = AND implícito entre as chaves preenchidas (description: `contains` case-insensitive; accountId: `equals` exato)
+  - Ordenação: regras com `accountId` vêm primeiro (mais específicas que regras globais)
+  - Tipo de `tx` ganhou `accountId?: string | null`; `categorizeTransaction` passa `tx.accountId ?? null` ao `applyRules`
+
+- **`src/server/transactions.ts`** — `upsertRule(orgId, description, accountId, data)`:
+  - Chave de identidade composta: `(orgId, conditions.description, conditions.accountId)`
+  - Busca regra existente; se accountId é null, busca regras sem accountId (fallback global pra uploads sem conta)
+  - `classifyTransaction` e `batchClassifyTransactions` agora carregam `accountId` no SELECT e propagam para `upsertRule`
+  - `batchClassifyTransactions` agrupa por `(descrição efetiva, accountId)` único — gera regras por par, não só por descrição
+
+**Resultado prático:**
+
+| description | accountId | category | CC | UN | LE |
+|---|---|---|---|---|---|
+| RENDIMENTOS PAGO APLIC | Julio (Itaú) | Receita Fin. | Kaoara | — | Julio |
+| RENDIMENTOS PAGO APLIC | Wayne (Itaú) | Receita Fin. | Wayne | Serviços | Wayne |
+| RENDIMENTOS PAGO APLIC | Liana (Nu) | Receita Fin. | Liana | — | Liana |
+
+---
+
+### ✅ Sessão — Categorizador LLM com contexto da conta *(concluída)*
+
+**O que mudou:**
+
+- **`src/jobs/categorize-transaction.ts`** — SELECT estendido pra trazer `accountId`, `accountName`, `accountType`, `accountNumber`, `dataSourceId`. Query nova em `data_sources` (uma só por lote via `inArray`) carrega `metadata` das conexões usadas. `dsMetaMap` indexa por `dataSourceId`; loop monta `connectionLabel` (`customLabel ?? institutionName`) e `connectionBadge` (`customBadge.text`) e propaga ao `categorizeTransaction`.
+
+- **`src/lib/categorizer.ts`** — `categorizeTransaction` aceita 5 novos campos opcionais no `tx` (accountName/Type/Number, connectionLabel, connectionBadge). Tipo `AccountContext` exportado. Helper `buildAccountContextBlock` monta seção "Contexto da conta:" condicionalmente — só adiciona linhas para campos não-nulos. System prompt ganhou frase explícita: "priorize atribuir CC/UN/entidade quando os nomes coincidem; não force matches frágeis".
+
+**Custo:** ~30-50 tokens extras por chamada Haiku, cache do system prompt continua ativo. Sem regressão para conexões sem `customLabel` (bloco fica vazio, prompt = atual).
+
+---
+
+### ✅ Sessão — UX Pluggy: sync inicial sob demanda + edição da conexão *(concluída)*
+
+**Sync inicial sob demanda** (`metadata.awaitingFirstSync`):
+
+- **`src/server/connections.ts`** — `registerPluggyItem` agora marca `metadata.awaitingFirstSync = true` em conexões novas; preserva o flag em reconexão; **não dispara mais o evento Inngest**. Reconexão também preserva customizações (`customLabel`, `customBadge`, `customLogoPath`) que antes eram sobrescritas — bônus. `triggerManualSync` envia `forceFirstSync: true` no payload do evento.
+
+- **`src/jobs/sync-pluggy-item.ts`** — step novo `check-awaiting` lê `metadata.awaitingFirstSync` antes de qualquer trabalho. Se aguardando E sem `forceFirstSync`, aborta retornando `{ skipped: 'awaiting-first-sync' }`. Após sync bem-sucedido, `delete nextMeta.awaitingFirstSync` libera webhook/cron a sincronizarem incrementalmente.
+
+- **UI (`contas-client.tsx`)** — toast pós-conexão: "Conta conectada. Clique no ícone de sincronizar para escolher a data inicial dos extratos." Subtítulo do card em **âmbar** quando aguardando.
+
+- **Webhook e cron sem mudanças** — a salvaguarda fica no job, então qualquer disparador respeita a flag automaticamente.
+
+**Edição de nome, badge e logo da conexão:**
+
+- **`src/server/connections.ts`** — server actions novas:
+  - `updateConnectionCustomization(dataSourceId, { customLabel, customBadge })` — salva/limpa `metadata.customLabel` e `metadata.customBadge.text`
+  - `setConnectionLogoPath(dataSourceId, storagePath)` — valida path com prefix `orgId/`, atualiza metadata, apaga arquivo antigo (best-effort)
+  - `removeConnectionLogo(dataSourceId)` — limpa metadata e apaga arquivo do bucket
+  - `getCurrentOrgId()` — exposto para o client poder montar paths de upload
+  - Tipo `OrgConnection = DataSource & { customLogoUrl: string | null }`; `getOrgConnections` gera signed URL (1h) para `metadata.customLogoPath` quando existe
+  - `getDataSourcesWithTransactions` (SQL) usa `coalesce(metadata->>'customLabel', metadata->>'institutionName')` — filtro Banco em `/transacoes` mostra o nome custom
+  - `getPendingTransactionsBySource` lê `customLabel` do metadata e usa como `dataSourceName` no extrato pendente
+
+- **UI (`contas-client.tsx`)** — `EditConnectionDialog` com 3 seções:
+  - **Logo**: preview 12x12 + input file (PNG/JPG/WebP, max 500KB) + botão "Remover" se há custom. Upload via cliente pro bucket `documents` (path `{orgId}/connection-logos/{dataSourceId}-{uuid}.{ext}`), server action salva o path.
+  - **Nome do banco**: input texto; placeholder mostra o auto-derivado
+  - **Badge (opcional)**: input texto, cinza neutro (substitui o "sandbox" automático quando definido)
+  - Botão "Restaurar padrão" limpa nome+badge
+- `ConnectionCard` exibe `connection.customLogoUrl ?? meta.institutionImageUrl` no `<img>`; `displayLabel = customLabel ?? bankName` (bankName derivado de `accounts[0].marketingName ?? name ?? institutionName`); badge custom em cinza neutro substitui o sandbox.
+
+---
+
+### ✅ Sessão — UX de tabelas e ajustes diversos *(concluída)*
+
+- **`/transacoes` — logo + badge na coluna Banco/Conta**: `getTransactions` faz JOIN com `data_sources`, gera signed URLs em batch para `customLogoPath`, retorna `connectionLogoUrl` e `connectionBadge` por linha. Célula da coluna mostra logo 5x5 + nome/número da conta + badge custom em 2 linhas verticais.
+
+- **Uniformização de fontes em `/transacoes`**: tudo `text-xs` (12px, mesmo dos comboboxes de classificação). Badges `text-[10px]`. Remove o salto visual antigo entre Descrição/Valor (text-sm) e demais colunas (text-xs).
+
+- **`/contas` aba "Extrato pendente"**: `PAGE_SIZE` de 25 → **500**. Botão "Apagar X selecionados" ao lado do "Confirmar X selecionados" (com `AlertDialog` de confirmação). `deleteTransactions` agora também revalida `/contas`.
+
+- **Toggle de categorização automática**: `Switch` em `/configuracoes` → "Automação" → "Categorização automática". `organizations.settings.autoCategorize: boolean` (default true via ausência). `categorize-transactions` job aborta cedo se `autoCategorize === false` e não há `forceRun`. Botão **"Categorizar agora"** em `/transacoes` chama `triggerCategorization()` (envia evento com `forceRun: true`).
+
+- **EmptyState em `/transacoes` mantém filtros visíveis**: removido o branch que escondia a tabela inteira quando `localRows.length === 0`. Agora o `<thead>` + filtros sempre renderizam; EmptyState aparece abaixo da tabela. Usuário pode ajustar coluna por coluna em vez de só "Limpar tudo".
+
+- **Voz da UX Pluggy**: limitação do plano **trial** documentada na memória do projeto (`project_pluggy_trial_limitation.md`): em sandbox só "MeuPluggy" funciona; bancos sandbox reais retornam `TRIAL_CLIENT_ITEM_CREATE_NOT_ALLOWED`. Solução adotada: usar `account.marketingName`/`account.name` para nome do banco no card, forçar `isSandbox` para conectores genéricos via `isGenericPluggyConnector` em `src/lib/pluggy.ts`.
 
 ---
 

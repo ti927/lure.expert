@@ -2,7 +2,7 @@ import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
 import { transactions, dataSources } from '@/db/schema'
 import { eq, and } from 'drizzle-orm'
-import { getPluggyClient } from '@/lib/pluggy'
+import { getPluggyClient, isGenericPluggyConnector } from '@/lib/pluggy'
 
 const DAYS_BACK = 365
 const BATCH_SIZE = 100
@@ -25,11 +25,26 @@ export const syncPluggyItem = inngest.createFunction(
     concurrency: { limit: 1, key: 'event.data.dataSourceId' },
   },
   async ({ event, step }) => {
-    const { itemId, organizationId, dataSourceId, fromDate } = event.data as {
+    const { itemId, organizationId, dataSourceId, fromDate, forceFirstSync } = event.data as {
       itemId: string
       organizationId: string
       dataSourceId: string
       fromDate?: string
+      forceFirstSync?: boolean
+    }
+
+    // Conexões novas ficam aguardando o usuário escolher a data inicial via sync manual.
+    // Webhooks/cron disparam o job, mas a flag bloqueia sync automático.
+    const awaiting = await step.run('check-awaiting', async () => {
+      const [row] = await db
+        .select({ metadata: dataSources.metadata })
+        .from(dataSources)
+        .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.organizationId, organizationId)))
+        .limit(1)
+      return (row?.metadata as Record<string, unknown> | null)?.awaitingFirstSync === true
+    })
+    if (awaiting && !forceFirstSync) {
+      return { synced: 0, accounts: 0, skipped: 'awaiting-first-sync' as const }
     }
 
     const { accountIds, isSandbox } = await step.run('fetch-accounts', async () => {
@@ -39,10 +54,11 @@ export const syncPluggyItem = inngest.createFunction(
         client.fetchItem(itemId),
       ])
       return {
-        isSandbox: item.connector.isSandbox ?? false,
+        isSandbox: (item.connector.isSandbox ?? false) || isGenericPluggyConnector(item.connector.name),
         accountIds: result.results.map(a => ({
           id: a.id,
           name: a.name,
+          marketingName: a.marketingName,
           type: a.type as string,
           subtype: a.subtype as string,
           number: a.number,
@@ -147,24 +163,28 @@ export const syncPluggyItem = inngest.createFunction(
         .limit(1)
 
       const existingMeta = (current?.metadata ?? {}) as Record<string, unknown>
+      const nextMeta: Record<string, unknown> = {
+        ...existingMeta,
+        isSandbox,
+        lastTransactionFetchedAt: dateFrom,
+        accounts: accountIds.map(a => ({
+          id: a.id,
+          name: a.name,
+          marketingName: a.marketingName,
+          type: a.type,
+          subtype: a.subtype,
+          number: a.number,
+        })),
+      }
+      // Primeiro sync concluído — libera webhook/cron a sincronizar incrementalmente
+      delete nextMeta.awaitingFirstSync
 
       await db
         .update(dataSources)
         .set({
           lastSyncAt: new Date(),
           lastSyncStatus: 'SUCCESS',
-          metadata: {
-            ...existingMeta,
-            isSandbox,
-            lastTransactionFetchedAt: dateFrom,
-            accounts: accountIds.map(a => ({
-              id: a.id,
-              name: a.name,
-              type: a.type,
-              subtype: a.subtype,
-              number: a.number,
-            })),
-          },
+          metadata: nextMeta,
           updatedAt: new Date(),
         })
         .where(and(

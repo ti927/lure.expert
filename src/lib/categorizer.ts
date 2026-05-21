@@ -113,19 +113,32 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
 
 // ─── Camada 1: Regras explícitas ─────────────────────────────────────────────
 
+// Conditions atuais: { description?: string, accountId?: string } — match AND implícito.
 // Regras com targetCategoryId só disparam no mesmo domínio (BP↔BP, DRE↔DRE).
-// Regras sem targetCategoryId (só CC/UN/Entidade) são domínio-agnósticas.
 function applyRules(
   description: string,
+  accountId: string | null,
   rules: OrgContext['rules'],
   domainCategoryIds: Set<string>,
 ): CategorizationResult | null {
-  for (const rule of rules) {
-    const c = rule.conditions as { field?: string; op?: string; value?: string }
-    if (c.field !== 'description' || c.op !== 'contains' || !c.value) continue
-    if (!description.toLowerCase().includes(c.value.toLowerCase())) continue
+  // Regras com accountId vêm primeiro (mais específicas que regras globais por descrição).
+  const sorted = [...rules].sort((a, b) => {
+    const aHas = (a.conditions as Record<string, unknown>).accountId ? 1 : 0
+    const bHas = (b.conditions as Record<string, unknown>).accountId ? 1 : 0
+    return bHas - aHas
+  })
 
-    // Se a regra aponta para uma categoria fora do domínio atual, pula.
+  for (const rule of sorted) {
+    const c = rule.conditions as { description?: string; accountId?: string }
+
+    if (c.accountId) {
+      if (!accountId || c.accountId !== accountId) continue
+    }
+    if (c.description) {
+      if (!description.toLowerCase().includes(c.description.toLowerCase())) continue
+    }
+    if (!c.accountId && !c.description) continue
+
     if (rule.targetCategoryId !== null && !domainCategoryIds.has(rule.targetCategoryId)) continue
 
     return {
@@ -210,6 +223,8 @@ function buildSystemPrompt(ctx: OrgContext, domain: DocumentDomain): string {
   return `Você é um categorizador de transações financeiras para PMEs brasileiras.
 ${domainNote}
 
+Quando vier o bloco "Contexto da conta:" (nome da conta, etiqueta do usuário ou merchant), priorize atribuir centro de custo, unidade de negócio ou entidade jurídica cujos nomes coincidam (correspondência total ou substring forte) com esses sinais — atribua com confiança alta. Não force matches frágeis ou parciais ambíguos.
+
 Categorias disponíveis (código: nome):
 ${catList}
 ${ccList}${buList}${leList}
@@ -234,6 +249,31 @@ interface LLMCallResult {
   costUsd: number
 }
 
+function buildAccountContextBlock(account?: AccountContext): string {
+  if (!account) return ''
+  const lines: string[] = []
+
+  const labelPart = account.connectionLabel?.trim() ?? null
+  const namePart = account.accountName?.trim() && account.accountName.trim() !== labelPart
+    ? account.accountName.trim()
+    : null
+  const typePart = account.accountType?.trim() ?? null
+  const numberPart = account.accountNumber?.trim() ?? null
+
+  const contaParts: string[] = []
+  if (labelPart) contaParts.push(labelPart)
+  if (namePart) contaParts.push(`[${namePart}]`)
+  if (typePart) contaParts.push(typePart)
+  if (numberPart) contaParts.push(numberPart)
+  if (contaParts.length > 0) lines.push(`- Conta: ${contaParts.join(' · ')}`)
+
+  if (account.connectionBadge?.trim()) lines.push(`- Etiqueta do usuário: ${account.connectionBadge.trim()}`)
+  if (account.merchantName?.trim()) lines.push(`- Merchant: ${account.merchantName.trim()}`)
+
+  if (lines.length === 0) return ''
+  return `\nContexto da conta:\n${lines.join('\n')}`
+}
+
 async function classifyWithLLM(
   description: string,
   amount: string,
@@ -241,12 +281,14 @@ async function classifyWithLLM(
   ctx: OrgContext,
   domain: DocumentDomain,
   pluggyCategory?: string | null,
+  accountContext?: AccountContext,
 ): Promise<LLMCallResult | null> {
   if (ctx.categories.length === 0) return null
 
   const systemPrompt = buildSystemPrompt(ctx, domain)
   const categoryHint = pluggyCategory ? `\nCategoria do banco (Pluggy): ${pluggyCategory}` : ''
-  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}`
+  const accountBlock = buildAccountContextBlock(accountContext)
+  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}`
 
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -317,8 +359,30 @@ export interface CategorizationOutput {
   llmCost?: { tokensInput: number; tokensOutput: number; costUsd: number }
 }
 
+export interface AccountContext {
+  accountName?: string | null
+  accountType?: string | null
+  accountNumber?: string | null
+  connectionLabel?: string | null
+  connectionBadge?: string | null
+  merchantName?: string | null
+}
+
 export async function categorizeTransaction(
-  tx: { id: string; organizationId: string; description: string; amount: string; direction: string; metadata?: Record<string, unknown> | null },
+  tx: {
+    id: string
+    organizationId: string
+    description: string
+    amount: string
+    direction: string
+    metadata?: Record<string, unknown> | null
+    accountId?: string | null
+    accountName?: string | null
+    accountType?: string | null
+    accountNumber?: string | null
+    connectionLabel?: string | null
+    connectionBadge?: string | null
+  },
   ctx: OrgContext,
   documentDomain: DocumentDomain = 'dre',
 ): Promise<CategorizationOutput> {
@@ -331,7 +395,7 @@ export async function categorizeTransaction(
   const domainCtx: OrgContext = { ...ctx, categories: domainCats }
 
   // Camada 1: Regras (domain-aware)
-  const ruleResult = applyRules(tx.description, ctx.rules, domainCategoryIds)
+  const ruleResult = applyRules(tx.description, tx.accountId ?? null, ctx.rules, domainCategoryIds)
   if (ruleResult) return { result: ruleResult }
 
   // Camada 2: Recorrência (mesmo domínio)
@@ -345,8 +409,19 @@ export async function categorizeTransaction(
   // Camada 4: Claude Haiku — só oferece categorias do domínio correto
   const meta = (tx.metadata ?? {}) as Record<string, unknown>
   const pluggyCategory = typeof meta.pluggyCategory === 'string' ? meta.pluggyCategory : null
+  const merchantName = typeof meta.merchantName === 'string' ? meta.merchantName : null
+
+  const accountContext: AccountContext = {
+    accountName: tx.accountName ?? null,
+    accountType: tx.accountType ?? null,
+    accountNumber: tx.accountNumber ?? null,
+    connectionLabel: tx.connectionLabel ?? null,
+    connectionBadge: tx.connectionBadge ?? null,
+    merchantName,
+  }
+
   const llm = await classifyWithLLM(
-    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory,
+    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory, accountContext,
   )
   if (!llm) return { result: null }
 

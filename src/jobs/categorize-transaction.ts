@@ -1,6 +1,6 @@
 import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
-import { transactions, documents, organizations } from '@/db/schema'
+import { transactions, documents, organizations, dataSources } from '@/db/schema'
 import { eq, and, inArray } from 'drizzle-orm'
 import {
   loadOrgContext,
@@ -49,6 +49,10 @@ export const categorizeTransactions = inngest.createFunction(
           direction: transactions.direction,
           metadata: transactions.metadata,
           documentId: transactions.documentId,
+          dataSourceId: transactions.dataSourceId,
+          accountName: transactions.accountName,
+          accountType: transactions.accountType,
+          accountNumber: transactions.accountNumber,
         })
         .from(transactions)
         .where(and(
@@ -66,6 +70,16 @@ export const categorizeTransactions = inngest.createFunction(
         : []
       const docDomainMap = new Map(docRows.map(d => [d.id, domainFromReportType(d.reportType)]))
 
+      // Carrega metadados das conexões (uma query) para enriquecer o contexto do LLM
+      const dsIds = Array.from(new Set(txList.map(tx => tx.dataSourceId).filter((id): id is string => id !== null)))
+      const dsRows = dsIds.length > 0
+        ? await db
+          .select({ id: dataSources.id, metadata: dataSources.metadata })
+          .from(dataSources)
+          .where(inArray(dataSources.id, dsIds))
+        : []
+      const dsMetaMap = new Map(dsRows.map(d => [d.id, (d.metadata ?? {}) as Record<string, unknown>]))
+
       let categorized = 0
       let needsReview = 0
       let skipped = 0
@@ -74,9 +88,22 @@ export const categorizeTransactions = inngest.createFunction(
       for (const tx of txList) {
         const documentDomain = tx.documentId ? (docDomainMap.get(tx.documentId) ?? 'dre') : 'dre'
 
+        const dsMeta = tx.dataSourceId ? dsMetaMap.get(tx.dataSourceId) ?? {} : {}
+        const connectionLabel =
+          (typeof dsMeta.customLabel === 'string' && dsMeta.customLabel) ||
+          (typeof dsMeta.institutionName === 'string' && dsMeta.institutionName) ||
+          null
+        const customBadge = dsMeta.customBadge as { text?: string } | undefined
+        const connectionBadge = customBadge?.text ?? null
+
         const { result, llmCost } = await categorizeTransaction({
           ...tx,
           metadata: tx.metadata as Record<string, unknown> | null,
+          accountName: tx.accountName,
+          accountType: tx.accountType,
+          accountNumber: tx.accountNumber,
+          connectionLabel,
+          connectionBadge,
         }, ctx, documentDomain)
 
         const hasAnyDimension = result && (

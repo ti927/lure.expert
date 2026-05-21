@@ -92,20 +92,27 @@ export interface DreData {
 }
 
 export interface DrillDownTransaction {
-  id:               string
-  date:             string
-  description:      string
-  direction:        string
-  amount:           number
-  netAmount:        number
-  categoryId:       string | null
-  categoryName:     string | null
-  costCenterId:     string | null
-  costCenterName:   string | null
-  businessUnitId:   string | null
-  businessUnitName: string | null
-  legalEntityId:    string | null
-  legalEntityName:  string | null
+  id:                  string
+  date:                string
+  description:         string
+  direction:           string
+  amount:              number
+  netAmount:           number
+  categoryId:          string | null
+  categoryName:        string | null
+  costCenterId:        string | null
+  costCenterName:      string | null
+  businessUnitId:      string | null
+  businessUnitName:    string | null
+  legalEntityId:       string | null
+  legalEntityName:     string | null
+  // Contexto da conta bancária (Sessão drill-down v2)
+  accountId:           string | null
+  accountName:         string | null
+  accountType:         string | null
+  accountNumber:       string | null
+  connectionLogoUrl:   string | null
+  connectionBadge:     string | null
 }
 
 export interface LeafCategory {

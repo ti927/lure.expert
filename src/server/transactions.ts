@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, transactions, categorizationRules, categories, documents, costCenters, businessUnits, legalEntities } from '@/db/schema'
+import { memberships, transactions, categorizationRules, categories, documents, costCenters, businessUnits, legalEntities, dataSources } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { inngest } from '@/lib/inngest'
 
@@ -145,9 +145,11 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     .select({
       ...getTableColumns(transactions),
       documentReportType: documents.reportType,
+      dataSourceMetadata: dataSources.metadata,
     })
     .from(transactions)
     .leftJoin(documents, eq(transactions.documentId, documents.id))
+    .leftJoin(dataSources, eq(transactions.dataSourceId, dataSources.id))
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
     .leftJoin(costCenters, eq(transactions.costCenterId, costCenters.id))
     .leftJoin(businessUnits, eq(transactions.businessUnitId, businessUnits.id))
@@ -172,8 +174,39 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     totalsQuery.where(whereClause),
   ])
 
+  // Gera signed URLs para customLogoPath em batch (uma por data_source único)
+  const customLogoByDs = new Map<string, string>()
+  for (const r of rows) {
+    const meta = (r.dataSourceMetadata ?? {}) as Record<string, unknown>
+    const path = typeof meta.customLogoPath === 'string' ? meta.customLogoPath : null
+    if (path && r.dataSourceId && !customLogoByDs.has(r.dataSourceId)) {
+      customLogoByDs.set(r.dataSourceId, path)
+    }
+  }
+  const supabase = createClient()
+  const signedEntries = await Promise.all(
+    Array.from(customLogoByDs.entries()).map(async ([dsId, path]) => {
+      const { data } = await supabase.storage.from('documents').createSignedUrl(path, 3600)
+      return [dsId, data?.signedUrl ?? null] as const
+    })
+  )
+  const signedMap = new Map(signedEntries)
+
+  const enrichedRows = rows.map(r => {
+    const meta = (r.dataSourceMetadata ?? {}) as Record<string, unknown>
+    const autoLogo = typeof meta.institutionImageUrl === 'string' ? meta.institutionImageUrl : null
+    const customLogo = r.dataSourceId ? signedMap.get(r.dataSourceId) ?? null : null
+    const badge = (meta.customBadge as { text?: string } | undefined)?.text || null
+    const { dataSourceMetadata: _meta, ...rest } = r
+    return {
+      ...rest,
+      connectionLogoUrl: customLogo ?? autoLogo,
+      connectionBadge: badge,
+    }
+  })
+
   return {
-    rows,
+    rows: enrichedRows,
     total,
     pages: Math.ceil(total / PAGE_SIZE),
     page,
@@ -207,15 +240,25 @@ const dimensionSchema = z.object({
 
 type DimensionData = z.infer<typeof dimensionSchema>
 
-async function upsertRule(organizationId: string, description: string, data: DimensionData) {
+async function upsertRule(
+  organizationId: string,
+  description: string,
+  accountId: string | null,
+  data: DimensionData,
+) {
   const trimmed = description.slice(0, 200)
 
+  // Chave de identidade composta: (description, accountId)
+  // Quando accountId é null, busca regras sem accountId (fallback global para uploads sem conta).
   const [existing] = await db
     .select({ id: categorizationRules.id })
     .from(categorizationRules)
     .where(and(
       eq(categorizationRules.organizationId, organizationId),
-      sql`${categorizationRules.conditions}->>'value' = ${trimmed}`,
+      sql`${categorizationRules.conditions}->>'description' = ${trimmed}`,
+      accountId
+        ? sql`${categorizationRules.conditions}->>'accountId' = ${accountId}`
+        : sql`${categorizationRules.conditions}->>'accountId' IS NULL`,
     ))
     .limit(1)
 
@@ -228,10 +271,13 @@ async function upsertRule(organizationId: string, description: string, data: Dim
 
     await db.update(categorizationRules).set(updates).where(eq(categorizationRules.id, existing.id))
   } else {
+    const conditions: Record<string, string> = { description: trimmed }
+    if (accountId) conditions.accountId = accountId
+
     await db.insert(categorizationRules).values({
       organizationId,
       name: `Auto: ${trimmed.slice(0, 80)}`,
-      conditions: { field: 'description', op: 'contains', value: trimmed },
+      conditions,
       targetCategoryId: data.categoryId ?? null,
       targetCostCenterId: data.costCenterId ?? null,
       targetBusinessUnitId: data.businessUnitId ?? null,
@@ -255,7 +301,11 @@ export async function classifyTransaction(id: string, data: DimensionData) {
   }
 
   const [tx] = await db
-    .select({ description: transactions.description, cleanedDescription: transactions.cleanedDescription })
+    .select({
+      description: transactions.description,
+      cleanedDescription: transactions.cleanedDescription,
+      accountId: transactions.accountId,
+    })
     .from(transactions)
     .where(and(eq(transactions.id, id), eq(transactions.organizationId, organizationId)))
     .limit(1)
@@ -277,9 +327,10 @@ export async function classifyTransaction(id: string, data: DimensionData) {
     .where(and(eq(transactions.id, id), eq(transactions.organizationId, organizationId)))
 
   const description = tx.cleanedDescription || tx.description
-  await upsertRule(organizationId, description, parsed.data)
+  await upsertRule(organizationId, description, tx.accountId, parsed.data)
 
   revalidatePath('/transacoes')
+  revalidatePath('/dre')
   return { success: true }
 }
 
@@ -293,6 +344,8 @@ export async function deleteTransactions(ids: string[]) {
     .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
 
   revalidatePath('/transacoes')
+  revalidatePath('/contas')
+  revalidatePath('/dre')
   return { success: true, deleted: ids.length }
 }
 
@@ -313,7 +366,11 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
   }
 
   const txList = await db
-    .select({ description: transactions.description, cleanedDescription: transactions.cleanedDescription })
+    .select({
+      description: transactions.description,
+      cleanedDescription: transactions.cleanedDescription,
+      accountId: transactions.accountId,
+    })
     .from(transactions)
     .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
 
@@ -332,10 +389,19 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
     .set(updates)
     .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
 
-  const uniqueDescriptions = new Set(txList.map(tx => tx.cleanedDescription || tx.description))
-  await Promise.all(Array.from(uniqueDescriptions).map(desc => upsertRule(organizationId, desc, parsed.data)))
+  // Agrupa por (descrição efetiva, accountId) — cada par único vira uma regra
+  const pairs = new Map<string, { description: string; accountId: string | null }>()
+  for (const tx of txList) {
+    const desc = tx.cleanedDescription || tx.description
+    const key = `${desc}::${tx.accountId ?? ''}`
+    if (!pairs.has(key)) pairs.set(key, { description: desc, accountId: tx.accountId })
+  }
+  await Promise.all(
+    Array.from(pairs.values()).map(p => upsertRule(organizationId, p.description, p.accountId, parsed.data))
+  )
 
   revalidatePath('/transacoes')
+  revalidatePath('/dre')
   return { success: true, updated: txList.length }
 }
 

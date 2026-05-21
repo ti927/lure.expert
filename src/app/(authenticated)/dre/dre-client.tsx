@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useTransition, useMemo, useEffect } from 'react'
+import { toast } from 'sonner'
 import {
-  Check, ChevronsUpDown, X, Loader2, BarChart3,
+  Check, ChevronsUpDown, X, Loader2, BarChart3, Trash2,
   ChevronRight, ChevronDown, ChevronsDown, ChevronsUp,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -13,10 +14,14 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
 import { getDreData, getDreDrillDown } from '@/server/dre'
-import { classifyTransaction } from '@/server/transactions'
+import { classifyTransaction, deleteTransactions } from '@/server/transactions'
 import type {
   DreData, DreMonthSubtotals, DreCategoryRow, DreType, DrillDownTransaction, LeafCategory,
 } from '@/lib/dre-types'
@@ -24,6 +29,13 @@ import { DRE_TYPE_LABELS } from '@/lib/dre-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
+import { ColHeader } from '@/components/transacoes-shared/col-header'
+import {
+  MultiSelectFilter, DescFilter, AmountFilter, DirectionFilter,
+} from '@/components/transacoes-shared/filters'
+import { CellCombobox, CategoryCellCombobox } from '@/components/transacoes-shared/cell-combobox'
+import { BatchClassifyDialog } from '@/components/transacoes-shared/batch-classify-dialog'
+import { ACCT_LABELS } from '@/components/transacoes-shared/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -251,363 +263,484 @@ function Num({
   )
 }
 
-// ─── DimCellCombobox (para o drill-down) ────────────────────────────────────
-
-function DimCellCombobox({
-  value, options, placeholder, onSelect,
-}: {
-  value: string | null
-  options: ComboOption[]
-  placeholder: string
-  onSelect: (id: string | null) => void
-}) {
-  const [open, setOpen] = useState(false)
-
-  const groups = useMemo(() => {
-    const map = new Map<string, ComboOption[]>()
-    options.forEach(opt => {
-      const g = opt.group ?? ''
-      if (!map.has(g)) map.set(g, [])
-      map.get(g)!.push(opt)
-    })
-    return map
-  }, [options])
-
-  const hasGroups = options.some(o => o.group)
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button className={cn(
-          'w-full text-left text-[11px] px-1.5 py-0.5 rounded hover:bg-slate-100 truncate leading-5',
-          value ? 'text-foreground' : 'text-muted-foreground/35',
-        )}>
-          {value ?? placeholder}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[240px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Buscar..." className="h-8 text-xs" />
-          <CommandList onWheel={e => e.stopPropagation()}>
-            <CommandEmpty className="py-3 text-center text-xs text-muted-foreground">
-              Nenhum resultado.
-            </CommandEmpty>
-            {value && (
-              <CommandItem
-                value="__clear__"
-                onSelect={() => { onSelect(null); setOpen(false) }}
-                className="text-xs text-muted-foreground/70 italic"
-              >
-                — Limpar
-              </CommandItem>
-            )}
-            {hasGroups ? (
-              Array.from(groups.entries()).map(([groupName, opts]) => (
-                <CommandGroup key={groupName} heading={groupName}>
-                  {opts.map(opt => (
-                    <CommandItem
-                      key={opt.id}
-                      value={`${opt.code ?? ''} ${opt.name} ${groupName}`}
-                      onSelect={() => { onSelect(opt.id); setOpen(false) }}
-                      className="text-xs"
-                    >
-                      {opt.code && (
-                        <span className="text-muted-foreground/50 font-mono text-[10px] mr-1 shrink-0">{opt.code}</span>
-                      )}
-                      <span className="truncate">{opt.name}</span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              ))
-            ) : (
-              <CommandGroup>
-                {Array.from(groups.get('') ?? []).map(opt => (
-                  <CommandItem
-                    key={opt.id}
-                    value={`${opt.code ?? ''} ${opt.name}`}
-                    onSelect={() => { onSelect(opt.id); setOpen(false) }}
-                    className="text-xs"
-                  >
-                    {opt.code && (
-                      <span className="text-muted-foreground/50 font-mono text-[10px] mr-1 shrink-0">{opt.code}</span>
-                    )}
-                    <span className="truncate">{opt.name}</span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 // ─── Drill-down Dialog ────────────────────────────────────────────────────────
+//
+// Tabela com a mesma UX de /transacoes: filtros nos headers (ColHeader), sort
+// por coluna, checkbox por linha, batch classify e delete inline. Tudo
+// client-side dentro do dialog (sem mexer em URL).
 
 function DrillDownDialog({
-  state, data, loading, onClose,
+  state, data, loading, onClose, onDataChange,
   leafCategories, costCenters, businessUnits, legalEntities,
 }: {
   state: DrillDownState
   data: DrillDownTransaction[] | null
   loading: boolean
   onClose: () => void
+  onDataChange: (next: DrillDownTransaction[]) => void
   leafCategories: LeafCategory[]
   costCenters: CostCenter[]
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
 }) {
   const [localData, setLocalData] = useState<DrillDownTransaction[]>([])
-  const [search, setSearch] = useState('')
-  const [dirFilter, setDirFilter] = useState<'all' | 'inflow' | 'outflow'>('all')
-  const [ddDateFrom, setDdDateFrom] = useState(state.dateRange?.from ?? '')
-  const [ddDateTo, setDdDateTo]     = useState(state.dateRange?.to ?? '')
-  const [ddCc, setDdCc] = useState('')
-  const [ddBu, setDdBu] = useState('')
-  const [ddLe, setDdLe] = useState('')
+
+  // Filtros client-side
+  const [search, setSearch] = useState<string | undefined>(undefined)
+  const [direction, setDirection] = useState<string | undefined>(undefined)
+  const [amountMin, setAmountMin] = useState<string | undefined>(undefined)
+  const [amountMax, setAmountMax] = useState<string | undefined>(undefined)
+  const [catFilter, setCatFilter] = useState<string | undefined>(undefined)
+  const [ccFilter, setCcFilter] = useState<string | undefined>(undefined)
+  const [buFilter, setBuFilter] = useState<string | undefined>(undefined)
+  const [leFilter, setLeFilter] = useState<string | undefined>(undefined)
+  const [acctFilter, setAcctFilter] = useState<string | undefined>(undefined)
+
+  // Sort local
+  const [sort, setSort] = useState<string | undefined>('date_desc')
+
+  // Seleção e batch
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchOpen, setBatchOpen] = useState(false)
+
+  // Delete
+  const [deleteTargetIds, setDeleteTargetIds] = useState<string[]>([])
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  // Classificação inline
+  const [classifyingId, setClassifyingId] = useState<string | null>(null)
 
   useEffect(() => {
-    if (data) setLocalData(data)
+    if (data) {
+      setLocalData(data)
+      setSelectedIds(new Set())
+    }
   }, [data])
 
-  const categoryOptions = useMemo<ComboOption[]>(() =>
-    leafCategories.map(c => ({
-      id: c.id, name: c.name, code: c.code,
-      group: DRE_TYPE_LABELS[c.type as DreType] ?? c.type,
-    })), [leafCategories])
+  // Opções para os filtros
+  const acctOptions = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const tx of localData) {
+      if (!tx.accountId) continue
+      if (seen.has(tx.accountId)) continue
+      const label = tx.accountType
+        ? `${ACCT_LABELS[tx.accountType] ?? tx.accountType}${tx.accountNumber ? ` · ${tx.accountNumber}` : ''}`
+        : tx.accountName ?? 'Conta'
+      seen.set(tx.accountId, label)
+    }
+    return Array.from(seen.entries()).map(([id, label]) => ({ id, label }))
+  }, [localData])
 
-  const ccOptions = useMemo<ComboOption[]>(() =>
-    costCenters.map(c => ({ id: c.id, name: c.name, code: c.code })), [costCenters])
+  const catFilterGroups = useMemo(() => {
+    const byType = leafCategories.reduce((acc, c) => {
+      if (!acc[c.type]) acc[c.type] = []
+      acc[c.type].push({ id: c.id, label: `${c.code} – ${c.name}` })
+      return acc
+    }, {} as Record<string, { id: string; label: string }[]>)
+    return Object.entries(byType).map(([type, items]) => ({ type, items }))
+  }, [leafCategories])
 
-  const buOptions = useMemo<ComboOption[]>(() =>
-    businessUnits.map(b => ({ id: b.id, name: b.name, code: b.code })), [businessUnits])
+  const ccOptions = useMemo(() => costCenters.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name })), [costCenters])
+  const buOptions = useMemo(() => businessUnits.map(b => ({ id: b.id, label: b.code ? `${b.code} – ${b.name}` : b.name })), [businessUnits])
+  const leOptions = useMemo(() => legalEntities.map(l => ({ id: l.id, label: l.name })), [legalEntities])
 
-  const leOptions = useMemo<ComboOption[]>(() =>
-    legalEntities.map(l => ({ id: l.id, name: l.name, code: l.code })), [legalEntities])
+  // Filtros aplicados
+  const filtered = useMemo(() => {
+    function multiMatch(value: string | null | undefined, filter: string | undefined): boolean {
+      if (!filter) return true
+      const ids = filter.split(',').filter(Boolean)
+      const includeNone = ids.includes('__none__')
+      const includeClassified = ids.includes('__classified__')
+      const realIds = ids.filter(i => i !== '__none__' && i !== '__classified__')
+      if (includeNone && (value === null || value === undefined)) return true
+      if (includeClassified && value !== null && value !== undefined) return true
+      if (realIds.length > 0 && value && realIds.includes(value)) return true
+      return realIds.length === 0 && !includeNone && !includeClassified
+    }
+    return localData.filter(tx => {
+      if (search && !tx.description.toLowerCase().includes(search.toLowerCase())) return false
+      if (direction && tx.direction !== direction) return false
+      if (amountMin && tx.amount < Number(amountMin)) return false
+      if (amountMax && tx.amount > Number(amountMax)) return false
+      if (catFilter && !multiMatch(tx.categoryId, catFilter)) return false
+      if (ccFilter && !multiMatch(tx.costCenterId, ccFilter)) return false
+      if (buFilter && !multiMatch(tx.businessUnitId, buFilter)) return false
+      if (leFilter && !multiMatch(tx.legalEntityId, leFilter)) return false
+      if (acctFilter && !multiMatch(tx.accountId, acctFilter)) return false
+      return true
+    })
+  }, [localData, search, direction, amountMin, amountMax, catFilter, ccFilter, buFilter, leFilter, acctFilter])
 
-  const filtered = useMemo(() => localData.filter(tx => {
-    if (search && !tx.description.toLowerCase().includes(search.toLowerCase())) return false
-    if (dirFilter !== 'all' && tx.direction !== dirFilter) return false
-    if (ddDateFrom && tx.date.slice(0, 10) < ddDateFrom) return false
-    if (ddDateTo && tx.date.slice(0, 10) > ddDateTo) return false
-    if (ddCc && tx.costCenterId !== ddCc) return false
-    if (ddBu && tx.businessUnitId !== ddBu) return false
-    if (ddLe && tx.legalEntityId !== ddLe) return false
-    return true
-  }), [localData, search, dirFilter, ddDateFrom, ddDateTo, ddCc, ddBu, ddLe])
+  // Sort
+  const sorted = useMemo(() => {
+    const arr = [...filtered]
+    if (!sort) return arr
+    const [field, dir] = sort.split('_') as [string, 'asc' | 'desc']
+    const m = dir === 'asc' ? 1 : -1
+    arr.sort((a, b) => {
+      let av: string | number = ''
+      let bv: string | number = ''
+      switch (field) {
+        case 'date':         av = a.date; bv = b.date; break
+        case 'desc':         av = a.description.toLowerCase(); bv = b.description.toLowerCase(); break
+        case 'amount':       av = a.amount; bv = b.amount; break
+        case 'account':      av = a.accountName ?? ''; bv = b.accountName ?? ''; break
+        case 'direction':    av = a.direction; bv = b.direction; break
+        case 'category':     av = a.categoryName ?? ''; bv = b.categoryName ?? ''; break
+        case 'costcenter':   av = a.costCenterName ?? ''; bv = b.costCenterName ?? ''; break
+        case 'businessunit': av = a.businessUnitName ?? ''; bv = b.businessUnitName ?? ''; break
+        case 'legalentity':  av = a.legalEntityName ?? ''; bv = b.legalEntityName ?? ''; break
+      }
+      if (av < bv) return -m
+      if (av > bv) return m
+      return 0
+    })
+    return arr
+  }, [filtered, sort])
 
-  const totalNet = filtered.reduce((s, t) => s + t.netAmount, 0)
+  function toggleSort(key: string) {
+    const ascKey  = `${key}_asc`
+    const descKey = `${key}_desc`
+    if (key === 'date') {
+      setSort(prev => (!prev || prev === descKey) ? ascKey : descKey)
+    } else {
+      setSort(prev => {
+        if (!prev || !prev.startsWith(key + '_')) return descKey
+        if (prev === descKey) return ascKey
+        return undefined
+      })
+    }
+  }
 
-  async function handleEdit(
+  function toggleRow(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const allSelected = sorted.length > 0 && selectedIds.size === sorted.length
+  const someSelected = selectedIds.size > 0 && selectedIds.size < sorted.length
+
+  function toggleAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(sorted.map(t => t.id)))
+  }
+
+  async function handleClassify(
     txId: string,
     field: 'categoryId' | 'costCenterId' | 'businessUnitId' | 'legalEntityId',
     newId: string | null,
   ) {
-    const nameFields = {
-      categoryId:     { nameKey: 'categoryName'     as const, options: categoryOptions },
-      costCenterId:   { nameKey: 'costCenterName'   as const, options: ccOptions },
-      businessUnitId: { nameKey: 'businessUnitName' as const, options: buOptions },
-      legalEntityId:  { nameKey: 'legalEntityName'  as const, options: leOptions },
+    const nameMap = {
+      categoryId:     { nameKey: 'categoryName'     as const, list: leafCategories.map(c => ({ id: c.id, name: c.name })) },
+      costCenterId:   { nameKey: 'costCenterName'   as const, list: costCenters.map(c => ({ id: c.id, name: c.name })) },
+      businessUnitId: { nameKey: 'businessUnitName' as const, list: businessUnits.map(c => ({ id: c.id, name: c.name })) },
+      legalEntityId:  { nameKey: 'legalEntityName'  as const, list: legalEntities.map(c => ({ id: c.id, name: c.name })) },
     }
-    const { nameKey, options } = nameFields[field]
-    const newName = newId ? (options.find(o => o.id === newId)?.name ?? null) : null
+    const { nameKey, list } = nameMap[field]
+    const newName = newId ? (list.find(o => o.id === newId)?.name ?? null) : null
 
+    setClassifyingId(txId)
     const prev = localData
-    setLocalData(d => d.map(tx =>
+    const next = localData.map(tx =>
       tx.id === txId ? { ...tx, [field]: newId, [nameKey]: newName } : tx
-    ))
+    )
+    setLocalData(next)
 
     const result = await classifyTransaction(txId, { [field]: newId })
-    if (result?.error) setLocalData(prev)
+    setClassifyingId(null)
+    if (result?.error) {
+      toast.error(result.error)
+      setLocalData(prev)
+    } else {
+      onDataChange(next)
+    }
   }
 
-  const hasSecondaryFilters = ddDateFrom || ddDateTo || ddCc || ddBu || ddLe
+  async function handleConfirmDelete() {
+    if (deleteTargetIds.length === 0) return
+    setIsDeleting(true)
+    const result = await deleteTransactions(deleteTargetIds)
+    setIsDeleting(false)
+    const ids = deleteTargetIds
+    setDeleteTargetIds([])
+    if (result?.error) {
+      toast.error(result.error)
+    } else {
+      toast.success(`${result.deleted} lançamento${result.deleted !== 1 ? 's' : ''} apagado${result.deleted !== 1 ? 's' : ''}.`)
+      const next = localData.filter(tx => !ids.includes(tx.id))
+      setLocalData(next)
+      setSelectedIds(new Set())
+      onDataChange(next)
+    }
+  }
+
+  function clearAllFilters() {
+    setSearch(undefined)
+    setDirection(undefined)
+    setAmountMin(undefined)
+    setAmountMax(undefined)
+    setCatFilter(undefined)
+    setCcFilter(undefined)
+    setBuFilter(undefined)
+    setLeFilter(undefined)
+    setAcctFilter(undefined)
+  }
+
+  const hasAnyFilter = !!(search || direction || amountMin || amountMax || catFilter || ccFilter || buFilter || leFilter || acctFilter)
+  const totalNet = sorted.reduce((s, t) => s + t.netAmount, 0)
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent className="flex flex-col max-w-5xl max-h-[85vh]">
-        <DialogHeader>
-          <DialogTitle className="text-sm">
-            {state.categoryName}
-            <span className="font-normal text-muted-foreground ml-2">
-              {state.dateRange
-                ? `Total — ${monthLabel(state.dateRange.from.slice(0, 7))} a ${monthLabel(state.dateRange.to.slice(0, 7))}`
-                : monthLabel(state.month)
-              }
-            </span>
+      <DialogContent className="flex flex-col w-[98vw] max-w-none max-h-[92vh] p-0 sm:rounded-lg">
+        <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+          <DialogTitle className="text-sm flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="truncate">{state.categoryName}</span>
+              <span className="font-normal text-muted-foreground shrink-0">
+                {state.dateRange
+                  ? `Total — ${monthLabel(state.dateRange.from.slice(0, 7))} a ${monthLabel(state.dateRange.to.slice(0, 7))}`
+                  : monthLabel(state.month)
+                }
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {selectedIds.size > 0 && (
+                <Button size="sm" variant="outline" onClick={() => setBatchOpen(true)}>
+                  Alterar {selectedIds.size} em lote
+                </Button>
+              )}
+              {hasAnyFilter && (
+                <Button size="sm" variant="ghost" onClick={clearAllFilters} className="text-muted-foreground">
+                  Limpar filtros
+                </Button>
+              )}
+            </div>
           </DialogTitle>
         </DialogHeader>
-
-        {/* Linha 1: busca + direção */}
-        <div className="flex items-center gap-2 shrink-0">
-          <input
-            type="text"
-            placeholder="Buscar descrição..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="h-7 flex-1 text-xs px-2 border rounded-md bg-background text-foreground min-w-0"
-          />
-          <div className="flex items-center rounded-md border overflow-hidden shrink-0">
-            {(['all', 'inflow', 'outflow'] as const).map(dir => (
-              <button
-                key={dir}
-                onClick={() => setDirFilter(dir)}
-                className={cn(
-                  'px-2.5 py-1 text-xs',
-                  dirFilter === dir
-                    ? 'bg-slate-800 text-white'
-                    : 'text-muted-foreground hover:bg-slate-50',
-                )}
-              >
-                {dir === 'all' ? 'Todos' : dir === 'inflow' ? 'Entrada' : 'Saída'}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Linha 2: datas + dimensões */}
-        <div className="flex items-center gap-2 flex-wrap shrink-0">
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground">De:</span>
-            <input
-              type="date"
-              value={ddDateFrom}
-              onChange={e => setDdDateFrom(e.target.value)}
-              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
-            />
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground">Até:</span>
-            <input
-              type="date"
-              value={ddDateTo}
-              onChange={e => setDdDateTo(e.target.value)}
-              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
-            />
-          </div>
-          {costCenters.length > 0 && (
-            <select
-              value={ddCc}
-              onChange={e => setDdCc(e.target.value)}
-              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
-            >
-              <option value="">Todos os C. Custo</option>
-              {costCenters.map(cc => <option key={cc.id} value={cc.id}>{cc.name}</option>)}
-            </select>
-          )}
-          {businessUnits.length > 0 && (
-            <select
-              value={ddBu}
-              onChange={e => setDdBu(e.target.value)}
-              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
-            >
-              <option value="">Todas as Un. Negócio</option>
-              {businessUnits.map(bu => <option key={bu.id} value={bu.id}>{bu.name}</option>)}
-            </select>
-          )}
-          {legalEntities.length > 0 && (
-            <select
-              value={ddLe}
-              onChange={e => setDdLe(e.target.value)}
-              className="h-7 text-xs px-2 border rounded-md bg-background text-foreground"
-            >
-              <option value="">Todas as Entidades</option>
-              {legalEntities.map(le => <option key={le.id} value={le.id}>{le.name}</option>)}
-            </select>
-          )}
-          {hasSecondaryFilters && (
-            <button
-              onClick={() => { setDdDateFrom(''); setDdDateTo(''); setDdCc(''); setDdBu(''); setDdLe('') }}
-              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-            >
-              Limpar filtros
-            </button>
-          )}
-        </div>
 
         {loading && localData.length === 0 ? (
           <div className="flex-1 flex items-center justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : filtered.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {localData.length === 0 ? 'Sem transações para exibir.' : 'Nenhuma transação corresponde aos filtros.'}
-          </p>
         ) : (
-          <div className="flex flex-col min-h-0 flex-1 gap-3">
-            <div className="overflow-auto flex-1 min-h-0">
-              <table className="w-full border-collapse text-xs" style={{ minWidth: 820 }}>
-                <thead className="sticky top-0 bg-background z-10">
-                  <tr className="border-b text-muted-foreground">
-                    <th className="text-left py-1.5 font-medium pr-3 whitespace-nowrap w-[76px]">Data</th>
-                    <th className="text-left py-1.5 font-medium min-w-[140px]">Descrição</th>
-                    <th className="text-left py-1.5 font-medium pl-2 w-[160px]">Categoria</th>
-                    <th className="text-left py-1.5 font-medium pl-2 w-[120px]">C. Custo</th>
-                    <th className="text-left py-1.5 font-medium pl-2 w-[120px]">Un. Negócio</th>
-                    <th className="text-left py-1.5 font-medium pl-2 w-[120px]">Entidade</th>
-                    <th className="text-right py-1.5 font-medium pl-3 whitespace-nowrap w-[80px]">Valor</th>
+          <div className="flex flex-col min-h-0 flex-1 px-6 pb-2">
+            <div className="flex-1 min-h-0 overflow-auto border rounded-lg">
+              <table className="w-full text-sm table-fixed [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0">
+                <colgroup>
+                  <col className="w-9" />
+                  <col className="w-[90px]" />
+                  <col />
+                  <col className="w-[110px]" />
+                  <col className="w-[180px]" />
+                  <col className="w-[80px]" />
+                  <col className="w-[200px]" />
+                  <col className="w-[130px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-9" />
+                </colgroup>
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-muted border-b">
+                    <th className="px-2 py-1.5 text-left">
+                      <input
+                        type="checkbox"
+                        className="rounded border-input"
+                        checked={allSelected}
+                        ref={el => { if (el) el.indeterminate = someSelected }}
+                        onChange={toggleAll}
+                      />
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={false} onClear={() => {}} sortKey="date" currentSort={sort} onSort={() => toggleSort('date')}>
+                        <span className="text-xs font-medium text-muted-foreground px-1">Data</span>
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!search} onClear={() => setSearch(undefined)} sortKey="desc" currentSort={sort} onSort={() => toggleSort('desc')}>
+                        <DescFilter value={search} onUpdate={setSearch} />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!(amountMin || amountMax)} onClear={() => { setAmountMin(undefined); setAmountMax(undefined) }} sortKey="amount" currentSort={sort} onSort={() => toggleSort('amount')}>
+                        <AmountFilter amountMin={amountMin} amountMax={amountMax} onUpdate={u => { setAmountMin(u.amountMin); setAmountMax(u.amountMax) }} />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!acctFilter} onClear={() => setAcctFilter(undefined)} sortKey="account" currentSort={sort} onSort={() => toggleSort('account')}>
+                        <MultiSelectFilter placeholder="Banco/Conta" value={acctFilter} options={acctOptions} onUpdate={setAcctFilter} width="w-72" />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!direction} onClear={() => setDirection(undefined)} sortKey="direction" currentSort={sort} onSort={() => toggleSort('direction')}>
+                        <DirectionFilter value={direction} onUpdate={setDirection} />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!catFilter} onClear={() => setCatFilter(undefined)} sortKey="category" currentSort={sort} onSort={() => toggleSort('category')}>
+                        <MultiSelectFilter placeholder="Categoria" value={catFilter} options={[]} grouped={catFilterGroups} showSpecial onUpdate={setCatFilter} width="w-72" />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!ccFilter} onClear={() => setCcFilter(undefined)} sortKey="costcenter" currentSort={sort} onSort={() => toggleSort('costcenter')}>
+                        <MultiSelectFilter placeholder="C. custo" value={ccFilter} options={ccOptions} showSpecial onUpdate={setCcFilter} />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!buFilter} onClear={() => setBuFilter(undefined)} sortKey="businessunit" currentSort={sort} onSort={() => toggleSort('businessunit')}>
+                        <MultiSelectFilter placeholder="Un. negócio" value={buFilter} options={buOptions} showSpecial onUpdate={setBuFilter} />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!leFilter} onClear={() => setLeFilter(undefined)} sortKey="legalentity" currentSort={sort} onSort={() => toggleSort('legalentity')}>
+                        <MultiSelectFilter placeholder="Entidade" value={leFilter} options={leOptions} showSpecial onUpdate={setLeFilter} />
+                      </ColHeader>
+                    </th>
+                    <th className="w-9" />
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(tx => (
-                    <tr key={tx.id} className="border-b border-slate-50 hover:bg-slate-50/50">
-                      <td className="py-1 pr-3 text-muted-foreground whitespace-nowrap">
-                        {fmtDate(tx.date)}
-                      </td>
-                      <td className="py-1 text-foreground">{tx.description}</td>
-                      <td className="py-1 pl-2">
-                        <DimCellCombobox
-                          value={tx.categoryName}
-                          options={categoryOptions}
-                          placeholder="—"
-                          onSelect={id => handleEdit(tx.id, 'categoryId', id)}
-                        />
-                      </td>
-                      <td className="py-1 pl-2">
-                        <DimCellCombobox
-                          value={tx.costCenterName}
-                          options={ccOptions}
-                          placeholder="—"
-                          onSelect={id => handleEdit(tx.id, 'costCenterId', id)}
-                        />
-                      </td>
-                      <td className="py-1 pl-2">
-                        <DimCellCombobox
-                          value={tx.businessUnitName}
-                          options={buOptions}
-                          placeholder="—"
-                          onSelect={id => handleEdit(tx.id, 'businessUnitId', id)}
-                        />
-                      </td>
-                      <td className="py-1 pl-2">
-                        <DimCellCombobox
-                          value={tx.legalEntityName}
-                          options={leOptions}
-                          placeholder="—"
-                          onSelect={id => handleEdit(tx.id, 'legalEntityId', id)}
-                        />
-                      </td>
-                      <td className={cn(
-                        'py-1 pl-3 text-right tabular-nums font-medium whitespace-nowrap',
-                        tx.netAmount > 0 ? 'text-emerald-700' : 'text-rose-600',
-                      )}>
-                        {fmtNum(tx.netAmount)}
-                      </td>
-                    </tr>
-                  ))}
+                  {sorted.map(tx => {
+                    const isClassifying = classifyingId === tx.id
+                    const acctLabel = tx.accountType ? (ACCT_LABELS[tx.accountType] ?? tx.accountType) : null
+                    const acctStr = acctLabel
+                      ? (tx.accountNumber ? `${acctLabel} · ${tx.accountNumber}` : acctLabel)
+                      : null
+
+                    return (
+                      <tr key={tx.id} className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
+                        <td className="px-2 py-1.5">
+                          <input type="checkbox" className="rounded border-input" checked={selectedIds.has(tx.id)} onChange={() => toggleRow(tx.id)} />
+                        </td>
+                        <td className="px-2 py-1.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+                          {fmtDate(tx.date)}
+                        </td>
+                        <td className="px-2 py-1.5 overflow-hidden">
+                          <div className="truncate text-xs">{tx.description}</div>
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                          <span className={cn('font-medium text-xs', tx.direction === 'inflow' ? 'text-emerald-600' : 'text-rose-600')}>
+                            {tx.direction === 'outflow' && '−'}{fmtNum(tx.amount)}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {tx.connectionLogoUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={tx.connectionLogoUrl} alt="" className="h-5 w-5 rounded object-contain shrink-0" />
+                            ) : null}
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <span className="truncate">{acctStr ?? '—'}</span>
+                              {tx.connectionBadge && (
+                                <span className="inline-flex items-center self-start rounded px-1 py-0 text-[10px] font-medium bg-slate-100 text-slate-700 ring-1 ring-slate-200">
+                                  {tx.connectionBadge}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <span className={cn(
+                            'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium',
+                            tx.direction === 'inflow' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700',
+                          )}>
+                            {tx.direction === 'inflow' ? 'Entrada' : 'Saída'}
+                          </span>
+                        </td>
+                        <td className="px-1 py-1">
+                          <CategoryCellCombobox
+                            value={tx.categoryId}
+                            categories={leafCategories.map(c => ({ id: c.id, name: c.name, code: c.code, type: c.type, parentId: null }))}
+                            onValueChange={v => handleClassify(tx.id, 'categoryId', v)}
+                            disabled={isClassifying}
+                          />
+                        </td>
+                        <td className="px-1 py-1">
+                          <CellCombobox
+                            value={tx.costCenterId}
+                            options={costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+                            onValueChange={v => handleClassify(tx.id, 'costCenterId', v)}
+                            disabled={isClassifying}
+                          />
+                        </td>
+                        <td className="px-1 py-1">
+                          <CellCombobox
+                            value={tx.businessUnitId}
+                            options={businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+                            onValueChange={v => handleClassify(tx.id, 'businessUnitId', v)}
+                            disabled={isClassifying}
+                          />
+                        </td>
+                        <td className="px-1 py-1">
+                          <CellCombobox
+                            value={tx.legalEntityId}
+                            options={legalEntities.map(c => ({ id: c.id, name: c.name }))}
+                            onValueChange={v => handleClassify(tx.id, 'legalEntityId', v)}
+                            disabled={isClassifying}
+                          />
+                        </td>
+                        <td className="px-1 py-1 text-center">
+                          <button
+                            onClick={() => setDeleteTargetIds([tx.id])}
+                            className="h-7 w-7 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/5"
+                            title="Apagar lançamento"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
+              {sorted.length === 0 && (
+                <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                  {localData.length === 0 ? 'Sem transações para exibir.' : 'Nenhuma transação corresponde aos filtros.'}
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center justify-between border-t pt-2.5 text-xs shrink-0">
-              <span className="text-muted-foreground">{filtered.length} transações</span>
+            <div className="flex items-center justify-between border-t pt-2.5 mt-2 text-xs shrink-0">
+              <span className="text-muted-foreground">{sorted.length} transaç{sorted.length !== 1 ? 'ões' : 'ão'}</span>
               <span className={cn('font-semibold tabular-nums', totalNet >= 0 ? 'text-emerald-700' : 'text-rose-600')}>
                 Total: {fmtNum(totalNet)}
               </span>
             </div>
           </div>
         )}
+
+        <BatchClassifyDialog
+          open={batchOpen}
+          onOpenChange={setBatchOpen}
+          selectedIds={Array.from(selectedIds)}
+          categories={leafCategories.map(c => ({ id: c.id, name: c.name, code: c.code, type: c.type, parentId: null }))}
+          costCenters={costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+          businessUnits={businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+          legalEntities={legalEntities.map(c => ({ id: c.id, name: c.name }))}
+          onSuccess={() => {
+            setSelectedIds(new Set())
+            // Recarrega o dialog (cuidado pra não causar loop — onDataChange manda pro pai recarregar via getDreDrillDown)
+            // Para simplificar, marcamos os dados como stale e o pai pode rebuscar quando quiser.
+          }}
+        />
+
+        <AlertDialog open={deleteTargetIds.length > 0} onOpenChange={open => { if (!open) setDeleteTargetIds([]) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Apagar {deleteTargetIds.length} lançamento{deleteTargetIds.length !== 1 ? 's' : ''}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Esta ação não pode ser desfeita. O lançamento será removido permanentemente.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction onClick={handleConfirmDelete} disabled={isDeleting} className="bg-destructive hover:bg-destructive/90">
+                {isDeleting ? 'Apagando...' : 'Apagar'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   )
@@ -935,6 +1068,7 @@ export function DreClient({
           data={drillDownData}
           loading={isDrillLoading}
           onClose={closeDrillDown}
+          onDataChange={setDrillDownData}
           leafCategories={leafCategories}
           costCenters={costCenters}
           businessUnits={businessUnits}
