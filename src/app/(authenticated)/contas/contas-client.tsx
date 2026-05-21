@@ -235,6 +235,7 @@ const SUBTYPE_LABEL: Record<string, string> = {
 type ConnectionMeta = {
   institutionName?: string
   institutionImageUrl?: string
+  isSandbox?: boolean
   executionStatus?: string
   lastTransactionFetchedAt?: string
   accounts?: { id: string; name: string; type: string; subtype: string; number: string }[]
@@ -306,7 +307,14 @@ function ConnectionCard({
           </div>
         )}
         <div>
-          <p className="text-sm font-medium">{meta.institutionName ?? connection.name}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">{meta.institutionName ?? connection.name}</p>
+            {meta.isSandbox && (
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 ring-1 ring-amber-200">
+                sandbox
+              </span>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground flex items-center gap-1">
             {isSyncing ? (
               <>

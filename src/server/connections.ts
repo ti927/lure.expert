@@ -39,15 +39,27 @@ export async function registerPluggyItem(itemId: string) {
   const { organizationId } = await getAuthContext()
 
   const client = getPluggyClient()
-  const item = await client.fetchItem(itemId)
+  const [item, accountsResult] = await Promise.all([
+    client.fetchItem(itemId),
+    client.fetchAccounts(itemId),
+  ])
 
   const type = mapConnectorType(item.connector.type as string)
+  const accounts = accountsResult.results.map(a => ({
+    id: a.id,
+    name: a.name,
+    type: a.type as string,
+    subtype: a.subtype as string,
+    number: a.number,
+  }))
   const metadata = {
     connectorId: item.connector.id,
     institutionName: item.connector.name,
     institutionImageUrl: item.connector.imageUrl,
+    isSandbox: item.connector.isSandbox ?? false,
     products: item.connector.products,
     executionStatus: item.executionStatus,
+    accounts,
   }
 
   const [existing] = await db

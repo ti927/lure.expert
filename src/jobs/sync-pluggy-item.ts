@@ -32,16 +32,22 @@ export const syncPluggyItem = inngest.createFunction(
       fromDate?: string
     }
 
-    const accountIds = await step.run('fetch-accounts', async () => {
+    const { accountIds, isSandbox } = await step.run('fetch-accounts', async () => {
       const client = getPluggyClient()
-      const result = await client.fetchAccounts(itemId)
-      return result.results.map(a => ({
-        id: a.id,
-        name: a.name,
-        type: a.type as string,
-        subtype: a.subtype as string,
-        number: a.number,
-      }))
+      const [result, item] = await Promise.all([
+        client.fetchAccounts(itemId),
+        client.fetchItem(itemId),
+      ])
+      return {
+        isSandbox: item.connector.isSandbox ?? false,
+        accountIds: result.results.map(a => ({
+          id: a.id,
+          name: a.name,
+          type: a.type as string,
+          subtype: a.subtype as string,
+          number: a.number,
+        })),
+      }
     })
 
     if (accountIds.length === 0) {
@@ -149,6 +155,7 @@ export const syncPluggyItem = inngest.createFunction(
           lastSyncStatus: 'SUCCESS',
           metadata: {
             ...existingMeta,
+            isSandbox,
             lastTransactionFetchedAt: dateFrom,
             accounts: accountIds.map(a => ({
               id: a.id,
