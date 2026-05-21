@@ -15,6 +15,7 @@ import {
   Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, X,
   ChevronDown, ChevronRight, ChevronsUpDown, Tags, GripVertical, Filter,
 } from 'lucide-react'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -65,6 +66,8 @@ export type CategoryItem = {
   type: string
   parentId: string | null
   isActive: boolean
+  hideInDre: boolean
+  hideInCashflow: boolean
   txCount: number
   createdAt: Date
   updatedAt: Date
@@ -107,6 +110,7 @@ interface CategoryManagerProps {
   onCreate: (formData: FormData) => Promise<{ success?: boolean; error?: string }>
   onUpdate: (id: string, formData: FormData) => Promise<{ success?: boolean; error?: string }>
   onToggleActive: (id: string, isActive: boolean) => Promise<{ success?: boolean; error?: string }>
+  onToggleVisibility: (id: string, field: 'hideInDre' | 'hideInCashflow', value: boolean) => Promise<{ success?: boolean; error?: string }>
   onDelete: (id: string) => Promise<{ success?: boolean; error?: string }>
   onMove: (filhoId: string, newParentId: string) => Promise<{ success?: boolean; error?: string }>
   onChangeType: (parentId: string, newType: string) => Promise<{ success?: boolean; error?: string; updated?: number }>
@@ -261,6 +265,7 @@ export function CategoryManager({
   onCreate,
   onUpdate,
   onToggleActive,
+  onToggleVisibility,
   onDelete,
   onMove,
   onChangeType,
@@ -270,6 +275,9 @@ export function CategoryManager({
 
   const [localCategories, setLocalCategories] = useState(categories)
   useEffect(() => { setLocalCategories(categories) }, [categories])
+
+  const [activeTab, setActiveTab] = useState<'dre' | 'bp'>('dre')
+  const activeTabTypes = activeTab === 'dre' ? DRE_TYPES : BP_TYPES
 
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set())
@@ -287,12 +295,22 @@ export function CategoryManager({
 
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
 
-  const allPais = localCategories.filter(c => c.parentId === null && c.isActive)
-  const allFilhos = localCategories.filter(c => c.parentId !== null && c.isActive)
-  const typesWithCategories = TYPE_ORDER.filter(t => localCategories.some(c => c.type === t))
+  function handleTabChange(tab: 'dre' | 'bp') {
+    setActiveTab(tab)
+    setTypeFilter([])
+    setPaiFilter([])
+    setFilhoFilter([])
+    setCollapsedTypes(new Set())
+    setCollapsedPais(new Set())
+  }
+
+  const allPais = localCategories.filter(c => c.parentId === null && c.isActive && activeTabTypes.includes(c.type as typeof activeTabTypes[number]))
+  const allFilhos = localCategories.filter(c => c.parentId !== null && c.isActive && activeTabTypes.includes(c.type as typeof activeTabTypes[number]))
+  const typesWithCategories = activeTabTypes.filter(t => localCategories.some(c => c.type === t))
 
   const visibleCategories = (() => {
     let result = showArchived ? localCategories : localCategories.filter(c => c.isActive)
+    result = result.filter(c => activeTabTypes.includes(c.type as typeof activeTabTypes[number]))
 
     if (typeFilter.length > 0)
       result = result.filter(c => typeFilter.includes(c.type))
@@ -317,7 +335,7 @@ export function CategoryManager({
   const hasActiveFilters = typeFilter.length > 0 || paiFilter.length > 0 || filhoFilter.length > 0
 
   const byType: Record<string, TreeNode[]> = {}
-  for (const type of TYPE_ORDER) {
+  for (const type of activeTabTypes) {
     byType[type] = buildTree(visibleCategories.filter(c => c.type === type))
   }
 
@@ -410,6 +428,20 @@ export function CategoryManager({
     })
   }
 
+  function handleToggleVisibility(id: string, field: 'hideInDre' | 'hideInCashflow', currentValue: boolean) {
+    const prev = [...localCategories]
+    setLocalCategories(cs =>
+      cs.map(c => c.id === id ? { ...c, [field]: !currentValue } : c)
+    )
+    startTransition(async () => {
+      const result = await onToggleVisibility(id, field, !currentValue)
+      if (result.error) {
+        toast.error(result.error)
+        setLocalCategories(prev)
+      }
+    })
+  }
+
   function handleDeleteConfirm() {
     if (!deleteTarget) return
     startTransition(async () => {
@@ -476,10 +508,12 @@ export function CategoryManager({
   const sharedProps = {
     editingId,
     isPending,
+    showVisibilityFlags: activeTab === 'dre',
     onEditRequest: setEditingId,
     onCancelEdit: () => setEditingId(null),
     onUpdateRequest: handleUpdate,
     onToggleActiveRequest: handleToggleActive,
+    onToggleVisibilityRequest: handleToggleVisibility,
     onDeleteRequest: setDeleteTarget,
     onChangeTypeRequest: setChangeTypeTarget,
     addingFilhoToPaiId,
@@ -494,27 +528,37 @@ export function CategoryManager({
   return (
     <div className="space-y-4">
       {/* Toolbar Row 1 */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" onClick={() => setShowCreateDialog(true)} disabled={isPending}>
             <Plus className="h-4 w-4 mr-1" />
             Nova natureza
           </Button>
-          <Button variant="ghost" size="sm" onClick={toggleAllTypes}>
-            <ChevronsUpDown className="h-4 w-4 mr-1" />
-            {allTypesCollapsed ? 'Expandir tipos' : 'Recolher tipos'}
-          </Button>
-          {visiblePaiIds.length > 0 && (
-            <Button variant="ghost" size="sm" onClick={toggleAllPais}>
-              <ChevronsUpDown className="h-4 w-4 mr-1" />
-              {allPaisCollapsed ? 'Expandir pais' : 'Recolher pais'}
-            </Button>
-          )}
+          <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'dre' | 'bp')}>
+            <TabsList className="h-8">
+              <TabsTrigger value="dre" className="text-xs h-7 px-3">Categorias DRE</TabsTrigger>
+              <TabsTrigger value="bp" className="text-xs h-7 px-3">Balanço Patrimonial</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </div>
         {archivedCount > 0 && (
           <Button variant="ghost" size="sm" onClick={() => setShowArchived(v => !v)}>
             <Archive className="h-4 w-4 mr-1" />
             {showArchived ? 'Ocultar arquivadas' : `Mostrar arquivadas (${archivedCount})`}
+          </Button>
+        )}
+      </div>
+
+      {/* Toolbar Row 1.5: collapse/expand */}
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={toggleAllTypes}>
+          <ChevronsUpDown className="h-4 w-4 mr-1" />
+          {allTypesCollapsed ? 'Expandir tipos' : 'Recolher tipos'}
+        </Button>
+        {visiblePaiIds.length > 0 && (
+          <Button variant="ghost" size="sm" onClick={toggleAllPais}>
+            <ChevronsUpDown className="h-4 w-4 mr-1" />
+            {allPaisCollapsed ? 'Expandir pais' : 'Recolher pais'}
           </Button>
         )}
       </div>
@@ -604,81 +648,67 @@ export function CategoryManager({
         />
       ) : (
         <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="space-y-4">
-            {([['DRE', DRE_TYPES], ['Balanço Patrimonial', BP_TYPES]] as [string, string[]][]).map(
-              ([sectionLabel, sectionTypes]) => {
-                return (
-                  <div key={sectionLabel}>
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-2 px-1">
-                      {sectionLabel}
-                    </p>
-                    <div className="space-y-2">
-                      {sectionTypes.map(type => {
-                        const nodes = byType[type] ?? []
-                        const isCollapsed = collapsedTypes.has(type)
+          <div className="space-y-2">
+            {activeTabTypes.map(type => {
+              const nodes = byType[type] ?? []
+              const isCollapsed = collapsedTypes.has(type)
 
-                        return (
-                          <div key={type} className="border rounded-lg overflow-hidden">
-                            {/* TYPE header: botão collapse + botão "+" para Nat. Pai */}
-                            <div className="flex items-center bg-muted/40 hover:bg-muted/60 transition-colors">
-                              <button
-                                type="button"
-                                className="flex-1 flex items-center gap-2 px-3 py-2 text-left"
-                                onClick={() => toggleTypeCollapse(type)}
-                              >
-                                {isCollapsed
-                                  ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                                }
-                                <span className="text-sm font-semibold text-foreground">
-                                  {TYPE_LABELS[type] ?? type}
-                                </span>
-                                <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="h-8 w-8 shrink-0 flex items-center justify-center text-primary hover:bg-primary/10 rounded mr-1"
-                                onClick={() => {
-                                  setAddingPaiToType(type)
-                                  setCollapsedTypes(prev => { const n = new Set(prev); n.delete(type); return n })
-                                }}
-                                title="Adicionar Natureza Pai"
-                              >
-                                <Plus className="h-4 w-4" />
-                              </button>
-                            </div>
-
-                            {!isCollapsed && (
-                              <div>
-                                {nodes.map(paiNode => (
-                                  <PaiSection
-                                    key={paiNode.id}
-                                    node={paiNode}
-                                    activeDragId={activeDragId}
-                                    isCollapsed={collapsedPais.has(paiNode.id)}
-                                    onToggleCollapse={() => togglePaiCollapse(paiNode.id)}
-                                    {...sharedProps}
-                                  />
-                                ))}
-                                {addingPaiToType === type && (
-                                  <InlineCreateRow
-                                    type={type}
-                                    parentId={null}
-                                    isPending={isPending}
-                                    onSubmit={handleInlineCreate}
-                                    onCancel={() => setAddingPaiToType(null)}
-                                  />
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
+              return (
+                <div key={type} className="border rounded-lg overflow-hidden">
+                  <div className="flex items-center bg-muted/40 hover:bg-muted/60 transition-colors">
+                    <button
+                      type="button"
+                      className="flex-1 flex items-center gap-2 px-3 py-2 text-left"
+                      onClick={() => toggleTypeCollapse(type)}
+                    >
+                      {isCollapsed
+                        ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                        : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                      }
+                      <span className="text-sm font-semibold text-foreground">
+                        {TYPE_LABELS[type] ?? type}
+                      </span>
+                      <span className="text-xs text-muted-foreground ml-1">({nodes.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="h-8 w-8 shrink-0 flex items-center justify-center text-primary hover:bg-primary/10 rounded mr-1"
+                      onClick={() => {
+                        setAddingPaiToType(type)
+                        setCollapsedTypes(prev => { const n = new Set(prev); n.delete(type); return n })
+                      }}
+                      title="Adicionar Natureza Pai"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
                   </div>
-                )
-              }
-            )}
+
+                  {!isCollapsed && (
+                    <div>
+                      {nodes.map(paiNode => (
+                        <PaiSection
+                          key={paiNode.id}
+                          node={paiNode}
+                          activeDragId={activeDragId}
+                          isCollapsed={collapsedPais.has(paiNode.id)}
+                          onToggleCollapse={() => togglePaiCollapse(paiNode.id)}
+                          {...sharedProps}
+                        />
+                      ))}
+                      {addingPaiToType === type && (
+                        <InlineCreateRow
+                          type={type}
+                          parentId={null}
+                          isPending={isPending}
+                          onSubmit={handleInlineCreate}
+                          onCancel={() => setAddingPaiToType(null)}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
 
           <DragOverlay dropAnimation={null}>
@@ -753,10 +783,12 @@ interface SectionProps {
   onToggleCollapse: () => void
   editingId: string | null
   isPending: boolean
+  showVisibilityFlags: boolean
   onEditRequest: (id: string) => void
   onCancelEdit: () => void
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
+  onToggleVisibilityRequest: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
   onDeleteRequest: (item: CategoryItem) => void
   onChangeTypeRequest: (item: CategoryItem) => void
   addingFilhoToPaiId: string | null
@@ -772,10 +804,12 @@ function PaiSection({
   onToggleCollapse,
   editingId,
   isPending,
+  showVisibilityFlags,
   onEditRequest,
   onCancelEdit,
   onUpdateRequest,
   onToggleActiveRequest,
+  onToggleVisibilityRequest,
   onDeleteRequest,
   onChangeTypeRequest,
   addingFilhoToPaiId,
@@ -787,7 +821,7 @@ function PaiSection({
   const isDragFromSelf = activeDragId !== null && node.children.some(c => c.id === activeDragId)
   const showDropHighlight = isOver && !isDragFromSelf
 
-  const rowProps = { isPending, onEditRequest, onCancelEdit, onUpdateRequest, onToggleActiveRequest, onDeleteRequest, onChangeTypeRequest }
+  const rowProps = { isPending, showVisibilityFlags, onEditRequest, onCancelEdit, onUpdateRequest, onToggleActiveRequest, onToggleVisibilityRequest, onDeleteRequest, onChangeTypeRequest }
 
   return (
     <div
@@ -838,10 +872,12 @@ interface PaiRowProps {
   hasChildren: boolean
   onToggleCollapse: () => void
   isPending: boolean
+  showVisibilityFlags: boolean
   onEditRequest: (id: string) => void
   onCancelEdit: () => void
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
+  onToggleVisibilityRequest: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
   onDeleteRequest: (item: CategoryItem) => void
   onChangeTypeRequest: (item: CategoryItem) => void
   onAddFilho: (paiId: string) => void
@@ -855,10 +891,12 @@ function PaiRow({
   hasChildren,
   onToggleCollapse,
   isPending,
+  showVisibilityFlags,
   onEditRequest,
   onCancelEdit,
   onUpdateRequest,
   onToggleActiveRequest,
+  onToggleVisibilityRequest,
   onDeleteRequest,
   onChangeTypeRequest,
   onAddFilho,
@@ -913,6 +951,7 @@ function PaiRow({
       {!node.isActive && (
         <Badge variant="secondary" className="text-xs shrink-0">Arquivada</Badge>
       )}
+      {showVisibilityFlags && <VisibilityToggles node={node} onToggle={onToggleVisibilityRequest} />}
       <Button
         size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground gap-1"
         onClick={() => onChangeTypeRequest(node)}
@@ -945,10 +984,12 @@ interface FilhoRowProps {
   node: CategoryItem
   editingId: string | null
   isPending: boolean
+  showVisibilityFlags: boolean
   onEditRequest: (id: string) => void
   onCancelEdit: () => void
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
+  onToggleVisibilityRequest: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
   onDeleteRequest: (item: CategoryItem) => void
 }
 
@@ -956,10 +997,12 @@ function DraggableFilhoRow({
   node,
   editingId,
   isPending,
+  showVisibilityFlags,
   onEditRequest,
   onCancelEdit,
   onUpdateRequest,
   onToggleActiveRequest,
+  onToggleVisibilityRequest,
   onDeleteRequest,
 }: FilhoRowProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: node.id })
@@ -1009,6 +1052,7 @@ function DraggableFilhoRow({
       {!node.isActive && (
         <Badge variant="secondary" className="text-xs shrink-0">Arquivada</Badge>
       )}
+      {showVisibilityFlags && <VisibilityToggles node={node} onToggle={onToggleVisibilityRequest} />}
       <RowActions
         node={node}
         isPending={isPending}
@@ -1016,6 +1060,47 @@ function DraggableFilhoRow({
         onToggleActiveRequest={onToggleActiveRequest}
         onDeleteRequest={onDeleteRequest}
       />
+    </div>
+  )
+}
+
+// ─── VisibilityToggles ────────────────────────────────────────────────────────
+
+function VisibilityToggles({
+  node,
+  onToggle,
+}: {
+  node: CategoryItem
+  onToggle: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
+}) {
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      <button
+        type="button"
+        onClick={() => onToggle(node.id, 'hideInDre', node.hideInDre)}
+        title={node.hideInDre ? 'Oculto na DRE — clique para exibir' : 'Visível na DRE — clique para ocultar'}
+        className={cn(
+          'text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors',
+          node.hideInDre
+            ? 'text-muted-foreground/50 border-muted line-through'
+            : 'text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100',
+        )}
+      >
+        DRE
+      </button>
+      <button
+        type="button"
+        onClick={() => onToggle(node.id, 'hideInCashflow', node.hideInCashflow)}
+        title={node.hideInCashflow ? 'Oculto no Fluxo de Caixa — clique para exibir' : 'Visível no Fluxo de Caixa — clique para ocultar'}
+        className={cn(
+          'text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors',
+          node.hideInCashflow
+            ? 'text-muted-foreground/50 border-muted line-through'
+            : 'text-sky-700 border-sky-200 bg-sky-50 hover:bg-sky-100',
+        )}
+      >
+        FC
+      </button>
     </div>
   )
 }

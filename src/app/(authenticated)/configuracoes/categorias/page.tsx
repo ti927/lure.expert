@@ -9,6 +9,7 @@ import {
   createCategory,
   updateCategory,
   toggleCategoryActive,
+  toggleCategoryVisibility,
   deleteCategory,
   moveCategory,
   changeParentType,
@@ -51,6 +52,7 @@ export default async function CategoriasPage() {
             onCreate={createCategory}
             onUpdate={updateCategory}
             onToggleActive={toggleCategoryActive}
+            onToggleVisibility={toggleCategoryVisibility}
             onDelete={deleteCategory}
             onMove={moveCategory}
             onChangeType={changeParentType}

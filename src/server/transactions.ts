@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, transactions, categorizationRules, categories, documents } from '@/db/schema'
+import { memberships, transactions, categorizationRules, categories, documents, costCenters, businessUnits, legalEntities } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 
 async function getAuthContext() {
@@ -23,7 +23,7 @@ async function getAuthContext() {
   return { userId: user.id, organizationId: membership.organizationId }
 }
 
-const PAGE_SIZE = 25
+const PAGE_SIZE = 100
 
 // Parseia filtros multi-select: "id1,id2,__none__,__classified__" → { ids, includeNone, includeClassified }
 function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean; includeClassified: boolean } {
@@ -64,13 +64,16 @@ interface GetTransactionsParams {
   businessUnit?: string
   legalEntity?: string
   documentId?: string
+  accountId?: string
   sort?: string
   reportType?: string
+  amountMin?: string
+  amountMax?: string
 }
 
 export async function getTransactions(params: GetTransactionsParams = {}) {
   const { organizationId } = await getAuthContext()
-  const { page = 1, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, sort, reportType } = params
+  const { page = 1, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, accountId, sort, reportType, amountMin, amountMax } = params
   const offset = (page - 1) * PAGE_SIZE
 
   const conditions: SQL[] = [
@@ -82,6 +85,8 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   if (from) conditions.push(gte(transactions.date, from))
   if (to) conditions.push(lte(transactions.date, to))
   if (direction === 'inflow' || direction === 'outflow') conditions.push(eq(transactions.direction, direction))
+  if (amountMin) conditions.push(gte(sql`${transactions.amount}::numeric`, sql`${amountMin}::numeric`))
+  if (amountMax) conditions.push(lte(sql`${transactions.amount}::numeric`, sql`${amountMax}::numeric`))
 
   const catFilter = buildMultiFilterCondition(transactions.categoryId, parseMultiFilter(category))
   if (catFilter) conditions.push(catFilter)
@@ -98,6 +103,9 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   const docFilter = parseMultiFilter(documentId)
   if (docFilter.ids.length > 0) conditions.push(inArray(transactions.documentId, docFilter.ids))
 
+  const acctFilter = parseMultiFilter(accountId)
+  if (acctFilter.ids.length > 0) conditions.push(inArray(transactions.accountId, acctFilter.ids))
+
   if (reportType === 'balance_sheet') {
     conditions.push(eq(documents.reportType, 'balance_sheet'))
   } else if (reportType === 'other') {
@@ -109,10 +117,26 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   // Ordenação
   const orderBy = (() => {
     switch (sort) {
-      case 'date_asc': return [asc(transactions.date), asc(transactions.createdAt)]
-      case 'amount_desc': return [desc(sql`${transactions.amount}::numeric`), desc(transactions.date)]
-      case 'amount_asc': return [asc(sql`${transactions.amount}::numeric`), desc(transactions.date)]
-      default: return [desc(transactions.date), desc(transactions.createdAt)]
+      case 'date_asc':         return [asc(transactions.date), asc(transactions.createdAt)]
+      case 'amount_desc':      return [desc(sql`${transactions.amount}::numeric`), desc(transactions.date)]
+      case 'amount_asc':       return [asc(sql`${transactions.amount}::numeric`), desc(transactions.date)]
+      case 'desc_asc':         return [asc(transactions.description), desc(transactions.date)]
+      case 'desc_desc':        return [desc(transactions.description), desc(transactions.date)]
+      case 'account_asc':      return [asc(transactions.accountName), desc(transactions.date)]
+      case 'account_desc':     return [desc(transactions.accountName), desc(transactions.date)]
+      case 'direction_asc':    return [asc(transactions.direction), desc(transactions.date)]
+      case 'direction_desc':   return [desc(transactions.direction), desc(transactions.date)]
+      case 'reporttype_asc':   return [asc(documents.reportType), desc(transactions.date)]
+      case 'reporttype_desc':  return [desc(documents.reportType), desc(transactions.date)]
+      case 'category_asc':     return [asc(categories.code), asc(categories.name)]
+      case 'category_desc':    return [desc(categories.code), desc(categories.name)]
+      case 'costcenter_asc':   return [asc(costCenters.code), asc(costCenters.name)]
+      case 'costcenter_desc':  return [desc(costCenters.code), desc(costCenters.name)]
+      case 'businessunit_asc': return [asc(businessUnits.code), asc(businessUnits.name)]
+      case 'businessunit_desc':return [desc(businessUnits.code), desc(businessUnits.name)]
+      case 'legalentity_asc':  return [asc(legalEntities.name)]
+      case 'legalentity_desc': return [desc(legalEntities.name)]
+      default:                 return [desc(transactions.date), desc(transactions.createdAt)]
     }
   })()
 
@@ -123,6 +147,10 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     })
     .from(transactions)
     .leftJoin(documents, eq(transactions.documentId, documents.id))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .leftJoin(costCenters, eq(transactions.costCenterId, costCenters.id))
+    .leftJoin(businessUnits, eq(transactions.businessUnitId, businessUnits.id))
+    .leftJoin(legalEntities, eq(transactions.legalEntityId, legalEntities.id))
 
   const countQuery = db
     .select({ total: count() })

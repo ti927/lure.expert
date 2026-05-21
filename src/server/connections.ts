@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, dataSources, transactions } from '@/db/schema'
-import { eq, and, isNotNull, ne, inArray, desc } from 'drizzle-orm'
+import { eq, and, isNotNull, ne, inArray, desc, count } from 'drizzle-orm'
 import { getPluggyClient, createConnectToken as pluggyCreateToken } from '@/lib/pluggy'
 import { revalidatePath } from 'next/cache'
 import { inngest } from '@/lib/inngest'
@@ -95,6 +95,63 @@ export async function registerPluggyItem(itemId: string) {
   } catch {
     // não bloqueia o registro se o Inngest estiver offline
   }
+}
+
+export interface DataSourceOption {
+  accountId: string       // transactions.account_id — chave do filtro
+  label: string           // "Banco · Tipo · Número"
+  txCount: number
+}
+
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  CHECKING_ACCOUNT: 'C. Corrente',
+  SAVINGS_ACCOUNT:  'Poupança',
+  CREDIT_CARD:      'Cartão',
+}
+
+export async function getDataSourcesWithTransactions(): Promise<DataSourceOption[]> {
+  const { organizationId } = await getAuthContext()
+
+  const { sql: rawSql } = await import('drizzle-orm')
+
+  type AccRow = {
+    account_id:       string
+    account_number:   string | null
+    account_type:     string | null
+    account_name:     string | null
+    tx_count:         string
+    institution_name: string | null
+  }
+
+  // Agrupa por conta individual (não por conexão) usando as colunas reais de transactions
+  const rows = await db.execute<AccRow>(rawSql`
+    SELECT
+      t.account_id,
+      t.account_number,
+      t.account_type,
+      t.account_name,
+      COUNT(*)::text                          AS tx_count,
+      ds.metadata->>'institutionName'         AS institution_name
+    FROM transactions t
+    JOIN data_sources ds ON t.data_source_id = ds.id
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.status != 'pending'
+      AND t.account_id IS NOT NULL
+    GROUP BY t.account_id, t.account_number, t.account_type, t.account_name,
+             ds.metadata->>'institutionName'
+    ORDER BY institution_name, t.account_type, t.account_number
+  `)
+
+  return rows.map(r => {
+    const bank      = r.institution_name ?? 'Banco'
+    const typeLabel = r.account_type ? (ACCOUNT_TYPE_LABELS[r.account_type] ?? r.account_type) : ''
+    const numLabel  = r.account_number ? ` · ${r.account_number}` : ''
+    return {
+      accountId: r.account_id,
+      label:     `${bank} · ${typeLabel}${numLabel}`,
+      txCount:   Number(r.tx_count),
+    }
+  })
 }
 
 export async function getOrgConnections() {

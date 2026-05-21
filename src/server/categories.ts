@@ -75,6 +75,8 @@ export async function getCategoriesWithTxCount() {
       type: categories.type,
       parentId: categories.parentId,
       isActive: categories.isActive,
+      hideInDre: categories.hideInDre,
+      hideInCashflow: categories.hideInCashflow,
       metadata: categories.metadata,
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
@@ -245,6 +247,23 @@ export async function changeParentType(parentId: string, newType: string) {
 
   revalidatePath('/configuracoes/categorias')
   return { success: true, updated: children.length }
+}
+
+export async function toggleCategoryVisibility(
+  id: string,
+  field: 'hideInDre' | 'hideInCashflow',
+  value: boolean,
+) {
+  const { organizationId } = await getAuthContext()
+  const update = field === 'hideInDre'
+    ? { hideInDre: value, updatedAt: new Date() }
+    : { hideInCashflow: value, updatedAt: new Date() }
+  await db
+    .update(categories)
+    .set(update)
+    .where(and(eq(categories.id, id), eq(categories.organizationId, organizationId)))
+  revalidatePath('/configuracoes/categorias')
+  return { success: true }
 }
 
 export async function getChildrenCount(parentId: string) {

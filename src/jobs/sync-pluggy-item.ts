@@ -88,6 +88,11 @@ export const syncPluggyItem = inngest.createFunction(
                     currency: tx.currencyCode ?? 'BRL',
                     direction: tx.type === 'CREDIT' ? 'inflow' : 'outflow',
                     description: tx.description,
+                    // Colunas de conta — permitem filtros indexados sem JSONB
+                    accountId:     account.id,
+                    accountNumber: account.number,
+                    accountType:   account.subtype as string,  // CHECKING_ACCOUNT | CREDIT_CARD | SAVINGS_ACCOUNT
+                    accountName:   account.name,
                     rawData: tx as unknown as Record<string, unknown>,
                     metadata: {
                       accountId: account.id,

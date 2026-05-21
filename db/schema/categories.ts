@@ -22,6 +22,8 @@ export const categories = pgTable(
       onDelete: 'restrict',
     }),
     isActive: boolean('is_active').notNull().default(true),
+    hideInDre: boolean('hide_in_dre').notNull().default(false),
+    hideInCashflow: boolean('hide_in_cashflow').notNull().default(false),
     metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp('created_at', tz).notNull().default(sql`now()`),
     updatedAt: timestamp('updated_at', tz).notNull().default(sql`now()`),

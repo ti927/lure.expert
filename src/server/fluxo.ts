@@ -73,40 +73,46 @@ export async function getFluxoData(): Promise<FluxoData> {
   const [balRows, histRows, recRows] = await Promise.all([
     db.execute<BalRow>(sql`
       SELECT COALESCE(SUM(
-        CASE WHEN direction = 'inflow' THEN amount::numeric ELSE -amount::numeric END
+        CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END
       ), 0)::text AS saldo
-      FROM transactions
-      WHERE organization_id = ${organizationId}::uuid
-        AND status NOT IN ('pending', 'duplicate')
+      FROM transactions t
+      LEFT JOIN categories c ON t.category_id = c.id
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+        AND (c.id IS NULL OR c.hide_in_cashflow = false)
     `),
 
     db.execute<DayRow>(sql`
       SELECT
-        date::date::text AS date,
-        COALESCE(SUM(CASE WHEN direction = 'inflow'  THEN amount::numeric ELSE 0 END), 0)::text AS inflow,
-        COALESCE(SUM(CASE WHEN direction = 'outflow' THEN amount::numeric ELSE 0 END), 0)::text AS outflow
-      FROM transactions
-      WHERE organization_id = ${organizationId}::uuid
-        AND status NOT IN ('pending', 'duplicate')
-        AND date::date >= ${hist60}::date
-        AND date::date <= ${todayStr}::date
-      GROUP BY date::date
-      ORDER BY date::date ASC
+        t.date::date::text AS date,
+        COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0)::text AS inflow,
+        COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0)::text AS outflow
+      FROM transactions t
+      LEFT JOIN categories c ON t.category_id = c.id
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+        AND t.date::date >= ${hist60}::date
+        AND t.date::date <= ${todayStr}::date
+        AND (c.id IS NULL OR c.hide_in_cashflow = false)
+      GROUP BY t.date::date
+      ORDER BY t.date::date ASC
     `),
 
     db.execute<RecRow>(sql`
       WITH deduped AS (
-        SELECT DISTINCT ON (lower(trim(description)), direction, date::date)
-          lower(trim(description)) AS desc_key,
-          description,
-          direction,
-          amount::numeric AS amount,
-          date::date AS tx_date
-        FROM transactions
-        WHERE organization_id = ${organizationId}::uuid
-          AND status NOT IN ('pending', 'duplicate')
-          AND date::date >= CURRENT_DATE - INTERVAL '180 days'
-        ORDER BY lower(trim(description)), direction, date::date, amount::numeric DESC
+        SELECT DISTINCT ON (lower(trim(t.description)), t.direction, t.date::date)
+          lower(trim(t.description)) AS desc_key,
+          t.description,
+          t.direction,
+          t.amount::numeric AS amount,
+          t.date::date AS tx_date
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.organization_id = ${organizationId}::uuid
+          AND t.status NOT IN ('pending', 'duplicate')
+          AND t.date::date >= CURRENT_DATE - INTERVAL '180 days'
+          AND (c.id IS NULL OR c.hide_in_cashflow = false)
+        ORDER BY lower(trim(t.description)), t.direction, t.date::date, t.amount::numeric DESC
       ),
       grouped AS (
         SELECT

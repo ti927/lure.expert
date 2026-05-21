@@ -8,7 +8,7 @@ interface Props {
 export default async function ReviewPage({ params }: Props) {
   const data = await getDocumentStagingRows(params.id)
   return (
-    <div className="container mx-auto max-w-7xl py-8 px-4">
+    <div className="h-full flex flex-col overflow-hidden">
       <ReviewClient documentId={params.id} initialData={data} />
     </div>
   )

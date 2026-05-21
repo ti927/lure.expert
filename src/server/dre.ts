@@ -99,6 +99,7 @@ export async function getDreData(filters: DreFilters): Promise<DreData> {
       AND t.date::date >= ${from}::date
       AND t.date::date <= ${to}::date
       AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
+      AND c.hide_in_dre = false
       ${ccFilter}
       ${buFilter}
       ${leFilter}

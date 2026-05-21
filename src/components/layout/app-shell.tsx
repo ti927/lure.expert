@@ -32,7 +32,7 @@ export function AppShell({ children, user }: AppShellProps) {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-screen overflow-hidden bg-background">
       <Sidebar
         collapsed={collapsed}
         onToggle={toggleCollapsed}
@@ -43,7 +43,7 @@ export function AppShell({ children, user }: AppShellProps) {
 
       <div
         className={cn(
-          'flex min-h-screen flex-col transition-all duration-200',
+          'flex h-screen flex-col transition-all duration-200',
           collapsed ? 'md:pl-16' : 'md:pl-60',
         )}
       >
@@ -58,7 +58,7 @@ export function AppShell({ children, user }: AppShellProps) {
           <span className="text-base font-bold tracking-tight text-primary">lure.expert</span>
         </header>
 
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 overflow-y-auto min-h-0">{children}</main>
       </div>
     </div>
   )

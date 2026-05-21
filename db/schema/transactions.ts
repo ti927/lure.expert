@@ -67,6 +67,11 @@ export const transactions = pgTable(
     costCenterId: uuid('cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
     businessUnitId: uuid('business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
     legalEntityId: uuid('legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
+    // Conta bancária / cartão de origem (Pluggy) — colunas próprias para indexação e filtragem
+    accountId:     text('account_id'),
+    accountNumber: text('account_number'),
+    accountType:   text('account_type'),   // subtipo: CHECKING_ACCOUNT | CREDIT_CARD | SAVINGS_ACCOUNT
+    accountName:   text('account_name'),
     // FK para a transação canônica (Pluggy) quando esta é marcada como duplicata de upload
     duplicateOf: uuid('duplicate_of').references((): AnyPgColumn => transactions.id, { onDelete: 'set null' }),
     rawData: jsonb('raw_data').notNull().default(sql`'{}'::jsonb`),

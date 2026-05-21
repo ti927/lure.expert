@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
-import Link from 'next/link'
 
 export const metadata: Metadata = { title: 'Transações' }
-import { ArrowLeftRight, Bot } from 'lucide-react'
+import { ArrowLeftRight } from 'lucide-react'
 import { getTransactions } from '@/server/transactions'
 import { getCategories } from '@/server/categories'
 import { getCostCenters, getBusinessUnits, getLegalEntities } from '@/server/dimensions'
-import { getDocumentsWithTransactions } from '@/server/documents'
+import { getDataSourcesWithTransactions } from '@/server/connections'
 import { getReviewCount } from '@/server/review'
 import { EmptyState } from '@/components/states/empty-state'
 import TransacoesClient from './transacoes-client'
@@ -22,8 +21,11 @@ interface SearchParams {
   businessUnit?: string
   legalEntity?: string
   documentId?: string
+  accountId?: string
   sort?: string
   reportType?: string
+  amountMin?: string
+  amountMax?: string
 }
 
 interface Props {
@@ -33,7 +35,7 @@ interface Props {
 export default async function TransacoesPage({ searchParams }: Props) {
   const page = Math.max(1, Number(searchParams.page) || 1)
 
-  const [txData, cats, ccs, bus, les, docs, reviewCount] = await Promise.all([
+  const [txData, cats, ccs, bus, les, dataSrcs, reviewCount] = await Promise.all([
     getTransactions({
       page,
       q: searchParams.q,
@@ -45,27 +47,29 @@ export default async function TransacoesPage({ searchParams }: Props) {
       businessUnit: searchParams.businessUnit,
       legalEntity: searchParams.legalEntity,
       documentId: searchParams.documentId,
+      accountId: searchParams.accountId,
       sort: searchParams.sort,
       reportType: searchParams.reportType,
+      amountMin: searchParams.amountMin,
+      amountMax: searchParams.amountMax,
     }),
     getCategories(),
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
-    getDocumentsWithTransactions(),
+    getDataSourcesWithTransactions(),
     getReviewCount(),
   ])
 
   const hasAnyFilter = !!(searchParams.q || searchParams.from || searchParams.to ||
     searchParams.direction || searchParams.category || searchParams.costCenter ||
-    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId || searchParams.reportType)
+    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId ||
+    searchParams.accountId || searchParams.reportType || searchParams.amountMin || searchParams.amountMax)
 
   if (txData.total === 0 && !hasAnyFilter) {
     return (
       <div className="p-6 space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Transações</h1>
-        </div>
+        <h1 className="text-2xl font-semibold text-foreground">Transações</h1>
         <EmptyState
           icon={<ArrowLeftRight className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
           title="Sem transações"
@@ -76,25 +80,7 @@ export default async function TransacoesPage({ searchParams }: Props) {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Transações</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {txData.total} transação{txData.total !== 1 ? 'ões' : ''}
-            {hasAnyFilter ? ' encontrada' + (txData.total !== 1 ? 's' : '') : ' no total'}
-          </p>
-        </div>
-        {reviewCount > 0 && (
-          <Link
-            href="/transacoes/revisao"
-            className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 transition-colors"
-          >
-            <Bot className="h-4 w-4" />
-            {reviewCount} sugestão{reviewCount !== 1 ? 'ões' : ''} do expert aguardando revisão
-          </Link>
-        )}
-      </div>
+    <div className="h-full flex flex-col overflow-hidden">
       <TransacoesClient
         data={txData}
         options={{
@@ -103,8 +89,10 @@ export default async function TransacoesPage({ searchParams }: Props) {
           businessUnits: bus.filter(c => c.isActive),
           legalEntities: les.filter(c => c.isActive),
         }}
-        documents={docs}
+        dataSources={dataSrcs}
         searchParams={searchParams}
+        reviewCount={reviewCount}
+        hasAnyFilter={hasAnyFilter}
       />
     </div>
   )

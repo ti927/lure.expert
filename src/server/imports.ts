@@ -141,15 +141,16 @@ export async function previewCategoryImport(csvText: string): Promise<PreviewRes
   parsed.rows.forEach((row, idx) => {
     const line = idx + 2  // +1 cabeçalho, +1 base-1
     const codigo = (row['codigo'] || '').trim()
-    const tipo = (row['tipo natureza'] || '').trim().toLowerCase()
+    const tipoRaw = (row['tipo natureza'] || '').trim()
+    const tipo = normalizeTypeSlug(tipoRaw)
     const paiNome = (row['natureza pai'] || '').trim()
     const filhoNome = (row['natureza filho'] || '').trim()
 
     const issues: string[] = []
     if (!codigo) issues.push('código vazio')
-    if (!tipo) issues.push('tipo da natureza vazio')
+    if (!tipoRaw) issues.push('tipo da natureza vazio')
     else if (!CATEGORY_TYPES.has(tipo))
-      issues.push(`tipo "${tipo}" inválido (use um dos 14 tipos do plano)`)
+      issues.push(`tipo "${tipoRaw}" inválido (use um dos 15 tipos do plano)`)
     if (!paiNome) issues.push('natureza pai vazia')
     if (!filhoNome) issues.push('natureza filho vazia')
 
@@ -651,4 +652,29 @@ function emptyPreview<T>(fileError: string): PreviewResult<T> {
 
 function normalizeCnpj(s: string): string {
   return s.replace(/\D/g, '')
+}
+
+// Aceita tanto slugs internos (receita_operacional) quanto rótulos legíveis (Receita Operacional, SG&A)
+function normalizeTypeSlug(raw: string): string {
+  const normalized = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // remove acentos
+    .replace(/[^a-z0-9]+/g, ' ')    // não-alfanumérico → espaço
+    .trim()
+
+  // Converte espaços em underscores — cobre a maioria dos casos automaticamente
+  // ex: "receita operacional" → "receita_operacional"
+  const asSlug = normalized.replace(/ /g, '_')
+  if (CATEGORY_TYPES.has(asSlug)) return asSlug
+
+  // Mapeamento manual para casos especiais que não seguem o padrão espaço→underscore
+  const LABEL_MAP: Record<string, string> = {
+    'sg a': 'sga',          // "SG&A" → "sg a" → "sga"
+    'sg&a': 'sga',
+    'transitorios': 'transfer',
+    'transferencias': 'transfer',
+  }
+
+  return LABEL_MAP[normalized] ?? raw.toLowerCase()
 }

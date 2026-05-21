@@ -19,6 +19,9 @@ acima — análise, estruturação, recomendação.
 - `docs/AI_VOICE.md` — voz do expert (criado na Fase 0.5)
 - `docs/STATE_PATTERNS.md` — 5 estados canônicos (criado na Fase 0.5)
 - `docs/SCHEMA_DECISIONS.md` — decisões de implementação que saíram do schema original (criado conforme necessário)
+- `docs/DATA_TABLE_PATTERN.md` — padrão obrigatório para toda tabela de dados do app (viewport-fill, filtro-no-header, rodapé unificado)
+
+**IMPORTANTE: antes de criar qualquer tabela de dados, LER `docs/DATA_TABLE_PATTERN.md`.**
 
 Antes de qualquer mudança estrutural (schema, fase, decisão de produto),
 LER o documento correspondente. Se houver conflito entre o que peço e
@@ -163,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage e fix do bug de fuso horário no DRE **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE e **redesign completo UX/UI da tabela de transações + padrão Data Table Pro** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -175,12 +178,49 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - **Fase 6 continuação** — Drill-down por tipo/pai/filho no `/balanco`; indicador BP/DRE na coluna de `/transacoes`
 - **Visibilidade por relatório nas categorias** — Dois flags por categoria: `ocultarNaDre` e `ocultarNoCaixa`. Caso de uso: empresa sobe relatório de Custo de Mercadorias (→ CMV) E relatório de fluxo de caixa (→ Pagamento de Fornecedores). CMV aparece na DRE mas não no fluxo de caixa; Pagamento de Fornecedores aparece no fluxo de caixa mas não na DRE. Sem esses flags, a mesma compra seria contabilizada duas vezes — uma vez em cada fonte. Implementação: dois campos booleanos em `categories` (`hide_in_dre`, `hide_in_cashflow`); filtro nos queries de `getDreData` e `getFluxoData`; toggles na UI de `/configuracoes/categorias`.
 
+**Migrations pendentes de aplicação no Supabase Studio:**
+- `db/migrations/rls/0017_category_visibility_flags.sql` — adiciona `hide_in_dre` e `hide_in_cashflow` em `categories`
+- `db/migrations/rls/0018_transactions_account_fields.sql` — adiciona `account_id`, `account_number`, `account_type`, `account_name` em `transactions`
+
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
 - DRE completo do mês atual (e comparativo com mês anterior): receita bruta, deduções, CPV, lucro bruto, SGA, EBITDA, resultado financeiro, LAIR, lucro líquido — via `getDreData` já existente
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Padrão Data Table Pro + redesign `/transacoes` e `/upload/review` *(concluída)*
+
+**O que mudou:**
+
+- **`docs/DATA_TABLE_PATTERN.md`** (criado) — documento canônico do padrão de tabela do projeto. Referenciado no CLAUDE.md com instrução de leitura obrigatória antes de criar qualquer tabela. Define: viewport-fill, 5 zonas (cabeçalho / totalizador / toolbar de lote / tabela / rodapé), cabeçalho de coluna em 3 zonas (sort + filtro/título + clear), tipos de filtro por dado, divisores verticais, header opaco, rodapé unificado, persistência de filtros e `PAGE_SIZE = 100`.
+
+- **Redesign `/transacoes`** — `src/app/(authenticated)/transacoes/transacoes-client.tsx` e `page.tsx`:
+  - Viewport-fill: `h-full flex flex-col overflow-hidden`; tabela com scroll interno (`flex-1 min-h-0`)
+  - Filtros migrados para dentro do header de cada coluna — o filtro **é** o título
+  - `ColHeader` component: `[sort] [filtro/título] [×]` por coluna
+  - Novas colunas: Banco/Conta (separada da descrição) e Tipo Movimento (Entrada/Saída)
+  - Filtro de valor: popover range mín/máx (`amountMin`, `amountMax`)
+  - Sort em todas as colunas (16 novos casos no switch de `getTransactions`)
+  - Divisores verticais sutis: `[&_td]:border-r [&_td]:border-border/20` na `<table>`
+  - `bg-muted` sólido no `<thead>` (era `bg-muted/60` — causava sangramento de linhas ao rolar)
+  - Rodapé unificado: totais selecionados (esquerda) + paginação (direita) em uma linha
+  - Totais selecionados calculados via `useMemo` sobre `localRows` filtradas por `selectedIds`
+  - `PAGE_SIZE`: 25 → 100
+
+- **`src/server/transactions.ts`** — `amountMin`/`amountMax` adicionados; `orderBy` switch estendido com 16 casos; `leftJoin` com `categories`, `costCenters`, `businessUnits`, `legalEntities` no `baseQuery` para suportar sort por dimensão.
+
+- **Redesign `/upload/[id]/review`** — `review-client.tsx` e `page.tsx`:
+  - Mesmo padrão viewport-fill aplicado
+  - Botão "Confirmar e importar" movido para zona 1 (cabeçalho, topo direito) — sempre visível
+  - Filtros no header: coluna Direção (`<select>` nativo) e coluna Status (`<select>` nativo) com botão `×` individual e "Limpar filtros" na zona 2
+  - `filteredRows` via `useMemo`; reset de página automático ao filtrar
+  - Rodapé unificado com totais selecionados + paginação
+  - `PAGE_SIZE`: 50 → 100
+
+TypeScript: 0 erros.
 
 ---
 
