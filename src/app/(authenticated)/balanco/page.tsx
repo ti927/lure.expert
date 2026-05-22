@@ -1,6 +1,9 @@
 import type { Metadata } from 'next'
 import { getBpAllDates } from '@/server/balance-sheet'
+import { getCategories } from '@/server/categories'
+import { getCostCenters, getBusinessUnits, getLegalEntities } from '@/server/dimensions'
 import { BalancoClient } from './balanco-client'
+import type { LeafCategory } from '@/lib/dre-types'
 
 export const metadata: Metadata = { title: 'Balanço Patrimonial' }
 
@@ -29,7 +32,19 @@ export default async function BalancoPage({
   const fromDate = `${fromYM}-01`
   const toDate   = lastDayOfMonth(toYM)
 
-  const data = await getBpAllDates(fromDate, toDate)
+  const [data, allCats, ccs, bus, les] = await Promise.all([
+    getBpAllDates(fromDate, toDate),
+    getCategories(),
+    getCostCenters(),
+    getBusinessUnits(),
+    getLegalEntities(),
+  ])
+
+  // Leaf categories (sem filhos) — usadas pelo DrillDownDialog para edição inline
+  const parentIds = new Set(allCats.map(c => c.parentId).filter((p): p is string => !!p))
+  const leafCategories: LeafCategory[] = allCats
+    .filter(c => c.isActive && !parentIds.has(c.id))
+    .map(c => ({ id: c.id, name: c.name, code: c.code, type: c.type, parentId: c.parentId }))
 
   return (
     <div className="p-6 space-y-6">
@@ -45,6 +60,10 @@ export default async function BalancoPage({
         defaultFrom={fromYM}
         defaultTo={toYM}
         hasUrlParams={Boolean(searchParams.from || searchParams.to)}
+        leafCategories={leafCategories}
+        costCenters={ccs.filter(c => c.isActive)}
+        businessUnits={bus.filter(b => b.isActive)}
+        legalEntities={les.filter(l => l.isActive)}
       />
     </div>
   )

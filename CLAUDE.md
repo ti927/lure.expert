@@ -166,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)** e **tela de gestão de regras em /configuracoes/regras** **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras** e **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -175,7 +175,7 @@ Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **Fase 6 continuação** — Drill-down por tipo/pai/filho no `/balanco`; indicador BP/DRE na coluna de `/transacoes`
+- **Fase 6 continuação** — Indicador BP/DRE na coluna de `/transacoes`; subtotais por grupo/pai no drill-down do `/balanco`
 - **Visibilidade por relatório nas categorias** — Dois flags por categoria: `ocultarNaDre` e `ocultarNoCaixa`. Caso de uso: empresa sobe relatório de Custo de Mercadorias (→ CMV) E relatório de fluxo de caixa (→ Pagamento de Fornecedores). CMV aparece na DRE mas não no fluxo de caixa; Pagamento de Fornecedores aparece no fluxo de caixa mas não na DRE. Sem esses flags, a mesma compra seria contabilizada duas vezes — uma vez em cada fonte. Implementação: dois campos booleanos em `categories` (`hide_in_dre`, `hide_in_cashflow`); filtro nos queries de `getDreData` e `getFluxoData`; toggles na UI de `/configuracoes/categorias`.
 
 **Migrations aplicadas no Supabase Studio:**
@@ -189,6 +189,33 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Drill-down no `/balanco` (células e labels clicáveis → dialog compartilhado) *(concluída)*
+
+**Contexto:** o `/balanco` exibia uma tabela multi-coluna por mês sem nenhuma navegação para as transações subjacentes. O `/dre` já tinha essa UX desde a sessão "Drill-down do DRE". Esta sessão traz a mesma UX para o BP, reusando o mesmo dialog extraído para `transacoes-shared/`.
+
+**O que mudou:**
+
+- **`src/components/transacoes-shared/drill-down-dialog.tsx`** (criado) — `DrillDownDialog` extraído do `dre-client.tsx` (era inline, ~480 linhas). Componente genérico com props: `open`, `onOpenChange`, `title`, `subtitle?`, `data`, `loading`, `onDataChange`, `leafCategories`, `costCenters`, `businessUnits`, `legalEntities`. Toda a lógica de filtros client-side, sort, select-all, batch classify e delete por linha foi preservada. Reseta filtros/seleção ao fechar (`useEffect` em `open`). Tamanho: `w-[98vw] max-w-none max-h-[92vh]`.
+
+- **`src/app/(authenticated)/dre/dre-client.tsx`** (refatorado) — removido o `DrillDownDialog` inline (~480 linhas). Importa o componente compartilhado. Sem regressão funcional. Imports mortos (`Dialog*`, `AlertDialog*`, `classifyTransaction`, `deleteTransactions`, `AmountFilter`, `DirectionFilter`, `CellCombobox`, `CategoryCellCombobox`, `BatchClassifyDialog`, `ACCT_LABELS`, `Trash2`, `fmtDate`) removidos.
+
+- **`src/server/balance-sheet.ts`** — adicionado `getBalancoDrillDown(categoryIds: string[], yearMonths: string[])`:
+  - Resolve os `docId` de BP para o intervalo [minMonth, maxMonth], deduplicando por YYYY-MM (mais recente por mês), mantendo apenas meses presentes em `yearMonths`.
+  - Query SQL com LEFT JOINs (categories, cost_centers, business_units, legal_entities, data_sources).
+  - Filtro: `document_id IN (...)` AND `category_id IN (...)` AND `status NOT IN ('pending', 'duplicate')`.
+  - Signed URLs em batch para `customLogoPath` (igual ao DRE).
+  - Retorna `{ transactions: DrillDownTransaction[] }`.
+
+- **`src/app/(authenticated)/balanco/page.tsx`** — `Promise.all` estendido: busca paralela de `getCategories`, `getCostCenters`, `getBusinessUnits`, `getLegalEntities`. Computa `leafCategories` (categorias sem filhos). Passa tudo ao `BalancoClient`.
+
+- **`src/app/(authenticated)/balanco/balanco-client.tsx`** — 4 novas props (`leafCategories`, `costCenters`, `businessUnits`, `legalEntities`). Estado `drill: DrillState | null` com `{ title, subtitle, categoryIds, yearMonths }`. Handlers `openDrill()`/`closeDrill()`. Labels e células de Group/Pai/Filho viram `<button>` clicáveis: label clica em todos os meses visíveis; célula clica no mês individual (só se valor ≠ 0). Seções ATIVO/PASSIVO e linha PL não são clicáveis (são calculadas, sem transações diretas). `<DrillDownDialog>` renderizado ao final, condicionado em `drill !== null`.
+
+**Diferença de escopo vs. DRE:** o DRE filtra por `category_id + date range` diretamente em `transactions`. O BP filtra por `document_id` (snapshot do upload), pois cada mês de BP corresponde ao documento BP mais recente daquele mês — `getBalancoDrillDown` resolve esse mapeamento antes da query principal.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
 
 ---
 

@@ -6,7 +6,12 @@ import Link from 'next/link'
 import { Scale, UploadCloud } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { BpAllData, BpPai } from '@/server/balance-sheet'
+import { getBalancoDrillDown, type BpAllData, type BpPai } from '@/server/balance-sheet'
+import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
+import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
+import type { CostCenter } from '@/db/schema/cost-centers'
+import type { BusinessUnit } from '@/db/schema/business-units'
+import type { LegalEntity } from '@/db/schema/legal-entities'
 
 const LABEL_W = 260
 const COL_W = 96
@@ -36,13 +41,60 @@ interface Props {
   defaultFrom: string
   defaultTo: string
   hasUrlParams: boolean
+  leafCategories: LeafCategory[]
+  costCenters: CostCenter[]
+  businessUnits: BusinessUnit[]
+  legalEntities: LegalEntity[]
 }
 
-export function BalancoClient({ data, defaultFrom, defaultTo, hasUrlParams }: Props) {
+interface DrillState {
+  title: string
+  subtitle: string
+  categoryIds: string[]
+  yearMonths: string[]
+}
+
+export function BalancoClient({
+  data, defaultFrom, defaultTo, hasUrlParams,
+  leafCategories, costCenters, businessUnits, legalEntities,
+}: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [from, setFrom] = useState(defaultFrom)
   const [to, setTo] = useState(defaultTo)
+
+  const [drill, setDrill] = useState<DrillState | null>(null)
+  const [drillData, setDrillData] = useState<DrillDownTransaction[] | null>(null)
+  const [isDrillLoading, startDrillTransition] = useTransition()
+
+  function openDrill(params: { title: string; categoryIds: string[]; yearMonths: string[]; dateLabel: string }) {
+    setDrill({
+      title: params.title,
+      subtitle: params.dateLabel,
+      categoryIds: params.categoryIds,
+      yearMonths: params.yearMonths,
+    })
+    setDrillData(null)
+    startDrillTransition(async () => {
+      const result = await getBalancoDrillDown(params.categoryIds, params.yearMonths)
+      setDrillData(result.transactions)
+    })
+  }
+
+  function closeDrill() {
+    setDrill(null)
+    setDrillData(null)
+  }
+
+  function singleDateLabel(yearMonth: string): string {
+    return monthLabel(yearMonth)
+  }
+
+  function rangeDateLabel(): string {
+    if (data.dates.length === 0) return ''
+    if (data.dates.length === 1) return monthLabel(data.dates[0])
+    return `${monthLabel(data.dates[0])} a ${monthLabel(data.dates[data.dates.length - 1])}`
+  }
 
   useEffect(() => {
     if (hasUrlParams) return
@@ -173,16 +225,46 @@ export function BalancoClient({ data, defaultFrom, defaultTo, hasUrlParams }: Pr
                   {!isPL && section.groups.map(group => {
                     const groupLeafIds = group.pais.flatMap(p => getLeafIds(p))
                     const groupTotals = data.dates.map(d => sumLeaves(groupLeafIds, d, data.amounts))
+                    const groupHasIds = groupLeafIds.length > 0
 
                     return (
                       <Fragment key={group.bpType}>
                         {/* Linha de grupo */}
                         <tr className="bg-slate-100/70 border-b border-slate-200">
                           <td className="px-4 py-1.5 text-xs font-semibold text-foreground sticky left-0 bg-slate-100/70">
-                            {group.label}
+                            {groupHasIds ? (
+                              <button
+                                onClick={() => openDrill({
+                                  title: group.label,
+                                  categoryIds: groupLeafIds,
+                                  yearMonths: data.dates,
+                                  dateLabel: rangeDateLabel(),
+                                })}
+                                className="hover:underline underline-offset-2 text-left"
+                              >
+                                {group.label}
+                              </button>
+                            ) : (
+                              group.label
+                            )}
                           </td>
                           {groupTotals.map((total, dIdx) => (
-                            <td key={data.dates[dIdx]} className={cn('px-2 py-1.5 text-right text-xs font-semibold tabular-nums', total === 0 && 'text-muted-foreground/40')}>
+                            <td
+                              key={data.dates[dIdx]}
+                              className={cn(
+                                'px-2 py-1.5 text-right text-xs font-semibold tabular-nums',
+                                total === 0 && 'text-muted-foreground/40',
+                                groupHasIds && total !== 0 && 'cursor-pointer hover:underline underline-offset-2',
+                              )}
+                              onClick={groupHasIds && total !== 0
+                                ? () => openDrill({
+                                    title: group.label,
+                                    categoryIds: groupLeafIds,
+                                    yearMonths: [data.dates[dIdx]],
+                                    dateLabel: singleDateLabel(data.dates[dIdx]),
+                                  })
+                                : undefined}
+                            >
                               {fmtBRL(total)}
                             </td>
                           ))}
@@ -200,16 +282,42 @@ export function BalancoClient({ data, defaultFrom, defaultTo, hasUrlParams }: Pr
                           const paiLeafIds = getLeafIds(pai)
                           const paiTotals = data.dates.map(d => sumLeaves(paiLeafIds, d, data.amounts))
                           const hasFilhos = pai.filhos.length > 0
+                          const paiTitle = pai.code ? `${pai.code} – ${pai.name}` : pai.name
 
                           return (
                             <Fragment key={pai.id}>
                               <tr className="border-b border-border/40 hover:bg-muted/10">
                                 <td className="py-1.5 text-xs font-medium text-foreground sticky left-0 bg-background" style={{ paddingLeft: 40 }}>
-                                  {pai.code && <span className="text-muted-foreground mr-1.5">{pai.code}</span>}
-                                  {pai.name}
+                                  <button
+                                    onClick={() => openDrill({
+                                      title: paiTitle,
+                                      categoryIds: paiLeafIds,
+                                      yearMonths: data.dates,
+                                      dateLabel: rangeDateLabel(),
+                                    })}
+                                    className="hover:underline underline-offset-2 text-left"
+                                  >
+                                    {pai.code && <span className="text-muted-foreground mr-1.5">{pai.code}</span>}
+                                    {pai.name}
+                                  </button>
                                 </td>
                                 {paiTotals.map((total, dIdx) => (
-                                  <td key={data.dates[dIdx]} className={cn('px-2 py-1.5 text-right text-xs font-medium tabular-nums', total === 0 && 'text-muted-foreground/40')}>
+                                  <td
+                                    key={data.dates[dIdx]}
+                                    className={cn(
+                                      'px-2 py-1.5 text-right text-xs font-medium tabular-nums',
+                                      total === 0 && 'text-muted-foreground/40',
+                                      total !== 0 && 'cursor-pointer hover:underline underline-offset-2',
+                                    )}
+                                    onClick={total !== 0
+                                      ? () => openDrill({
+                                          title: paiTitle,
+                                          categoryIds: paiLeafIds,
+                                          yearMonths: [data.dates[dIdx]],
+                                          dateLabel: singleDateLabel(data.dates[dIdx]),
+                                        })
+                                      : undefined}
+                                  >
                                     {fmtBRL(total)}
                                   </td>
                                 ))}
@@ -217,14 +325,41 @@ export function BalancoClient({ data, defaultFrom, defaultTo, hasUrlParams }: Pr
 
                               {hasFilhos && pai.filhos.map(filho => {
                                 const filhoTotals = data.dates.map(d => (data.amounts[d] ?? {})[filho.id] ?? 0)
+                                const filhoTitle = filho.code ? `${filho.code} – ${filho.name}` : filho.name
+
                                 return (
                                   <tr key={filho.id} className="border-b border-border/20 hover:bg-muted/10">
                                     <td className="py-1 text-xs text-muted-foreground sticky left-0 bg-background" style={{ paddingLeft: 56 }}>
-                                      {filho.code && <span className="mr-1.5">{filho.code}</span>}
-                                      {filho.name}
+                                      <button
+                                        onClick={() => openDrill({
+                                          title: filhoTitle,
+                                          categoryIds: [filho.id],
+                                          yearMonths: data.dates,
+                                          dateLabel: rangeDateLabel(),
+                                        })}
+                                        className="hover:underline underline-offset-2 text-left"
+                                      >
+                                        {filho.code && <span className="mr-1.5">{filho.code}</span>}
+                                        {filho.name}
+                                      </button>
                                     </td>
                                     {filhoTotals.map((total, dIdx) => (
-                                      <td key={data.dates[dIdx]} className={cn('px-2 py-1 text-right text-xs tabular-nums', total === 0 && 'text-muted-foreground/30')}>
+                                      <td
+                                        key={data.dates[dIdx]}
+                                        className={cn(
+                                          'px-2 py-1 text-right text-xs tabular-nums',
+                                          total === 0 && 'text-muted-foreground/30',
+                                          total !== 0 && 'cursor-pointer hover:underline underline-offset-2',
+                                        )}
+                                        onClick={total !== 0
+                                          ? () => openDrill({
+                                              title: filhoTitle,
+                                              categoryIds: [filho.id],
+                                              yearMonths: [data.dates[dIdx]],
+                                              dateLabel: singleDateLabel(data.dates[dIdx]),
+                                            })
+                                          : undefined}
+                                      >
                                         {fmtBRL(total)}
                                       </td>
                                     ))}
@@ -247,6 +382,22 @@ export function BalancoClient({ data, defaultFrom, defaultTo, hasUrlParams }: Pr
       <p className="text-xs text-muted-foreground">
         * Patrimônio Líquido calculado como Ativo − Passivo.
       </p>
+
+      {drill && (
+        <DrillDownDialog
+          open
+          onOpenChange={(o) => { if (!o) closeDrill() }}
+          title={drill.title}
+          subtitle={drill.subtitle}
+          data={drillData}
+          loading={isDrillLoading}
+          onDataChange={setDrillData}
+          leafCategories={leafCategories}
+          costCenters={costCenters}
+          businessUnits={businessUnits}
+          legalEntities={legalEntities}
+        />
+      )}
     </div>
   )
 }
