@@ -166,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId** e **drill-down do DRE com UX igual a /transacoes** **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)** e **tela de gestão de regras em /configuracoes/regras** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -189,6 +189,57 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Tela de gestão de regras em `/configuracoes/regras` *(concluída)*
+
+**Contexto:** as regras de categorização (`categorization_rules`) só nasciam implicitamente via classificação em `/transacoes`, drill-down do DRE ou confirmações em `/transacoes/revisao`. Quando uma regra ficava errada (descrição com lixo dinâmico, alvo trocado por engano), só dava pra corrigir reclassificando outra transação no mesmo `(description, accountId)` — sem visibilidade nem deleção direta. Agora há tela própria.
+
+**O que mudou:**
+
+- **`src/server/categorization-rules.ts`** (criado) — 5 server actions:
+  - `listRules(filters)` — joins com `categories`, `cost_centers`, `business_units`, `legal_entities` para enriquecer com nomes. Filtros: `q` (ILIKE em `conditions->>'description'`), `accounts` (multi-select com sentinel `__none__` = regras globais sem accountId), `categories` (multi-select com `__none__` = sem targetCategoryId). Pagina em 100/página. Lista **apenas** regras em formato novo via `conditions ? 'description'` — regras antigas em formato `{ field, op, value }` ficam invisíveis sem precisar migration.
+  - `createRule(input)` — validação Zod: descrição obrigatória (max 200), pelo menos um alvo, accountId opcional. Bloqueia duplicação `(description, accountId)` na org.
+  - `updateRule(id, input)` — mesma validação, detecta colisão com outra regra antes de salvar.
+  - `deleteRule(id)` — hard delete.
+  - `deleteRules(ids[])` — disponível para futuro batch delete.
+
+- **`src/components/settings/rule-edit-dialog.tsx`** (criado) — Dialog reusado em create/edit. Campos: descrição (textarea max 200) + conta (`CellCombobox` com "Todas as contas" = null) + categoria-alvo (`CategoryCellCombobox` agrupado por tipo DRE/BP) + CC + UN + Entidade. Botão "Salvar" só habilita com descrição + pelo menos um alvo.
+
+- **`src/components/settings/rules-manager.tsx`** (criado) — Tabela viewport-fill seguindo `docs/DATA_TABLE_PATTERN.md`:
+  - Zona 1: header com título + "Limpar filtros" + "Nova regra"
+  - Zona 2: totalizador "N regras"
+  - Zona 4: tabela com 7 colunas (Descrição com busca no header + Conta com MultiSelectFilter + Categoria-alvo com MultiSelectFilter agrupado + CC/UN/Entidade read-only + ações)
+  - Zona 5: paginação à direita
+  - Linha sem `accountId` mostra badge cinza "Todas as contas". Linha com `matchCount > 0` mostra "aplicada N×".
+  - Ações ✏ e 🗑 aparecem ao hover; delete via `AlertDialog` com warning sobre `matchCount`.
+
+- **`src/app/(authenticated)/configuracoes/regras/page.tsx`** (criado) — server component: `Promise.all` paralelo de `listRules` + 4 listas de dimensão (categorias/CCs/BUs/LEs) + `getDataSourcesWithTransactions` para o dropdown de contas. Wrapper `h-full flex flex-col overflow-hidden` para o padrão viewport-fill funcionar dentro do `AppShell`.
+
+- **`src/app/(authenticated)/configuracoes/page.tsx`** — card novo no bloco "Automação" (abaixo do toggle de Categorização automática), ícone `Zap`, link para `/configuracoes/regras`.
+
+**Não-objetivos (fora do escopo desta sessão):** toggle ativar/desativar (delete é definitivo), bulk delete/edit, exibir `matchCount` como coluna sortável, editar `priority`.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
+
+---
+
+### ✅ Sessão — Fix dos 3 bugs do motor de regras *(concluída)*
+
+**Contexto:** usuário reportou em `/transacoes` que regras "não estavam aprendendo" — todas as transações Pix outflow caíam em "Transferência entre Contas" mesmo após classificação manual de uma delas como "Compras". Investigação mostrou 3 bugs distintos que se compunham:
+
+**Bug 1 — `src/jobs/categorize-transaction.ts`:** o SELECT da transação não incluía `accountId`. Resultado: dentro de `categorizeTransaction`, `tx.accountId ?? null` virava `null` e o matcher em `categorizer.ts` pulava toda regra com escopo de conta (`if (c.accountId) { if (!accountId || ...) continue }`). Manual classification criava a regra com accountId, mas ela nunca era aplicada em syncs subsequentes. **Fix:** adicionado `accountId: transactions.accountId` ao SELECT — propagado via `...tx` para `categorizeTransaction`.
+
+**Bug 2 — `src/server/review.ts:upsertRuleFromConfirmation`:** gravava `conditions: { field: 'description', op: 'contains', value: description }`, formato anterior à migration 0019. O matcher novo só entende `{ description, accountId? }` — então rules criadas via confirmação em `/transacoes/revisao` eram silenciosamente ignoradas. **Fix:** reescrita pro formato novo, mirror exato de `upsertRule` em `transactions.ts`, com escopo composto `(description, accountId)`.
+
+**Bug 3 — `src/server/review.ts:confirmSuggestions`:** SELECT não trazia `accountId`. Mesmo se Bug 2 fosse corrigido isoladamente, regras nasceriam globais. **Fix:** `accountId` incluído no SELECT e propagado para o upsert.
+
+**Por que o sintoma aparentava "match por prefixo Pix":** as regras criadas manualmente em `/transacoes` (formato novo, com accountId) deveriam matchar, mas Bug 1 as silenciava. Caía-se sempre no LLM (camada 4), que recebia o hint `pluggyCategory: "Transferências PIX"` e devolvia "Transferência entre Contas" consistentemente. O comportamento parecia ser "regra ampla" mas era LLM determinístico em outflows Pix.
+
+**Validação prática:** depois do fix, clicar "Categorizar agora" em `/transacoes` faz as regras manuais finalmente atuarem antes do LLM — pares `(description, accountId)` idênticos recebem a mesma categoria sem nova chamada Haiku.
+
+TypeScript: 0 erros.
 
 ---
 

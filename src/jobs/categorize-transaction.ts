@@ -50,6 +50,7 @@ export const categorizeTransactions = inngest.createFunction(
           metadata: transactions.metadata,
           documentId: transactions.documentId,
           dataSourceId: transactions.dataSourceId,
+          accountId: transactions.accountId,
           accountName: transactions.accountName,
           accountType: transactions.accountType,
           accountNumber: transactions.accountNumber,

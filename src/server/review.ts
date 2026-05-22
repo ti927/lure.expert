@@ -205,6 +205,7 @@ export async function confirmSuggestions(ids: string[]) {
       id: transactions.id,
       description: transactions.description,
       cleanedDescription: transactions.cleanedDescription,
+      accountId: transactions.accountId,
       categoryId: transactions.categoryId,
       costCenterId: transactions.costCenterId,
       businessUnitId: transactions.businessUnitId,
@@ -229,7 +230,7 @@ export async function confirmSuggestions(ids: string[]) {
   for (const tx of txList) {
     if (!tx.categoryId) continue
     const desc = (tx.cleanedDescription || tx.description).slice(0, 200)
-    await upsertRuleFromConfirmation(organizationId, desc, {
+    await upsertRuleFromConfirmation(organizationId, desc, tx.accountId, {
       categoryId: tx.categoryId,
       costCenterId: tx.costCenterId ?? null,
       businessUnitId: tx.businessUnitId ?? null,
@@ -273,6 +274,7 @@ export async function skipSuggestions(ids: string[]) {
 async function upsertRuleFromConfirmation(
   organizationId: string,
   description: string,
+  accountId: string | null,
   data: {
     categoryId: string | null
     costCenterId: string | null
@@ -280,12 +282,18 @@ async function upsertRuleFromConfirmation(
     legalEntityId: string | null
   },
 ) {
+  const trimmed = description.slice(0, 200)
+
+  // Chave de identidade composta: (description, accountId) — mesmo formato de upsertRule em transactions.ts.
   const [existing] = await db
     .select({ id: categorizationRules.id })
     .from(categorizationRules)
     .where(and(
       eq(categorizationRules.organizationId, organizationId),
-      sql`${categorizationRules.conditions}->>'value' = ${description}`,
+      sql`${categorizationRules.conditions}->>'description' = ${trimmed}`,
+      accountId
+        ? sql`${categorizationRules.conditions}->>'accountId' = ${accountId}`
+        : sql`${categorizationRules.conditions}->>'accountId' IS NULL`,
     ))
     .limit(1)
 
@@ -302,10 +310,13 @@ async function upsertRuleFromConfirmation(
       })
       .where(eq(categorizationRules.id, existing.id))
   } else {
+    const conditions: Record<string, string> = { description: trimmed }
+    if (accountId) conditions.accountId = accountId
+
     await db.insert(categorizationRules).values({
       organizationId,
-      name: `Auto: ${description.slice(0, 80)}`,
-      conditions: { field: 'description', op: 'contains', value: description },
+      name: `Auto: ${trimmed.slice(0, 80)}`,
+      conditions,
       targetCategoryId: data.categoryId,
       targetCostCenterId: data.costCenterId,
       targetBusinessUnitId: data.businessUnitId,
