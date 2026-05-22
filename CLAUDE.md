@@ -214,6 +214,10 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 
 **Bug crítico resolvido:** `p.opex_capex` estava no SELECT mas não no GROUP BY — PostgreSQL rejeitava a query com "column must appear in GROUP BY clause". Fix: adicionado à cláusula GROUP BY em `fluxo-mensal.ts`.
 
+**Ajustes de UX pós-entrega:**
+- Botão "Recolher/Expandir todos" adicionado ao cabeçalho do card (usa `parentNodes` já computado; alterna entre colapsar e expandir todos os pais de uma vez).
+- Linhas "Total OPEX" e "Total CAPEX" tiveram cor alterada de `bg-emerald-900/30` (verde sobre verde, difícil leitura) para `bg-slate-100 border-slate-300` — valores emerald/rose sobre fundo claro, mesma legibilidade das células normais.
+
 TypeScript: 0 erros.
 
 ---

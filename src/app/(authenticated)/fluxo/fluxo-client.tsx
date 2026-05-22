@@ -402,7 +402,23 @@ function FluxoCaixaCategoria({
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between mb-3">
           <CardTitle className="text-base font-semibold">Geração de Caixa por Categoria</CardTitle>
-          {isPending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          <div className="flex items-center gap-2">
+            {parentNodes.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-muted-foreground gap-1.5"
+                onClick={() => {
+                  const allCollapsed = parentNodes.every(p => collapsedParents.has(p.parentId))
+                  setCollapsedParents(allCollapsed ? new Set() : new Set(parentNodes.map(p => p.parentId)))
+                }}
+              >
+                <ChevronsUpDown className="h-3 w-3" />
+                {parentNodes.every(p => collapsedParents.has(p.parentId)) ? 'Expandir todos' : 'Recolher todos'}
+              </Button>
+            )}
+            {isPending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          </div>
         </div>
 
         {/* Filtros */}
@@ -548,14 +564,14 @@ function FluxoCaixaCategoria({
 
                 {/* Total OPEX */}
                 {opexParents.length > 0 && (
-                  <tr className="bg-emerald-900/30 border-t border-emerald-700/30">
-                    <td className="sticky left-0 bg-emerald-900/30 px-4 py-2 text-xs font-semibold text-emerald-300">
+                  <tr className="bg-slate-100 border-t-2 border-slate-300">
+                    <td className="sticky left-0 bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700">
                       Total OPEX
                     </td>
                     {months.map(m => (
-                      <Num key={m} value={totalOpexByMonth[m] ?? 0} bold inverted />
+                      <Num key={m} value={totalOpexByMonth[m] ?? 0} bold />
                     ))}
-                    <Num value={opexTotal} bold inverted />
+                    <Num value={opexTotal} bold />
                   </tr>
                 )}
 
@@ -615,14 +631,14 @@ function FluxoCaixaCategoria({
 
                 {/* Total CAPEX */}
                 {capexParents.length > 0 && (
-                  <tr className="bg-amber-900/20 border-t border-amber-700/30">
-                    <td className="sticky left-0 bg-amber-900/20 px-4 py-2 text-xs font-semibold text-amber-300">
+                  <tr className="bg-slate-100 border-t-2 border-slate-300">
+                    <td className="sticky left-0 bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700">
                       Total CAPEX
                     </td>
                     {months.map(m => (
-                      <Num key={m} value={totalCapexByMonth[m] ?? 0} bold inverted />
+                      <Num key={m} value={totalCapexByMonth[m] ?? 0} bold />
                     ))}
-                    <Num value={capexTotal} bold inverted />
+                    <Num value={capexTotal} bold />
                   </tr>
                 )}
 
