@@ -166,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras** e **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)** **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras**, **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)**, **tabela "Geração de Caixa por Categoria" em `/fluxo` (mensal, hierárquica, com drill-down e filtros de dimensão)** e **split OPEX/CAPEX nas Naturezas Pai (badge em /configuracoes/categorias + seções separadas em /fluxo)** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -176,12 +176,12 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 
 **Próximas sessões:**
 - **Fase 6 continuação** — Indicador BP/DRE na coluna de `/transacoes`; subtotais por grupo/pai no drill-down do `/balanco`
-- **Visibilidade por relatório nas categorias** — Dois flags por categoria: `ocultarNaDre` e `ocultarNoCaixa`. Caso de uso: empresa sobe relatório de Custo de Mercadorias (→ CMV) E relatório de fluxo de caixa (→ Pagamento de Fornecedores). CMV aparece na DRE mas não no fluxo de caixa; Pagamento de Fornecedores aparece no fluxo de caixa mas não na DRE. Sem esses flags, a mesma compra seria contabilizada duas vezes — uma vez em cada fonte. Implementação: dois campos booleanos em `categories` (`hide_in_dre`, `hide_in_cashflow`); filtro nos queries de `getDreData` e `getFluxoData`; toggles na UI de `/configuracoes/categorias`.
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
 - ✅ `db/migrations/rls/0018_transactions_account_fields.sql` — `account_id`, `account_number`, `account_type`, `account_name` em `transactions`
 - ✅ `db/migrations/rls/0019_reset_categorization_rules.sql` — `DELETE FROM categorization_rules` (reset para introduzir escopo por accountId)
+- ✅ `db/migrations/rls/0020_category_opex_capex.sql` — `opex_capex text NOT NULL DEFAULT 'opex'` em `categories`; seed defaults CAPEX para tipos 8/9/10
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
@@ -189,6 +189,48 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Split OPEX/CAPEX nas Naturezas Pai *(concluída)*
+
+**Contexto:** a tabela "Geração de Caixa por Categoria" em `/fluxo` exibia todas as naturezas numa única lista. Para alinhar com a visão gerencial de caixa (P&L operacional vs. financeiro/investimento), as naturezas pai passaram a ter um flag `opex_capex` que divide a tabela em duas seções com subtotais próprios.
+
+**O que mudou:**
+
+- **`db/migrations/rls/0020_category_opex_capex.sql`** (criado + aplicado no Supabase Studio) — `ALTER TABLE categories ADD COLUMN IF NOT EXISTS opex_capex text NOT NULL DEFAULT 'opex'`; UPDATE seed defaults: tipos `emprestimos_amortizacoes` (8), `investimentos_retiradas` (9), `transfer` (10) → CAPEX; `CREATE OR REPLACE FUNCTION seed_categories_for_org` atualizada com os valores corretos de `opex_capex` para novas orgs.
+
+- **`db/schema/categories.ts`** — campo `opexCapex: text('opex_capex').notNull().default('opex')` adicionado.
+
+- **`src/server/categories.ts`** — `getCategoriesWithTxCount` inclui `opexCapex: categories.opexCapex` no SELECT; nova server action `setParentOpexCapex(categoryId, value)` com validação de ownership e `parentId IS NULL`; revalida `/configuracoes/categorias` + `/fluxo`.
+
+- **`src/server/fluxo-mensal.ts`** — `FluxoMensalCategoryRow` inclui `parentOpexCapex: string`; SQL SELECT inclui `p.opex_capex AS parent_opex_capex`; **GROUP BY inclui `p.opex_capex`** (fix crítico — coluna não-agregada deve estar no GROUP BY); `.map()` propaga o campo.
+
+- **`src/components/settings/category-manager.tsx`** — `CategoryItem` inclui `opexCapex: string`; novo componente `OpexCapexBadge` (badge clicável emerald/amber); `PaiRow` exibe o badge ao lado dos toggles de visibilidade (apenas aba DRE); atualização otimista com rollback via `handleSetOpexCapex`.
+
+- **`src/app/(authenticated)/configuracoes/categorias/page.tsx`** — importa e passa `onSetOpexCapex={setParentOpexCapex}` ao `<CategoryManager>`.
+
+- **`src/app/(authenticated)/fluxo/fluxo-client.tsx`** — `ParentNode` inclui `opexCapex`; novos useMemos `opexParents`, `capexParents`, `totalOpexByMonth`, `totalCapexByMonth`, `opexTotal`, `capexTotal`; tabela reestruturada: seção OPEX → Total OPEX (bg-emerald-900/30) → separador tracejado → seção CAPEX → Total CAPEX (bg-amber-900/20) → separador → Total líquido (bg-slate-800); `Fragment` com key para multi-row maps.
+
+**Bug crítico resolvido:** `p.opex_capex` estava no SELECT mas não no GROUP BY — PostgreSQL rejeitava a query com "column must appear in GROUP BY clause". Fix: adicionado à cláusula GROUP BY em `fluxo-mensal.ts`.
+
+TypeScript: 0 erros.
+
+---
+
+### ✅ Sessão — Tabela "Geração de Caixa por Categoria" em `/fluxo` *(concluída)*
+
+**Contexto:** o `/fluxo` exibia apenas projeção semanal e recorrências. Esta sessão adiciona uma tabela mensal no topo — estilo DRE — onde cada linha é uma Natureza (pai → filho) e cada coluna é um mês. O valor é o líquido (entradas − saídas) de caixa da categoria no mês, com drill-down para transações.
+
+**O que mudou:**
+
+- **`src/server/fluxo-mensal.ts`** (criado) — server action `getFluxoMensalData(filters: DreFilters)`: query SQL com JOIN em categories (filho + pai), filtros de org/status/data/BP_TYPES/hideInCashflow + filtros condicionais de CC/BU/LE; `SUM(CASE WHEN direction='inflow' THEN amount ELSE -amount END)` → `net_amount`; GROUP BY filho+pai+mês; helper `generateMonthRange` (parse numérico sem `new Date(string)`). Tipos exportados: `FluxoMensalCategoryRow`, `FluxoMensalData`.
+
+- **`src/app/(authenticated)/fluxo/page.tsx`** — `Promise.all` estendido com `getFluxoMensalData`, `getCostCenters`, `getBusinessUnits`, `getLegalEntities`, `getLeafCategories`; helper `defaultMensalRange()` (12 meses, parse numérico).
+
+- **`src/app/(authenticated)/fluxo/fluxo-client.tsx`** — sub-componente `FluxoCaixaCategoria` (~300 linhas): filtros De/Até + CC/UN/LE + botão Filtrar; tabela hierárquica (pai bold, filho indentado clicável); drill-down via `getDreDrillDown` + `DrillDownDialog` compartilhado; `collapsedParents` por chevron; `isPending` com `opacity-50`; persistência em `localStorage` (`lure:fluxo:mensal:filters`); "Total líquido" em `bg-slate-800`; cores emerald/rose/muted por valor.
+
+TypeScript: 0 erros.
 
 ---
 

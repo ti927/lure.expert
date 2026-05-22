@@ -1,18 +1,81 @@
 'use client'
 
-import { useMemo } from 'react'
-import type { FluxoData } from '@/server/fluxo'
+import { useState, useTransition, useMemo, useEffect, Fragment } from 'react'
+import {
+  Check, ChevronsUpDown, X, Loader2, TrendingUp, BarChart3,
+  ChevronRight, ChevronDown,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from '@/components/ui/command'
 import { KPICard } from '@/components/financial/kpi-card'
 import { EmptyState } from '@/components/states/empty-state'
-import { TrendingUp } from 'lucide-react'
+import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
+import { cn } from '@/lib/utils'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { cn } from '@/lib/utils'
+import type { FluxoData } from '@/server/fluxo'
+import { getFluxoMensalData } from '@/server/fluxo-mensal'
+import type { FluxoMensalData, FluxoMensalCategoryRow } from '@/server/fluxo-mensal'
+import { getDreDrillDown } from '@/server/dre'
+import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
+import type { CostCenter } from '@/db/schema/cost-centers'
+import type { BusinessUnit } from '@/db/schema/business-units'
+import type { LegalEntity } from '@/db/schema/legal-entities'
+
+// ─── Tipos internos ───────────────────────────────────────────────────────────
+
+type ChildNode = {
+  categoryId:   string
+  categoryName: string
+  categoryCode: string
+  byMonth:      Record<string, number>
+  total:        number
+}
+
+type ParentNode = {
+  parentId:   string
+  parentName: string
+  parentCode: string
+  opexCapex:  string
+  byMonth:    Record<string, number>
+  total:      number
+  children:   ChildNode[]
+}
+
+type DrillDownState = {
+  categoryId:   string
+  categoryName: string
+  month:        string
+  dateRange?:   { from: string; to: string }
+}
+
+type DimOption = { id: string; name: string; code?: string | null }
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const PT_MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const COL_W       = 96
+const TOTAL_COL_W = 106
+const LABEL_W     = 280
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  return `${PT_MONTHS[m - 1]}/${String(y).slice(2)}`
+}
+
+function fmtNum(v: number): string {
+  return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v)
+}
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
 
@@ -22,6 +85,593 @@ function yFormatter(value: number): string {
   if (abs >= 1_000)     return `R$ ${(value / 1_000).toFixed(0)}k`
   return `R$ ${value.toFixed(0)}`
 }
+
+// ─── DimFilter ────────────────────────────────────────────────────────────────
+
+function DimFilter({
+  label, options, selected, onChange,
+}: {
+  label:    string
+  options:  DimOption[]
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  if (options.length === 0) return null
+
+  const displayText = selected.length === 0
+    ? label
+    : selected.length === 1
+    ? (options.find(o => o.id === selected[0])?.name ?? label)
+    : `${label}: ${selected.length}`
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn('h-8 gap-1.5 text-xs font-normal', selected.length > 0 && 'border-primary/30 bg-primary/5')}
+        >
+          <span className="truncate max-w-[140px]">{displayText}</span>
+          {selected.length > 0 ? (
+            <X
+              className="h-3 w-3 shrink-0 opacity-50 hover:opacity-100"
+              onClick={e => { e.stopPropagation(); onChange([]) }}
+            />
+          ) : (
+            <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-40" />
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[220px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Buscar..." className="h-8 text-xs" />
+          <CommandList>
+            <CommandEmpty className="py-4 text-center text-xs text-muted-foreground">
+              Nenhum resultado.
+            </CommandEmpty>
+            <CommandGroup>
+              {options.map(opt => {
+                const checked = selected.includes(opt.id)
+                return (
+                  <CommandItem
+                    key={opt.id}
+                    value={`${opt.code ?? ''} ${opt.name}`}
+                    onSelect={() => onChange(checked ? selected.filter(s => s !== opt.id) : [...selected, opt.id])}
+                    className="text-xs"
+                  >
+                    <Check className={cn('mr-2 h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
+                    {opt.code && <span className="text-muted-foreground mr-1 font-mono text-[10px] shrink-0">{opt.code}</span>}
+                    <span className="truncate">{opt.name}</span>
+                  </CommandItem>
+                )
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ─── Num (célula de valor) ────────────────────────────────────────────────────
+
+function Num({
+  value, bold, inverted, onClick,
+}: {
+  value:     number
+  bold?:     boolean
+  inverted?: boolean
+  onClick?:  () => void
+}) {
+  const isZero    = value === 0
+  const clickable = !isZero && !!onClick
+
+  let colorClass: string
+  if (isZero) {
+    colorClass = 'text-muted-foreground/30'
+  } else if (inverted) {
+    colorClass = value > 0 ? 'text-emerald-300' : 'text-rose-300'
+  } else {
+    colorClass = value > 0 ? 'text-emerald-700' : 'text-rose-600'
+  }
+
+  return (
+    <td
+      className={cn(
+        'px-3 py-[3px] text-right tabular-nums text-xs',
+        bold && 'font-semibold',
+        colorClass,
+        clickable && 'cursor-pointer hover:underline underline-offset-2',
+      )}
+      onClick={clickable ? onClick : undefined}
+    >
+      {isZero ? '—' : fmtNum(value)}
+    </td>
+  )
+}
+
+// ─── FluxoCaixaCategoria ──────────────────────────────────────────────────────
+
+interface CaixaCategoriaProps {
+  initialData:   FluxoMensalData
+  initialFrom:   string
+  initialTo:     string
+  costCenters:   CostCenter[]
+  businessUnits: BusinessUnit[]
+  legalEntities: LegalEntity[]
+  leafCategories: LeafCategory[]
+}
+
+function FluxoCaixaCategoria({
+  initialData, initialFrom, initialTo,
+  costCenters, businessUnits, legalEntities, leafCategories,
+}: CaixaCategoriaProps) {
+  const [data,       setData]       = useState<FluxoMensalData>(initialData)
+  const [isPending,  startTransition]      = useTransition()
+  const [isDrillLoading, startDrillTransition] = useTransition()
+
+  const [fromMonth, setFromMonth] = useState(initialFrom.slice(0, 7))
+  const [toMonth,   setToMonth]   = useState(initialTo.slice(0, 7))
+  const [selCc,     setSelCc]     = useState<string[]>([])
+  const [selBu,     setSelBu]     = useState<string[]>([])
+  const [selLe,     setSelLe]     = useState<string[]>([])
+
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set())
+  const [drillDown,        setDrillDown]        = useState<DrillDownState | null>(null)
+  const [drillDownData,    setDrillDownData]    = useState<DrillDownTransaction[] | null>(null)
+
+  // Restaura filtros do localStorage no mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('lure:fluxo:mensal:filters')
+      if (!saved) return
+      const p = JSON.parse(saved) as {
+        fromMonth?: string; toMonth?: string
+        selCc?: string[]; selBu?: string[]; selLe?: string[]
+      }
+      const validCcIds = new Set(costCenters.map(c => c.id))
+      const validBuIds = new Set(businessUnits.map(b => b.id))
+      const validLeIds = new Set(legalEntities.map(l => l.id))
+      const fm = p.fromMonth ?? fromMonth
+      const tm = p.toMonth   ?? toMonth
+      const cc = (p.selCc ?? []).filter(id => validCcIds.has(id))
+      const bu = (p.selBu ?? []).filter(id => validBuIds.has(id))
+      const le = (p.selLe ?? []).filter(id => validLeIds.has(id))
+      setFromMonth(fm); setToMonth(tm)
+      setSelCc(cc);     setSelBu(bu);     setSelLe(le)
+      const diffDate = fm !== initialFrom.slice(0, 7) || tm !== initialTo.slice(0, 7)
+      const diffDims = cc.length > 0 || bu.length > 0 || le.length > 0
+      if (diffDate || diffDims) fetchData({ fm, tm, cc, bu, le })
+    } catch {}
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Datas ISO do intervalo atual
+  const currentFrom = useMemo(() => {
+    const [y1, m1] = fromMonth.split('-').map(Number)
+    return `${y1}-${String(m1).padStart(2, '0')}-01`
+  }, [fromMonth])
+
+  const currentTo = useMemo(() => {
+    const [y2, m2] = toMonth.split('-').map(Number)
+    const lastDay = new Date(y2, m2, 0).getDate()
+    return `${y2}-${String(m2).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  }, [toMonth])
+
+  function fetchData(params: { fm?: string; tm?: string; cc?: string[]; bu?: string[]; le?: string[] } = {}) {
+    const fm = params.fm ?? fromMonth
+    const tm = params.tm ?? toMonth
+    const cc = params.cc ?? selCc
+    const bu = params.bu ?? selBu
+    const le = params.le ?? selLe
+
+    try {
+      localStorage.setItem('lure:fluxo:mensal:filters', JSON.stringify({ fromMonth: fm, toMonth: tm, selCc: cc, selBu: bu, selLe: le }))
+    } catch {}
+
+    const [y1, m1] = fm.split('-').map(Number)
+    const [y2, m2] = tm.split('-').map(Number)
+    const from    = `${y1}-${String(m1).padStart(2, '0')}-01`
+    const lastDay = new Date(y2, m2, 0).getDate()
+    const to      = `${y2}-${String(m2).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+
+    startTransition(async () => {
+      const d = await getFluxoMensalData({
+        from, to,
+        costCenterIds:    cc.length ? cc : undefined,
+        businessUnitIds:  bu.length ? bu : undefined,
+        legalEntityIds:   le.length ? le : undefined,
+      })
+      setData(d)
+    })
+  }
+
+  function toggleParent(parentId: string) {
+    setCollapsedParents(prev => {
+      const next = new Set(prev)
+      if (next.has(parentId)) next.delete(parentId)
+      else next.add(parentId)
+      return next
+    })
+  }
+
+  function openDrillDown(categoryId: string, categoryName: string, month: string, dateRange?: { from: string; to: string }) {
+    setDrillDown({ categoryId, categoryName, month, dateRange })
+    setDrillDownData(null)
+    startDrillTransition(async () => {
+      const result = await getDreDrillDown(categoryId, month, {
+        costCenterIds:   selCc.length ? selCc : undefined,
+        businessUnitIds: selBu.length ? selBu : undefined,
+        legalEntityIds:  selLe.length ? selLe : undefined,
+      }, dateRange)
+      setDrillDownData(result.transactions)
+    })
+  }
+
+  function closeDrillDown() {
+    setDrillDown(null)
+    setDrillDownData(null)
+  }
+
+  // Constrói árvore pai → filho a partir dos rows planos
+  const parentNodes = useMemo<ParentNode[]>(() => {
+    const map = new Map<string, { pNode: Omit<ParentNode, 'children' | 'byMonth' | 'total'>; childMap: Map<string, ChildNode> }>()
+
+    data.rows.forEach((row: FluxoMensalCategoryRow) => {
+      if (!map.has(row.parentId)) {
+        map.set(row.parentId, {
+          pNode:    { parentId: row.parentId, parentName: row.parentName, parentCode: row.parentCode, opexCapex: row.parentOpexCapex },
+          childMap: new Map(),
+        })
+      }
+      const entry = map.get(row.parentId)!
+      if (!entry.childMap.has(row.categoryId)) {
+        entry.childMap.set(row.categoryId, {
+          categoryId:   row.categoryId,
+          categoryName: row.categoryName,
+          categoryCode: row.categoryCode,
+          byMonth:      {},
+          total:        0,
+        })
+      }
+      const child = entry.childMap.get(row.categoryId)!
+      child.byMonth[row.month] = (child.byMonth[row.month] ?? 0) + row.netAmount
+    })
+
+    return Array.from(map.values())
+      .sort((a, b) => a.pNode.parentCode.localeCompare(b.pNode.parentCode))
+      .map(({ pNode, childMap }) => {
+        const children = Array.from(childMap.values())
+          .sort((a, b) => a.categoryCode.localeCompare(b.categoryCode))
+          .map(c => ({ ...c, total: Object.values(c.byMonth).reduce((s, v) => s + v, 0) }))
+
+        const byMonth: Record<string, number> = {}
+        children.forEach(child => {
+          Object.entries(child.byMonth).forEach(([m, v]) => {
+            byMonth[m] = (byMonth[m] ?? 0) + v
+          })
+        })
+        const total = Object.values(byMonth).reduce((s, v) => s + v, 0)
+
+        return { ...pNode, byMonth, total, children }
+      })
+  }, [data.rows])
+
+  // Total líquido por mês (todas as categorias)
+  const totalByMonth = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
+    data.rows.forEach(r => {
+      map[r.month] = (map[r.month] ?? 0) + r.netAmount
+    })
+    return map
+  }, [data.rows])
+
+  const grandTotal = useMemo(
+    () => data.months.reduce((s, m) => s + (totalByMonth[m] ?? 0), 0),
+    [data.months, totalByMonth],
+  )
+
+  const opexParents  = useMemo(() => parentNodes.filter(p => p.opexCapex !== 'capex'), [parentNodes])
+  const capexParents = useMemo(() => parentNodes.filter(p => p.opexCapex === 'capex'), [parentNodes])
+
+  const totalOpexByMonth = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
+    opexParents.forEach(p => {
+      Object.entries(p.byMonth).forEach(([m, v]) => { map[m] = (map[m] ?? 0) + v })
+    })
+    return map
+  }, [opexParents])
+
+  const totalCapexByMonth = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
+    capexParents.forEach(p => {
+      Object.entries(p.byMonth).forEach(([m, v]) => { map[m] = (map[m] ?? 0) + v })
+    })
+    return map
+  }, [capexParents])
+
+  const opexTotal  = useMemo(() => data.months.reduce((s, m) => s + (totalOpexByMonth[m] ?? 0), 0), [data.months, totalOpexByMonth])
+  const capexTotal = useMemo(() => data.months.reduce((s, m) => s + (totalCapexByMonth[m] ?? 0), 0), [data.months, totalCapexByMonth])
+
+  const hasDimFilters = selCc.length > 0 || selBu.length > 0 || selLe.length > 0
+  const { months } = data
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between mb-3">
+          <CardTitle className="text-base font-semibold">Geração de Caixa por Categoria</CardTitle>
+          {isPending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        </div>
+
+        {/* Filtros */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="month"
+              value={fromMonth}
+              max={toMonth}
+              onChange={e => setFromMonth(e.target.value)}
+              className="h-8 px-2 text-xs border rounded-md bg-background text-foreground"
+            />
+            <span className="text-xs text-muted-foreground">até</span>
+            <input
+              type="month"
+              value={toMonth}
+              min={fromMonth}
+              onChange={e => setToMonth(e.target.value)}
+              className="h-8 px-2 text-xs border rounded-md bg-background text-foreground"
+            />
+            <Button size="sm" variant="secondary" className="h-8 text-xs" onClick={() => fetchData()}>
+              Filtrar
+            </Button>
+          </div>
+
+          {(costCenters.length > 0 || businessUnits.length > 0 || legalEntities.length > 0) && (
+            <div className="h-5 w-px bg-border mx-0.5" />
+          )}
+
+          <DimFilter
+            label="Centro de Custo"
+            options={costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+            selected={selCc}
+            onChange={ids => { setSelCc(ids); fetchData({ cc: ids }) }}
+          />
+          <DimFilter
+            label="Unidade de Negócio"
+            options={businessUnits.map(b => ({ id: b.id, name: b.name, code: b.code }))}
+            selected={selBu}
+            onChange={ids => { setSelBu(ids); fetchData({ bu: ids }) }}
+          />
+          <DimFilter
+            label="Entidade Jurídica"
+            options={legalEntities.map(l => ({ id: l.id, name: l.name, code: l.code }))}
+            selected={selLe}
+            onChange={ids => { setSelLe(ids); fetchData({ le: ids }) }}
+          />
+
+          {hasDimFilters && (
+            <Button
+              size="sm" variant="ghost"
+              className="h-8 text-xs text-muted-foreground gap-1"
+              onClick={() => { setSelCc([]); setSelBu([]); setSelLe([]); fetchData({ cc: [], bu: [], le: [] }) }}
+            >
+              <X className="h-3 w-3" /> Limpar
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        {data.rows.length === 0 ? (
+          <div className="flex items-center justify-center py-12">
+            <EmptyState
+              icon={<BarChart3 className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
+              title="Sem dados para o período"
+              description="Categorize suas transações para que o expert monte o demonstrativo automaticamente."
+            />
+          </div>
+        ) : (
+          <div className={cn('overflow-auto max-h-[520px]', isPending && 'opacity-50 pointer-events-none')}>
+            <table
+              className="border-collapse"
+              style={{ minWidth: LABEL_W + months.length * COL_W + TOTAL_COL_W, width: '100%' }}
+            >
+              <colgroup>
+                <col style={{ width: LABEL_W, minWidth: LABEL_W }} />
+                {months.map(m => <col key={m} style={{ width: COL_W, minWidth: COL_W }} />)}
+                <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />
+              </colgroup>
+
+              <thead className="sticky top-0 z-20">
+                <tr className="bg-slate-800">
+                  <th className="text-left text-xs font-medium text-slate-200 px-4 py-2.5 rounded-tl-sm">
+                    Natureza
+                  </th>
+                  {months.map(m => (
+                    <th key={m} className="text-right text-xs font-medium text-slate-200 px-3 py-2.5 whitespace-nowrap">
+                      {monthLabel(m)}
+                    </th>
+                  ))}
+                  <th className="text-right text-xs font-medium text-slate-300/70 px-3 py-2.5 whitespace-nowrap border-l border-slate-600 rounded-tr-sm">
+                    Total
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {/* OPEX */}
+                {opexParents.map(parent => {
+                  const collapsed = collapsedParents.has(parent.parentId)
+                  return (
+                    <Fragment key={parent.parentId}>
+                      <tr className="bg-slate-50 border-y border-slate-100 hover:bg-slate-100/80">
+                        <td className="sticky left-0 bg-slate-50 px-4 py-1.5 text-xs font-semibold text-slate-700">
+                          <button
+                            className="flex items-center gap-1 text-left hover:text-slate-900"
+                            onClick={() => toggleParent(parent.parentId)}
+                          >
+                            {collapsed
+                              ? <ChevronRight className="h-3 w-3 shrink-0 text-slate-400" />
+                              : <ChevronDown  className="h-3 w-3 shrink-0 text-slate-400" />
+                            }
+                            <span className="truncate">{parent.parentName}</span>
+                          </button>
+                        </td>
+                        {months.map(m => (
+                          <Num key={m} value={parent.byMonth[m] ?? 0} bold />
+                        ))}
+                        <Num value={parent.total} bold />
+                      </tr>
+                      {!collapsed && parent.children.map(child => (
+                        <tr key={child.categoryId} className="hover:bg-muted/30 border-b border-border/30">
+                          <td className="sticky left-0 bg-background px-4 py-1 text-xs text-foreground pl-10">
+                            <span className="truncate block">{child.categoryName}</span>
+                          </td>
+                          {months.map(m => (
+                            <Num
+                              key={m}
+                              value={child.byMonth[m] ?? 0}
+                              onClick={() => openDrillDown(child.categoryId, child.categoryName, m)}
+                            />
+                          ))}
+                          <Num
+                            value={child.total}
+                            onClick={() => openDrillDown(child.categoryId, child.categoryName, '', { from: currentFrom, to: currentTo })}
+                          />
+                        </tr>
+                      ))}
+                    </Fragment>
+                  )
+                })}
+
+                {/* Total OPEX */}
+                {opexParents.length > 0 && (
+                  <tr className="bg-emerald-900/30 border-t border-emerald-700/30">
+                    <td className="sticky left-0 bg-emerald-900/30 px-4 py-2 text-xs font-semibold text-emerald-300">
+                      Total OPEX
+                    </td>
+                    {months.map(m => (
+                      <Num key={m} value={totalOpexByMonth[m] ?? 0} bold inverted />
+                    ))}
+                    <Num value={opexTotal} bold inverted />
+                  </tr>
+                )}
+
+                {/* Separador entre OPEX e CAPEX */}
+                {opexParents.length > 0 && capexParents.length > 0 && (
+                  <tr>
+                    <td colSpan={months.length + 2} className="p-0">
+                      <div className="border-t-2 border-dashed border-slate-300/60" />
+                    </td>
+                  </tr>
+                )}
+
+                {/* CAPEX */}
+                {capexParents.map(parent => {
+                  const collapsed = collapsedParents.has(parent.parentId)
+                  return (
+                    <Fragment key={parent.parentId}>
+                      <tr className="bg-slate-50 border-y border-slate-100 hover:bg-slate-100/80">
+                        <td className="sticky left-0 bg-slate-50 px-4 py-1.5 text-xs font-semibold text-slate-700">
+                          <button
+                            className="flex items-center gap-1 text-left hover:text-slate-900"
+                            onClick={() => toggleParent(parent.parentId)}
+                          >
+                            {collapsed
+                              ? <ChevronRight className="h-3 w-3 shrink-0 text-slate-400" />
+                              : <ChevronDown  className="h-3 w-3 shrink-0 text-slate-400" />
+                            }
+                            <span className="truncate">{parent.parentName}</span>
+                          </button>
+                        </td>
+                        {months.map(m => (
+                          <Num key={m} value={parent.byMonth[m] ?? 0} bold />
+                        ))}
+                        <Num value={parent.total} bold />
+                      </tr>
+                      {!collapsed && parent.children.map(child => (
+                        <tr key={child.categoryId} className="hover:bg-muted/30 border-b border-border/30">
+                          <td className="sticky left-0 bg-background px-4 py-1 text-xs text-foreground pl-10">
+                            <span className="truncate block">{child.categoryName}</span>
+                          </td>
+                          {months.map(m => (
+                            <Num
+                              key={m}
+                              value={child.byMonth[m] ?? 0}
+                              onClick={() => openDrillDown(child.categoryId, child.categoryName, m)}
+                            />
+                          ))}
+                          <Num
+                            value={child.total}
+                            onClick={() => openDrillDown(child.categoryId, child.categoryName, '', { from: currentFrom, to: currentTo })}
+                          />
+                        </tr>
+                      ))}
+                    </Fragment>
+                  )
+                })}
+
+                {/* Total CAPEX */}
+                {capexParents.length > 0 && (
+                  <tr className="bg-amber-900/20 border-t border-amber-700/30">
+                    <td className="sticky left-0 bg-amber-900/20 px-4 py-2 text-xs font-semibold text-amber-300">
+                      Total CAPEX
+                    </td>
+                    {months.map(m => (
+                      <Num key={m} value={totalCapexByMonth[m] ?? 0} bold inverted />
+                    ))}
+                    <Num value={capexTotal} bold inverted />
+                  </tr>
+                )}
+
+                {/* Separador antes do Total líquido */}
+                <tr>
+                  <td colSpan={months.length + 2} className="p-0">
+                    <div className="border-t-2 border-dashed border-slate-300/60" />
+                  </td>
+                </tr>
+
+                {/* Total líquido */}
+                <tr className="bg-slate-800 border-t-2 border-slate-600">
+                  <td className="sticky left-0 bg-slate-800 px-4 py-2 text-xs font-semibold text-white">
+                    Total líquido
+                  </td>
+                  {months.map(m => (
+                    <Num key={m} value={totalByMonth[m] ?? 0} bold inverted />
+                  ))}
+                  <Num value={grandTotal} bold inverted />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+
+      {drillDown && (
+        <DrillDownDialog
+          open
+          onOpenChange={o => { if (!o) closeDrillDown() }}
+          title={drillDown.categoryName}
+          subtitle={drillDown.dateRange
+            ? `Total — ${monthLabel(drillDown.dateRange.from.slice(0, 7))} a ${monthLabel(drillDown.dateRange.to.slice(0, 7))}`
+            : monthLabel(drillDown.month)
+          }
+          data={drillDownData}
+          loading={isDrillLoading}
+          onDataChange={setDrillDownData}
+          leafCategories={leafCategories}
+          costCenters={costCenters}
+          businessUnits={businessUnits}
+          legalEntities={legalEntities}
+        />
+      )}
+    </Card>
+  )
+}
+
+// ─── ChartTooltip ─────────────────────────────────────────────────────────────
 
 function ChartTooltip({ active, payload, label }: {
   active?: boolean
@@ -52,11 +702,23 @@ function ChartTooltip({ active, payload, label }: {
   )
 }
 
+// ─── FluxoClient ──────────────────────────────────────────────────────────────
+
 interface FluxoClientProps {
-  data: FluxoData
+  data:           FluxoData
+  initialMensal:  FluxoMensalData
+  initialFrom:    string
+  initialTo:      string
+  costCenters:    CostCenter[]
+  businessUnits:  BusinessUnit[]
+  legalEntities:  LegalEntity[]
+  leafCategories: LeafCategory[]
 }
 
-export function FluxoClient({ data }: FluxoClientProps) {
+export function FluxoClient({
+  data, initialMensal, initialFrom, initialTo,
+  costCenters, businessUnits, legalEntities, leafCategories,
+}: FluxoClientProps) {
   const hasHistorico  = data.semanas.some(s => s.inflowReal > 0 || s.outflowReal > 0)
   const hasProjecao   = data.recorrencias.length > 0
 
@@ -64,6 +726,17 @@ export function FluxoClient({ data }: FluxoClientProps) {
 
   return (
     <div className="space-y-6">
+      {/* Nova seção: Geração de Caixa por Categoria */}
+      <FluxoCaixaCategoria
+        initialData={initialMensal}
+        initialFrom={initialFrom}
+        initialTo={initialTo}
+        costCenters={costCenters}
+        businessUnits={businessUnits}
+        legalEntities={legalEntities}
+        leafCategories={leafCategories}
+      />
+
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <KPICard label="Saldo Atual"          value={data.saldoAtual}        colorizeValue />
         <KPICard label="Saldo Projetado 30d"  value={data.saldoProjetado30d} colorizeValue />
@@ -110,10 +783,8 @@ export function FluxoClient({ data }: FluxoClientProps) {
                     content={<ChartTooltip />}
                     cursor={{ fill: 'hsl(var(--muted))', opacity: 0.5 }}
                   />
-                  {/* Inflow: histórico (escuro) + projetado (claro) empilhados */}
-                  <Bar dataKey="inflowReal"       fill="#059669" stackId="in" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="inflowProjetado"  fill="#6ee7b7" stackId="in" radius={[3, 3, 0, 0]} />
-                  {/* Outflow: histórico (escuro) + projetado (claro) empilhados */}
+                  <Bar dataKey="inflowReal"       fill="#059669" stackId="in"  radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="inflowProjetado"  fill="#6ee7b7" stackId="in"  radius={[3, 3, 0, 0]} />
                   <Bar dataKey="outflowReal"      fill="#e11d48" stackId="out" radius={[3, 3, 0, 0]} />
                   <Bar dataKey="outflowProjetado" fill="#fca5a5" stackId="out" radius={[3, 3, 0, 0]} />
                 </BarChart>

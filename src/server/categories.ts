@@ -77,6 +77,7 @@ export async function getCategoriesWithTxCount() {
       isActive: categories.isActive,
       hideInDre: categories.hideInDre,
       hideInCashflow: categories.hideInCashflow,
+      opexCapex: categories.opexCapex,
       metadata: categories.metadata,
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
@@ -273,4 +274,22 @@ export async function getChildrenCount(parentId: string) {
     .from(categories)
     .where(and(eq(categories.parentId, parentId), eq(categories.organizationId, organizationId)))
   return cnt
+}
+
+export async function setParentOpexCapex(categoryId: string, value: 'opex' | 'capex') {
+  const { organizationId } = await getAuthContext()
+  const [cat] = await db
+    .select({ id: categories.id, parentId: categories.parentId })
+    .from(categories)
+    .where(and(eq(categories.id, categoryId), eq(categories.organizationId, organizationId)))
+    .limit(1)
+  if (!cat) return { error: 'Categoria não encontrada.' }
+  if (cat.parentId !== null) return { error: 'Apenas Naturezas Pai podem ter OPEX/CAPEX definido.' }
+  await db
+    .update(categories)
+    .set({ opexCapex: value, updatedAt: new Date() })
+    .where(and(eq(categories.id, categoryId), eq(categories.organizationId, organizationId)))
+  revalidatePath('/configuracoes/categorias')
+  revalidatePath('/fluxo')
+  return { success: true }
 }

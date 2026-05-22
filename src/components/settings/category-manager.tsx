@@ -68,6 +68,7 @@ export type CategoryItem = {
   isActive: boolean
   hideInDre: boolean
   hideInCashflow: boolean
+  opexCapex: string
   txCount: number
   createdAt: Date
   updatedAt: Date
@@ -114,6 +115,7 @@ interface CategoryManagerProps {
   onDelete: (id: string) => Promise<{ success?: boolean; error?: string }>
   onMove: (filhoId: string, newParentId: string) => Promise<{ success?: boolean; error?: string }>
   onChangeType: (parentId: string, newType: string) => Promise<{ success?: boolean; error?: string; updated?: number }>
+  onSetOpexCapex: (id: string, value: 'opex' | 'capex') => Promise<{ success?: boolean; error?: string }>
 }
 
 type TreeNode = CategoryItem & { children: TreeNode[] }
@@ -269,6 +271,7 @@ export function CategoryManager({
   onDelete,
   onMove,
   onChangeType,
+  onSetOpexCapex,
 }: CategoryManagerProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -442,6 +445,18 @@ export function CategoryManager({
     })
   }
 
+  function handleSetOpexCapex(id: string, value: 'opex' | 'capex') {
+    const prev = [...localCategories]
+    setLocalCategories(cs => cs.map(c => c.id === id ? { ...c, opexCapex: value } : c))
+    startTransition(async () => {
+      const result = await onSetOpexCapex(id, value)
+      if (result.error) {
+        toast.error(result.error)
+        setLocalCategories(prev)
+      }
+    })
+  }
+
   function handleDeleteConfirm() {
     if (!deleteTarget) return
     startTransition(async () => {
@@ -514,6 +529,7 @@ export function CategoryManager({
     onUpdateRequest: handleUpdate,
     onToggleActiveRequest: handleToggleActive,
     onToggleVisibilityRequest: handleToggleVisibility,
+    onSetOpexCapexRequest: handleSetOpexCapex,
     onDeleteRequest: setDeleteTarget,
     onChangeTypeRequest: setChangeTypeTarget,
     addingFilhoToPaiId,
@@ -789,6 +805,7 @@ interface SectionProps {
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
   onToggleVisibilityRequest: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
+  onSetOpexCapexRequest: (id: string, value: 'opex' | 'capex') => void
   onDeleteRequest: (item: CategoryItem) => void
   onChangeTypeRequest: (item: CategoryItem) => void
   addingFilhoToPaiId: string | null
@@ -810,6 +827,7 @@ function PaiSection({
   onUpdateRequest,
   onToggleActiveRequest,
   onToggleVisibilityRequest,
+  onSetOpexCapexRequest,
   onDeleteRequest,
   onChangeTypeRequest,
   addingFilhoToPaiId,
@@ -821,7 +839,7 @@ function PaiSection({
   const isDragFromSelf = activeDragId !== null && node.children.some(c => c.id === activeDragId)
   const showDropHighlight = isOver && !isDragFromSelf
 
-  const rowProps = { isPending, showVisibilityFlags, onEditRequest, onCancelEdit, onUpdateRequest, onToggleActiveRequest, onToggleVisibilityRequest, onDeleteRequest, onChangeTypeRequest }
+  const rowProps = { isPending, showVisibilityFlags, onEditRequest, onCancelEdit, onUpdateRequest, onToggleActiveRequest, onToggleVisibilityRequest, onSetOpexCapexRequest, onDeleteRequest, onChangeTypeRequest }
 
   return (
     <div
@@ -878,6 +896,7 @@ interface PaiRowProps {
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
   onToggleVisibilityRequest: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
+  onSetOpexCapexRequest: (id: string, value: 'opex' | 'capex') => void
   onDeleteRequest: (item: CategoryItem) => void
   onChangeTypeRequest: (item: CategoryItem) => void
   onAddFilho: (paiId: string) => void
@@ -897,6 +916,7 @@ function PaiRow({
   onUpdateRequest,
   onToggleActiveRequest,
   onToggleVisibilityRequest,
+  onSetOpexCapexRequest,
   onDeleteRequest,
   onChangeTypeRequest,
   onAddFilho,
@@ -952,6 +972,7 @@ function PaiRow({
         <Badge variant="secondary" className="text-xs shrink-0">Arquivada</Badge>
       )}
       {showVisibilityFlags && <VisibilityToggles node={node} onToggle={onToggleVisibilityRequest} />}
+      {showVisibilityFlags && <OpexCapexBadge node={node} onToggle={onSetOpexCapexRequest} />}
       <Button
         size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground gap-1"
         onClick={() => onChangeTypeRequest(node)}
@@ -990,6 +1011,7 @@ interface FilhoRowProps {
   onUpdateRequest: (id: string, formData: FormData) => void
   onToggleActiveRequest: (item: CategoryItem) => void
   onToggleVisibilityRequest: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
+  onSetOpexCapexRequest: (id: string, value: 'opex' | 'capex') => void
   onDeleteRequest: (item: CategoryItem) => void
 }
 
@@ -1061,6 +1083,33 @@ function DraggableFilhoRow({
         onDeleteRequest={onDeleteRequest}
       />
     </div>
+  )
+}
+
+// ─── OpexCapexBadge ───────────────────────────────────────────────────────────
+
+function OpexCapexBadge({
+  node,
+  onToggle,
+}: {
+  node: CategoryItem
+  onToggle: (id: string, value: 'opex' | 'capex') => void
+}) {
+  const isCapex = node.opexCapex === 'capex'
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(node.id, isCapex ? 'opex' : 'capex')}
+      title={isCapex ? 'CAPEX — clique para marcar como OPEX' : 'OPEX — clique para marcar como CAPEX'}
+      className={cn(
+        'text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors shrink-0',
+        isCapex
+          ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100'
+          : 'text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100',
+      )}
+    >
+      {isCapex ? 'CAPEX' : 'OPEX'}
+    </button>
   )
 }
 

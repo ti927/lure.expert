@@ -13,6 +13,7 @@ import {
   deleteCategory,
   moveCategory,
   changeParentType,
+  setParentOpexCapex,
 } from '@/server/categories'
 
 export const metadata: Metadata = { title: 'Plano de Contas' }
@@ -56,6 +57,7 @@ export default async function CategoriasPage() {
             onDelete={deleteCategory}
             onMove={moveCategory}
             onChangeType={changeParentType}
+            onSetOpexCapex={setParentOpexCapex}
           />
         </CardContent>
       </Card>
