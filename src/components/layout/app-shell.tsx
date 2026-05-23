@@ -12,9 +12,10 @@ export type AppUser = { id: string; email: string }
 interface AppShellProps {
   children: React.ReactNode
   user: AppUser
+  nfePendingCount?: number
 }
 
-export function AppShell({ children, user }: AppShellProps) {
+export function AppShell({ children, user, nfePendingCount = 0 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -39,6 +40,7 @@ export function AppShell({ children, user }: AppShellProps) {
         mobileOpen={mobileOpen}
         onMobileClose={() => setMobileOpen(false)}
         user={user}
+        nfePendingCount={nfePendingCount}
       />
 
       <div

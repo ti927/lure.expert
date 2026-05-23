@@ -16,6 +16,7 @@ import {
   ChevronRight,
   X,
   LogOut,
+  FileText,
 } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -32,6 +33,7 @@ import type { AppUser } from './app-shell'
 const NAV = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Visão Geral' },
   { href: '/transacoes', icon: ArrowLeftRight, label: 'Transações' },
+  { href: '/nfe', icon: FileText, label: 'NF-e' },
   { href: '/dre', icon: BarChart3, label: 'DRE' },
   { href: '/balanco', icon: Scale, label: 'Balanço' },
   { href: '/fluxo', icon: TrendingUp, label: 'Fluxo de Caixa' },
@@ -47,6 +49,7 @@ interface SidebarProps {
   mobileOpen: boolean
   onMobileClose: () => void
   user: AppUser
+  nfePendingCount?: number
 }
 
 function getInitials(email: string): string {
@@ -58,7 +61,7 @@ function getInitials(email: string): string {
   return local.slice(0, 2).toUpperCase()
 }
 
-export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user, nfePendingCount = 0 }: SidebarProps) {
   const pathname = usePathname()
   const initials = getInitials(user.email)
 
@@ -116,6 +119,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user }
               label={item.label}
               active={isActive(item.href)}
               collapsed={collapsed}
+              badge={item.href === '/nfe' ? nfePendingCount : undefined}
             />
           ))}
         </nav>
@@ -202,12 +206,14 @@ function NavLink({
   label,
   active,
   collapsed,
+  badge,
 }: {
   href: string
   icon: React.ElementType
   label: string
   active: boolean
   collapsed: boolean
+  badge?: number
 }) {
   return (
     <Link
@@ -222,7 +228,16 @@ function NavLink({
       )}
     >
       <Icon size={18} className="shrink-0" />
-      {!collapsed && <span>{label}</span>}
+      {!collapsed && (
+        <>
+          <span className="flex-1">{label}</span>
+          {badge && badge > 0 ? (
+            <span className="text-[10px] font-medium tabular-nums bg-amber-500/20 text-amber-600 rounded px-1.5 py-0.5 leading-none">
+              {badge > 99 ? '99+' : badge}
+            </span>
+          ) : null}
+        </>
+      )}
     </Link>
   )
 }

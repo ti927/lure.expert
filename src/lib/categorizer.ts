@@ -274,6 +274,18 @@ function buildAccountContextBlock(account?: AccountContext): string {
   return `\nContexto da conta:\n${lines.join('\n')}`
 }
 
+function buildNfContextBlock(nf?: NfContext | null): string {
+  if (!nf) return ''
+  const lines: string[] = []
+  const counterpart = nf.nfTipo === 'saida'
+    ? (nf.nfDestinatario ?? nf.nfDestinatarioCnpj)
+    : (nf.nfEmitente ?? nf.nfEmitenteCnpj)
+  if (counterpart) lines.push(`- Contraparte NF-e: ${counterpart}`)
+  if (nf.nfEmitenteCnpj && nf.nfTipo === 'entrada') lines.push(`- CNPJ emitente: ${nf.nfEmitenteCnpj}`)
+  if (lines.length === 0) return ''
+  return `\nContexto NF-e:\n${lines.join('\n')}`
+}
+
 async function classifyWithLLM(
   description: string,
   amount: string,
@@ -282,13 +294,15 @@ async function classifyWithLLM(
   domain: DocumentDomain,
   pluggyCategory?: string | null,
   accountContext?: AccountContext,
+  nfContext?: NfContext | null,
 ): Promise<LLMCallResult | null> {
   if (ctx.categories.length === 0) return null
 
   const systemPrompt = buildSystemPrompt(ctx, domain)
   const categoryHint = pluggyCategory ? `\nCategoria do banco (Pluggy): ${pluggyCategory}` : ''
   const accountBlock = buildAccountContextBlock(accountContext)
-  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}`
+  const nfBlock = buildNfContextBlock(nfContext)
+  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}${nfBlock}`
 
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -368,6 +382,14 @@ export interface AccountContext {
   merchantName?: string | null
 }
 
+export interface NfContext {
+  nfEmitente?: string | null
+  nfEmitenteCnpj?: string | null
+  nfDestinatario?: string | null
+  nfDestinatarioCnpj?: string | null
+  nfTipo?: 'saida' | 'entrada' | null
+}
+
 export async function categorizeTransaction(
   tx: {
     id: string
@@ -382,6 +404,7 @@ export async function categorizeTransaction(
     accountNumber?: string | null
     connectionLabel?: string | null
     connectionBadge?: string | null
+    nfContext?: NfContext | null
   },
   ctx: OrgContext,
   documentDomain: DocumentDomain = 'dre',
@@ -421,7 +444,7 @@ export async function categorizeTransaction(
   }
 
   const llm = await classifyWithLLM(
-    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory, accountContext,
+    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory, accountContext, tx.nfContext,
   )
   if (!llm) return { result: null }
 

@@ -215,3 +215,23 @@ export async function manualReconcile(invoiceId: string, transactionId: string) 
   revalidatePath('/dre')
   revalidatePath('/transacoes')
 }
+
+// ─────────────────────────────────────────
+// getInvoicePendingCount — badge na sidebar
+// ─────────────────────────────────────────
+
+export async function getInvoicePendingCount(): Promise<number> {
+  try {
+    const { organizationId } = await getAuthContext()
+    const [result] = await db
+      .select({ cnt: count() })
+      .from(invoices)
+      .where(and(
+        eq(invoices.organizationId, organizationId),
+        eq(invoices.status, 'pendente_revisao'),
+      ))
+    return Number(result?.cnt ?? 0)
+  } catch {
+    return 0
+  }
+}

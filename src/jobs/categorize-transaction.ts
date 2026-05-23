@@ -1,12 +1,13 @@
 import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
-import { transactions, documents, organizations, dataSources } from '@/db/schema'
+import { transactions, documents, organizations, dataSources, invoices } from '@/db/schema'
 import { eq, and, inArray } from 'drizzle-orm'
 import {
   loadOrgContext,
   categorizeTransaction,
   logCategorizationEvent,
   domainFromReportType,
+  type NfContext,
 } from '@/lib/categorizer'
 
 export const categorizeTransactions = inngest.createFunction(
@@ -54,6 +55,7 @@ export const categorizeTransactions = inngest.createFunction(
           accountName: transactions.accountName,
           accountType: transactions.accountType,
           accountNumber: transactions.accountNumber,
+          invoiceId: transactions.invoiceId,
         })
         .from(transactions)
         .where(and(
@@ -70,6 +72,23 @@ export const categorizeTransactions = inngest.createFunction(
           .where(inArray(documents.id, docIds))
         : []
       const docDomainMap = new Map(docRows.map(d => [d.id, domainFromReportType(d.reportType)]))
+
+      // Camada 0.5: carrega dados de NF-e para transações já reconciliadas
+      const invoiceIds = Array.from(new Set(txList.map(tx => tx.invoiceId).filter((id): id is string => id !== null)))
+      const invoiceRows = invoiceIds.length > 0
+        ? await db
+          .select({
+            id: invoices.id,
+            tipo: invoices.tipo,
+            emitenteNome: invoices.emitenteNome,
+            emitenteCnpj: invoices.emitenteCnpj,
+            destinatarioNome: invoices.destinatarioNome,
+            destinatarioCnpj: invoices.destinatarioCnpj,
+          })
+          .from(invoices)
+          .where(inArray(invoices.id, invoiceIds))
+        : []
+      const invoiceMap = new Map(invoiceRows.map(i => [i.id, i]))
 
       // Carrega metadados das conexões (uma query) para enriquecer o contexto do LLM
       const dsIds = Array.from(new Set(txList.map(tx => tx.dataSourceId).filter((id): id is string => id !== null)))
@@ -97,6 +116,15 @@ export const categorizeTransactions = inngest.createFunction(
         const customBadge = dsMeta.customBadge as { text?: string } | undefined
         const connectionBadge = customBadge?.text ?? null
 
+        const inv = tx.invoiceId ? invoiceMap.get(tx.invoiceId) : null
+        const nfContext: NfContext | null = inv ? {
+          nfTipo: inv.tipo as 'saida' | 'entrada',
+          nfEmitente: inv.emitenteNome,
+          nfEmitenteCnpj: inv.emitenteCnpj,
+          nfDestinatario: inv.destinatarioNome,
+          nfDestinatarioCnpj: inv.destinatarioCnpj,
+        } : null
+
         const { result, llmCost } = await categorizeTransaction({
           ...tx,
           metadata: tx.metadata as Record<string, unknown> | null,
@@ -105,6 +133,7 @@ export const categorizeTransactions = inngest.createFunction(
           accountNumber: tx.accountNumber,
           connectionLabel,
           connectionBadge,
+          nfContext,
         }, ctx, documentDomain)
 
         const hasAnyDimension = result && (

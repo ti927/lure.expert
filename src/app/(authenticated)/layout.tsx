@@ -6,6 +6,7 @@ import { AppShell } from '@/components/layout/app-shell'
 import { db } from '@/db'
 import { memberships } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
+import { getInvoicePendingCount } from '@/server/invoices'
 
 export default async function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient()
@@ -20,8 +21,10 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 
   if (!membership) redirect('/onboarding')
 
+  const nfePendingCount = await getInvoicePendingCount().catch(() => 0)
+
   return (
-    <AppShell user={{ id: user.id, email: user.email ?? '' }}>
+    <AppShell user={{ id: user.id, email: user.email ?? '' }} nfePendingCount={nfePendingCount}>
       {children}
     </AppShell>
   )

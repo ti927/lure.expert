@@ -167,9 +167,9 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 6 **100% concluída**. Fase 7 — Integração SEFAZ / NF-e **em andamento**: 7.1 (schema + tela de configuração) ✅, 7.2 (provedor abstrato + jobs de sync) ✅, 7.3 (reconciliação + server actions) ✅ — pendente: **7.4** (painel /nfe + link sidebar + categorização camada 0.5).
+**Status:** Fase 6 **100% concluída**. Fase 7 — Integração SEFAZ / NF-e **100% concluída** (7.1 ✅ 7.2 ✅ 7.3 ✅ 7.4 ✅).
 
-Fase 7 — Integração SEFAZ / NF-e **em andamento** (7.1 ✅ 7.2 ✅ 7.3 ✅ — 7.4 pendente).
+Fase 7 — Integração SEFAZ / NF-e **100% concluída** (7.1 ✅ 7.2 ✅ 7.3 ✅ 7.4 ✅).
 
 Fase 6 — Dashboard e Balanço Gerencial **100% concluída** (6.0 + todas as sessões de melhoria acima).
 
@@ -199,6 +199,48 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão 7.4 — Painel /nfe + Sidebar + Categorização Camada 0.5 *(concluída)*
+
+**Contexto:** entrega final da Fase 7. Cria a tela de visibilidade das NF-es, expõe o link na sidebar com badge de revisão pendente e enriquece o motor de categorização com dados da NF quando a transação já está reconciliada.
+
+**O que mudou:**
+
+- **`src/app/(authenticated)/nfe/page.tsx`** (criado) — server component: `Promise.all` paralelo de `listInvoices()`, `getInvoiceStats()` e `getLegalEntities()`; passa ao `NfeClient`.
+
+- **`src/app/(authenticated)/nfe/nfe-client.tsx`** (criado) — painel NF-e seguindo `DATA_TABLE_PATTERN.md`:
+  - **Cards de resumo (Zona 2):** A Receber (NFs saída não casadas, verde), A Pagar (NFs entrada não casadas, vermelho), Pendentes de revisão (âmbar), Sem correspondência (muted).
+  - **Filtros de data (Zona 2):** De/Até em `data_emissao` (date inputs nativos).
+  - **Tabela (Zona 4):** colunas Data emissão · Tipo (badge Saída/Entrada) · Número/Série · Contraparte (destinatário para saída, emitente para entrada) · Entidade jurídica · Valor · Status · Score · Transação (link externo quando casada).
+  - **Filtros no cabeçalho de cada coluna:** Tipo (enum radio), Status (multi-select), Entidade (multi-select), Valor (popover min/max).
+  - **Paginação (Zona 5):** Anterior/Próxima quando totalPages > 1.
+  - **Persistência:** filtros salvos em `localStorage` com chave `lure:nfe:filters`.
+  - **Empty state:** mensagem distinta quando há filtros ativos vs. sem NFs cadastradas.
+  - Badges de status: `nova` (slate), `manifestada` (sky), `pendente_revisao` (âmbar), `casada` (emerald), `cancelada`/`denegada` (rose).
+
+- **`src/server/invoices.ts`** — `getInvoicePendingCount()` adicionado: conta NFs com `status='pendente_revisao'` para o badge da sidebar; `try/catch` para não quebrar o layout se a migration 0022 ainda não foi aplicada.
+
+- **`src/app/(authenticated)/layout.tsx`** — chama `getInvoicePendingCount()` em paralelo e passa `nfePendingCount` ao `AppShell`.
+
+- **`src/components/layout/app-shell.tsx`** — aceita e propaga `nfePendingCount?: number` ao `Sidebar`.
+
+- **`src/components/layout/sidebar.tsx`** — link `/nfe` com ícone `FileText` adicionado ao array `NAV` (entre Transações e DRE); `NavLink` aceita prop `badge?: number`; badge âmbar renderizado ao lado do label quando `badge > 0` e sidebar expandida.
+
+- **`src/lib/categorizer.ts`** — Camada 0.5 de categorização com NF-e:
+  - Novo tipo exportado `NfContext` (`nfEmitente`, `nfEmitenteCnpj`, `nfDestinatario`, `nfDestinatarioCnpj`, `nfTipo`).
+  - `buildNfContextBlock(nf?)` — constrói bloco de texto com a contraparte da NF (destinatário para NF saída, emitente para NF entrada) e CNPJ do emitente para entradas.
+  - `categorizeTransaction` aceita `nfContext?: NfContext | null` na definição do `tx`; bloco é injetado no user message antes de enviar ao Haiku.
+  - Não altera a lógica das camadas 1, 2, 3 e 4 — apenas enriquece o contexto disponível ao LLM.
+
+- **`src/jobs/categorize-transaction.ts`** — Camada 0.5 no pipeline de jobs:
+  - `invoiceId` adicionado ao SELECT de transações.
+  - Pré-fetch de dados de NF para transações com `invoiceId` (uma query por lote via `inArray`).
+  - `invoiceMap` indexado por `invoice.id`; loop monta `nfContext` e passa a `categorizeTransaction`.
+  - Quando `invoiceId` é null (maioria dos casos no insert inicial), `nfContext` é null e o comportamento é idêntico ao anterior.
+
+TypeScript: 0 erros.
 
 ---
 
