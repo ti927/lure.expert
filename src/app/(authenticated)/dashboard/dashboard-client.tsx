@@ -1,7 +1,8 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { KPICard } from '@/components/financial/kpi-card'
 import { EmptyState } from '@/components/states/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,13 +20,80 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart, Loader2 } from 'lucide-react'
+import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart, Loader2, AlertTriangle, X } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
 import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
+
+type DashboardAlert = {
+  id:       string
+  severity: 'critical' | 'warning'
+  message:  string
+  action?:  { label: string; href: string }
+}
+
+function AlertsSection({
+  alerts,
+  dismissedIds,
+  onDismiss,
+}: {
+  alerts:       DashboardAlert[]
+  dismissedIds: string[]
+  onDismiss:    (id: string) => void
+}) {
+  const visible = alerts.filter(a => !dismissedIds.includes(a.id))
+  if (visible.length === 0) return null
+
+  return (
+    <div className="space-y-2">
+      {visible.map(alert => (
+        <div
+          key={alert.id}
+          className={`flex items-start gap-3 rounded-md border px-4 py-3 text-sm ${
+            alert.severity === 'critical'
+              ? 'border-rose-200 bg-rose-50 dark:border-rose-900/50 dark:bg-rose-950/30'
+              : 'border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30'
+          }`}
+        >
+          <AlertTriangle
+            className={`h-4 w-4 mt-0.5 flex-shrink-0 ${
+              alert.severity === 'critical' ? 'text-rose-600' : 'text-amber-600'
+            }`}
+            strokeWidth={1.75}
+          />
+          <p className={`flex-1 leading-snug ${
+            alert.severity === 'critical'
+              ? 'text-rose-800 dark:text-rose-200'
+              : 'text-amber-800 dark:text-amber-200'
+          }`}>
+            {alert.message}
+          </p>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {alert.action && (
+              <Link
+                href={alert.action.href}
+                className="text-xs underline underline-offset-2 hover:no-underline text-muted-foreground"
+              >
+                {alert.action.label}
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => onDismiss(alert.id)}
+              aria-label="Dispensar alerta"
+              className="text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 type WeekData = { label: string; inflow: number; outflow: number }
 
@@ -219,6 +287,23 @@ export function DashboardClient({
   const [drillData, setDrillData] = useState<DrillDownTransaction[] | null>(null)
   const [isDrillLoading, startDrillTransition] = useTransition()
 
+  // Alertas — dismissal persistido por mês no localStorage
+  const [dismissedIds, setDismissedIds] = useState<string[]>([])
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`lure:dashboard:dismissed-alerts:${selectedMonth}`)
+      setDismissedIds(stored ? (JSON.parse(stored) as string[]) : [])
+    } catch { setDismissedIds([]) }
+  }, [selectedMonth])
+
+  function dismissAlert(id: string) {
+    setDismissedIds(prev => {
+      const next = [...prev, id]
+      try { localStorage.setItem(`lure:dashboard:dismissed-alerts:${selectedMonth}`, JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+  }
+
   function handleMonthChange(newMonth: string) {
     if (!newMonth || !/^\d{4}-\d{2}$/.test(newMonth)) return
     startNavTransition(() => {
@@ -257,6 +342,95 @@ export function DashboardClient({
   const dcsrStatus         = indicatorStatus(indicators.coberturaServicoDivida,  1.5, 1.0)
   const endividStatus      = indicatorStatusInverse(indicators.endividamentoGeral, 0.5, 0.7)
   const roeStatus          = indicatorStatus(indicators.roe,                    15, 8)
+
+  const alerts = useMemo<DashboardAlert[]>(() => {
+    if (!kpis.hasData) return []
+    const result: DashboardAlert[] = []
+
+    // Saldo em caixa negativo
+    if (kpis.saldoCaixa < 0) {
+      result.push({
+        id: 'saldo-negativo',
+        severity: 'critical',
+        message: `Saldo em caixa negativo (${brl.format(kpis.saldoCaixa)}).`,
+        action: { label: 'Ver transações', href: '/transacoes' },
+      })
+    }
+
+    // Resultado líquido negativo
+    if (kpis.lucroLiquido.current < 0) {
+      result.push({
+        id: 'lucro-negativo',
+        severity: 'warning',
+        message: `Resultado líquido do mês negativo (${brl.format(kpis.lucroLiquido.current)}).`,
+        action: { label: 'Ver DRE', href: '/dre' },
+      })
+    }
+
+    // Despesas crescendo muito
+    if (kpis.despesas.delta !== null && kpis.despesas.delta > 30) {
+      result.push({
+        id: 'despesas-alta',
+        severity: kpis.despesas.delta > 50 ? 'critical' : 'warning',
+        message: `Despesas cresceram ${kpis.despesas.delta.toFixed(0)}% em relação ao mês anterior.`,
+        action: { label: 'Analisar', href: '/transacoes' },
+      })
+    }
+
+    // Receita caindo muito
+    if (kpis.receita.delta !== null && kpis.receita.delta < -20) {
+      result.push({
+        id: 'receita-queda',
+        severity: kpis.receita.delta < -40 ? 'critical' : 'warning',
+        message: `Receita caiu ${Math.abs(kpis.receita.delta).toFixed(0)}% em relação ao mês anterior.`,
+        action: { label: 'Ver DRE', href: '/dre' },
+      })
+    }
+
+    // Margem EBITDA crítica
+    if (ebitdaStatus === 'bad' && indicators.margemEbitda !== null) {
+      result.push({
+        id: 'ebitda-baixo',
+        severity: indicators.margemEbitda < 0 ? 'critical' : 'warning',
+        message: `Margem EBITDA em ${indicators.margemEbitda.toFixed(1)}% — abaixo do mínimo recomendável de 5%.`,
+        action: { label: 'Ver DRE', href: '/dre' },
+      })
+    }
+
+    // Cobertura do serviço da dívida insuficiente
+    if (dcsrStatus === 'bad' && indicators.coberturaServicoDivida !== null) {
+      result.push({
+        id: 'cobertura-divida',
+        severity: 'critical',
+        message: `Cobertura do serviço da dívida em ${indicators.coberturaServicoDivida.toFixed(2)}x — resultado operacional não cobre os empréstimos do mês.`,
+        action: { label: 'Ver DRE', href: '/dre' },
+      })
+    }
+
+    // Liquidez corrente crítica
+    if (liquidezStatus === 'bad' && indicators.liquidezCorrente !== null) {
+      result.push({
+        id: 'liquidez-corrente',
+        severity: 'critical',
+        message: `Liquidez Corrente em ${indicators.liquidezCorrente.toFixed(2)}x — ativo circulante insuficiente para cobrir o passivo de curto prazo.`,
+        action: { label: 'Ver Balanço', href: '/balanco' },
+      })
+    }
+
+    // Endividamento elevado
+    if (endividStatus === 'bad' && indicators.endividamentoGeral !== null) {
+      result.push({
+        id: 'endividamento',
+        severity: 'warning',
+        message: `Endividamento Geral em ${(indicators.endividamentoGeral * 100).toFixed(1)}% — alavancagem acima do limite recomendável.`,
+        action: { label: 'Ver Balanço', href: '/balanco' },
+      })
+    }
+
+    return result
+      .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1))
+      .slice(0, 6)
+  }, [kpis, indicators, ebitdaStatus, dcsrStatus, liquidezStatus, endividStatus])
 
   const allNull = indicators.margemEbitda           === null
     && indicators.liquidezCorrente        === null
@@ -306,6 +480,8 @@ export function DashboardClient({
           colorizeValue
         />
       </div>
+
+      <AlertsSection alerts={alerts} dismissedIds={dismissedIds} onDismiss={dismissAlert} />
 
       <Card>
         <CardHeader className="pb-2">
