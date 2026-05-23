@@ -185,7 +185,7 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - ✅ `db/migrations/rls/0019_reset_categorization_rules.sql` — `DELETE FROM categorization_rules` (reset para introduzir escopo por accountId)
 - ✅ `db/migrations/rls/0020_category_opex_capex.sql` — `opex_capex text NOT NULL DEFAULT 'opex'` em `categories`; seed defaults CAPEX para tipos 8/9/10
 - ✅ `db/migrations/rls/0021_staging_effective_date.sql` — `effective_date text` em `transactions_staging`
-- ⚠️ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas — **aplicar no Supabase Studio (SQL Editor) antes de testar a Fase 7**
+- ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
 
 **Convenção crítica — date vs effective_date em `transactions`:**
 - `date` (competência) → alimenta **DRE** e **BP** (quando o fato econômico ocorreu)
@@ -318,7 +318,7 @@ TypeScript: 0 erros.
 
 **O que mudou:**
 
-- **`db/migrations/rls/0022_sefaz_invoices.sql`** (⚠️ aplicar manualmente no Supabase Studio) — cria tabelas `sefaz_connections` e `invoices` com RLS isolado por org; adiciona coluna `invoice_id uuid` em `transactions`.
+- **`db/migrations/rls/0022_sefaz_invoices.sql`** (✅ aplicada) — cria tabelas `sefaz_connections` e `invoices` com RLS isolado por org; adiciona coluna `invoice_id uuid` em `transactions`.
 
 - **`db/schema/sefaz-connections.ts`** (criado) — conexão por CNPJ/entidade jurídica; campos: provider, providerCompanyId, apiKeyEncrypted, certificateExpiry, environment, pullSaida, pullEntrada, autoManifest, status, lastSyncAt, metadata; UNIQUE(organizationId, cnpj).
 
