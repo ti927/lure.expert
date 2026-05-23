@@ -35,7 +35,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# claude code (local-machine overrides)
+# claude code (local-machine overrides + agent worktrees)
 .claude/settings.local.json
+.claude/worktrees/
 
 .vercel
