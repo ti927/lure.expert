@@ -161,12 +161,15 @@ Nunca encerrar uma sessão de trabalho sem confirmar que o GitHub está atualiza
 
 Schema original: 18 tabelas (Fase 1), RLS ativa e testada. Fonte da verdade: `docs/SCHEMA_INICIAL.md` v2.0.
 Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — ver `docs/SCHEMA_DECISIONS.md`.
+Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` (migration 0021, Fase 6) — ver `docs/SCHEMA_DECISIONS.md` Decisão 7.
 
 ---
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras**, **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)**, **tabela "Geração de Caixa por Categoria" em `/fluxo` (mensal, hierárquica, com drill-down e filtros de dimensão)**, **split OPEX/CAPEX nas Naturezas Pai (badge em /configuracoes/categorias + seções separadas em /fluxo)**, **subtotais por grupo/natureza pai no drill-down compartilhado** e **seletor de mês no dashboard + indicadores financeiros completos + Top 5 categorias de despesa** **concluídas**.
+**Status:** Fase 6 — Dashboard e Balanço Gerencial **100% concluída**. Todos os deliverables entregues: BP via upload, redesign de tabelas, UX Pluggy, categorizador com contexto de conta, regras escopadas por accountId, drill-downs DRE e BP, tabela Geração de Caixa, split OPEX/CAPEX, subtotais no drill-down compartilhado, seletor de mês + indicadores financeiros completos + Top 5, alertas no dashboard, separação date/effective_date (competência vs caixa) em todo o pipeline. **Fase 7 (SEFAZ) suspensa** por decisão de produto. **Próxima fase a definir.**
+
+Fase 6 — Dashboard e Balanço Gerencial **100% concluída** (6.0 + todas as sessões de melhoria acima).
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -174,13 +177,18 @@ Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próximas sessões:** alertas no dashboard (único deliverable restante da Fase 6).
-
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
 - ✅ `db/migrations/rls/0018_transactions_account_fields.sql` — `account_id`, `account_number`, `account_type`, `account_name` em `transactions`
 - ✅ `db/migrations/rls/0019_reset_categorization_rules.sql` — `DELETE FROM categorization_rules` (reset para introduzir escopo por accountId)
 - ✅ `db/migrations/rls/0020_category_opex_capex.sql` — `opex_capex text NOT NULL DEFAULT 'opex'` em `categories`; seed defaults CAPEX para tipos 8/9/10
+- ✅ `db/migrations/rls/0021_staging_effective_date.sql` — `effective_date text` em `transactions_staging`
+
+**Convenção crítica — date vs effective_date em `transactions`:**
+- `date` (competência) → alimenta **DRE** e **BP** (quando o fato econômico ocorreu)
+- `effective_date` (caixa) → alimenta **FC, saldo de caixa e gráfico de fluxo** (quando o dinheiro se moveu)
+- Queries de caixa usam `COALESCE(t.effective_date, t.date)` — compatibilidade retroativa para dados históricos onde `effective_date` é `NULL`
+- Queries de competência (`dre.ts`, `balance-sheet.ts`, KPIs de resultado em `dashboard.ts`) usam `t.date` diretamente — não alterar
 
 **Fase futura — Ampliação de contexto do expert:**
 Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa fase posterior, enriquecer com:
@@ -188,6 +196,69 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Separação date/effective_date (competência vs caixa) *(concluída)*
+
+**Contexto:** a tabela `transactions` sempre teve `date` (competência) e `effective_date` (caixa), mas `effective_date` nunca era populado — todos os pipelines gravavam apenas `date`, e todas as queries de fluxo de caixa também liam apenas `date`. Esta sessão implementa o uso real da distinção: `date` alimenta DRE e BP; `effective_date` alimenta FC, saldo de caixa e gráfico de fluxo.
+
+**O que mudou:**
+
+- **`db/migrations/rls/0021_staging_effective_date.sql`** — `ALTER TABLE transactions_staging ADD COLUMN IF NOT EXISTS effective_date text` (aplicado no Supabase Studio).
+
+- **`db/schema/transactions-staging.ts`** — campo `effectiveDate: text('effective_date')` adicionado.
+
+- **`src/lib/parsers/excel-csv.ts` e `src/lib/parsers/pdf.ts`** — tipo `LlmRow` e `StagingRow` ganham `effectiveDate`; SYSTEM_PROMPT atualizado com instruções separadas para as duas datas (`date` = competência, `effectiveDate` = quando o dinheiro se moveu); `parseLlmResponse` e `toStagingRows` propagam o campo com fallback para `date` quando o LLM não retorna.
+
+- **`src/jobs/sync-pluggy-item.ts`** — `effectiveDate: tx.date.toISOString().split('T')[0]` gravado no insert (posting date = cash date para extratos bancários; os dois campos ficam iguais).
+
+- **`src/server/staging.ts`** — `approveAndInsert` propaga `effectiveDate: r.effectiveDate ?? r.date` ao inserir em `transactions`.
+
+- **Queries de caixa — 6 pontos de mudança** — substituição de `t.date` por `COALESCE(t.effective_date, t.date)` em SELECT, WHERE e GROUP BY:
+
+  | Arquivo | Função |
+  |---|---|
+  | `src/server/dashboard.ts` | `getDashboardKPIs` (saldoCaixa) |
+  | `src/server/dashboard.ts` | `getTopExpenseCategories` |
+  | `src/server/dashboard.ts` | `getDashboardCategoryDrillDown` |
+  | `src/server/dashboard.ts` | `getCashFlowChart` |
+  | `src/server/fluxo.ts` | histórico diário + CTE de recorrências |
+  | `src/server/fluxo-mensal.ts` | agregação mensal |
+
+- **Queries que NÃO foram alteradas** (competência): `dre.ts`, `balance-sheet.ts`, KPIs de resultado e indicadores financeiros em `dashboard.ts`.
+
+**Princípio de compatibilidade:** `COALESCE(effective_date, date)` garante que dados históricos com `effective_date = NULL` continuem aparecendo normalmente. Para extratos bancários (Pluggy + uploads), `effective_date = date` — comportamento visível idêntico ao anterior. A diferença aparece apenas em uploads de NF/ERP com datas distintas de competência e caixa.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
+
+---
+
+### ✅ Sessão — Alertas no dashboard *(concluída)*
+
+**Contexto:** último deliverable da Fase 6. O dashboard já calculava KPIs e indicadores financeiros, mas não alertava proativamente sobre situações de risco.
+
+**O que mudou:**
+
+- **`src/app/(authenticated)/dashboard/dashboard-client.tsx`** — `AlertsSection` component:
+  - Tipo `DashboardAlert` com `id`, `type` (`'critical' | 'warning'`), `title`, `description`, `href?`
+  - `useMemo` `alerts` deriva alertas dos dados já carregados nos props — sem query adicional
+  - Condições monitoradas (por ordem de prioridade):
+    - Saldo negativo → critical
+    - Lucro negativo → warning
+    - Despesas +30% vs mês anterior → warning; +50% → critical
+    - Receita −20% vs mês anterior → warning; −40% → critical
+    - EBITDA < 5% → warning; < 0% → critical
+    - Cobertura do serviço da dívida < 1× → critical
+    - Liquidez corrente < 1× → critical
+    - Endividamento > 70% → warning
+  - Máximo 6 alertas exibidos, critical primeiro
+  - Dismissível por alerta: `×` remove do estado local e persiste em `localStorage` com chave `lure:dashboard:dismissed-alerts:${selectedMonth}` (ao trocar de mês, alertas voltam)
+  - Posição: entre os 4 KPI cards e o gráfico de fluxo de caixa
+
+**Não-objetivos:** sem tela `/alertas` separada (alertas são informação contextual do dashboard, não uma fila de tarefas); sem persistência no banco (derivados em tempo real dos dados já carregados).
+
+TypeScript: 0 erros. ESLint: 0 warnings.
 
 ---
 

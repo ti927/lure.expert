@@ -91,7 +91,7 @@ Linhas ficam aqui até o usuário aprovar (→ viram `transactions`) ou rejeitar
 - `organization_id`, `document_id` (FKs com CASCADE)
 - `row_index` — posição original no arquivo
 - `raw_data` (jsonb) — linha completa como veio do arquivo
-- `date`, `amount`, `direction`, `description` — campos mapeados pela heurística do parser
+- `date`, `effective_date`, `amount`, `direction`, `description` — campos extraídos pelo LLM
 - `status` — `pending` | `approved` | `rejected`
 
 **Regra de direção por source_type:**
@@ -99,7 +99,9 @@ Linhas ficam aqui até o usuário aprovar (→ viram `transactions`) ou rejeitar
 - Outros tipos → direção inferida por heurística (sinal do valor ou colunas crédito/débito)
 - Extensível via `FORCE_OUTFLOW_SOURCES` em `src/jobs/process-document.ts`
 
-**Migration:** `db/migrations/rls/0007_transactions_staging.sql`
+**Atualização — migration 0021 (Fase 6):** coluna `effective_date text` (nullable) adicionada. Permite que parsers LLM extraiam a data de caixa (quando o dinheiro se moveu) separada da data de competência (`date`). Ver Decisão 7 para a arquitetura completa da distinção date/effective_date.
+
+**Migrations:** `db/migrations/rls/0007_transactions_staging.sql` (criação) + `db/migrations/rls/0021_staging_effective_date.sql` (effective_date)
 **Schema Drizzle:** `db/schema/transactions-staging.ts`
 
 ---
@@ -137,6 +139,48 @@ classificação nessa dimensão, o que é aceitável. `RESTRICT` bloquearia o de
 
 **Migration:** `db/migrations/rls/0008_dimensions.sql`
 **Schemas Drizzle:** `db/schema/cost-centers.ts`, `db/schema/business-units.ts`, `db/schema/legal-entities.ts`
+
+---
+
+---
+
+## Decisão 7 — Separação date (competência) vs effective_date (caixa) em transactions (Fase 6)
+
+**Contexto:** a tabela `transactions` sempre teve dois campos de data — `date` (NOT NULL) e `effective_date` (nullable) — mas `effective_date` nunca era populado. Todos os pipelines gravavam apenas `date`, e todas as queries de fluxo de caixa também liam apenas `date`.
+
+**Decisão:** distinguir os dois campos semanticamente:
+- `date` → data de **competência** (quando o fato econômico ocorreu: emissão da NF, compra no cartão, lançamento no ERP). Alimenta **DRE** e **BP**.
+- `effective_date` → data de **caixa** (quando o dinheiro efetivamente entrou ou saiu da conta). Alimenta **FC (fluxo de caixa)**, saldo de caixa e gráfico de fluxo.
+
+**Impacto por fonte de dados:**
+
+| Fonte | date | effective_date |
+|---|---|---|
+| Extrato bancário via Pluggy | data de posting no extrato | igual a `date` (posting date = cash date) |
+| Upload de extrato bancário | data extraída pelo LLM | igual a `date` (LLM instruído a repetir quando há só uma data) |
+| Upload de NF / relatório ERP | data de emissão / competência | data de pagamento / recebimento (campos distintos no documento) |
+| Upload de fatura de cartão | data da compra | data do vencimento / pagamento da fatura |
+
+**Regra COALESCE para compatibilidade retroativa:**
+Todas as queries de caixa usam `COALESCE(t.effective_date, t.date)` em SELECT, WHERE e GROUP BY. Dados históricos com `effective_date = NULL` continuam aparecendo normalmente — o COALESCE cai de volta para `date`. A mudança é não-destrutiva para todos os dados existentes. Para extratos bancários (a maioria dos dados), `effective_date = date` e o comportamento visível é idêntico ao anterior.
+
+**Queries de caixa alteradas (usam COALESCE):**
+- `src/server/dashboard.ts`: `getDashboardKPIs` (saldoCaixa), `getTopExpenseCategories`, `getDashboardCategoryDrillDown`, `getCashFlowChart`
+- `src/server/fluxo.ts`: histórico diário + CTE de recorrências
+- `src/server/fluxo-mensal.ts`: agregação mensal
+
+**Queries de competência — NÃO alterar (usam `date` direto):**
+- `src/server/dre.ts` — DRE usa `date` (competência)
+- `src/server/balance-sheet.ts` — BP usa `date` (posição de balanço na data de referência)
+- `src/server/dashboard.ts` — KPIs de resultado (receita, despesas, lucro) e indicadores financeiros
+
+**Pipeline de população do effective_date:**
+- Parsers LLM (`excel-csv.ts`, `pdf.ts`): SYSTEM_PROMPT atualizado para extrair `effectiveDate` separado de `date`; fallback para `date` quando o LLM não retorna ou o documento só tem uma data.
+- Pluggy sync (`sync-pluggy-item.ts`): `effectiveDate = date` (posting date IS cash date).
+- `approveAndInsert` em `staging.ts`: `effectiveDate: r.effectiveDate ?? r.date` — fallback para `date` quando o staging não preencheu o campo.
+
+**Migrations:** `db/migrations/rls/0021_staging_effective_date.sql` — adiciona `effective_date text` em `transactions_staging`.
+**Schemas Drizzle afetados:** `db/schema/transactions-staging.ts` (nova coluna); `db/schema/transactions.ts` já tinha o campo desde a Fase 1.
 
 ---
 

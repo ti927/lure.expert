@@ -739,26 +739,32 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 6 — Dashboard e Balanço Gerencial (Semanas 14-15)
+### FASE 6 — Dashboard e Balanço Gerencial ✅ CONCLUÍDA
 
 **Objetivo:** painel inicial mostra a empresa em uma tela, BP gerencial atualizado em tempo real.
 
-**Deliverables:**
-- Dashboard principal com: caixa atual, AR aberto, AP aberto, lucro do mês, top 5 categorias do mês, alertas
-- Página de DRE gerencial mensal (últimos 12 meses)
-- Página de Balanço Patrimonial gerencial (construído a partir das transações + cadastros)
-- Indicadores: liquidez corrente/seca, endividamento, ciclo financeiro, ROE, margem EBITDA
-- Tudo com drill-down (clica no número, vê detalhe)
+**Deliverables entregues (divergiu do plano original em alguns pontos — ver abaixo):**
+- ✅ Dashboard com seletor de mês, 4 KPI cards (Receita, Despesas, Lucro, Saldo), gráfico de fluxo de caixa 90 dias, 7 indicadores financeiros com semáforo, Top 5 categorias de despesa com drill-down
+- ✅ Alertas no dashboard: 8 condições de risco, dismissíveis por mês, derivados em tempo real dos dados carregados
+- ✅ Página `/dre` gerencial (já entregue na Fase 5) — 12 meses, filtros de dimensão, drill-down completo
+- ✅ Página `/balanco` gerencial multi-coluna por mês, via upload de relatório de BP (snapshot), drill-down completo
+- ✅ Indicadores: Margem EBITDA, Liquidez Corrente, Liquidez Seca, Cobertura do Serviço da Dívida, Endividamento Geral, ROE, Ciclo Financeiro (null no MVP — aguarda AR/AP estruturado)
+- ✅ Drill-down em todas as análises (DRE, BP, /fluxo) com componente compartilhado `DrillDownDialog`
+- ✅ Separação date (competência) / effective_date (caixa) em todo o pipeline: parsers LLM, Pluggy sync, staging → transactions, 6 queries de caixa atualizadas com `COALESCE(effective_date, date)`
 
-**Prompt template:**
-> *"Vamos construir o dashboard e os relatórios financeiros. Página /dashboard: cards com Saldo de Caixa (somatório de bank balances atuais), AR em Aberto, AP em Aberto, Lucro do Mês Corrente, e gráfico de fluxo de caixa últimos 90 dias. Página /dre: tabela DRE gerencial com colunas dos últimos 12 meses, agrupada por categoria do plano de contas. Página /balanco: monta o BP gerencial assim — Ativo Circulante = caixa + aplicações + AR + estoque (se tiver); Ativo Não-Circulante = imobilizado (tabela fixed_assets que precisamos criar); Passivo Circulante = AP + empréstimos curto prazo; Passivo Não-Circulante = empréstimos longo prazo; PL = derivado. Página /indicadores: calcula e mostra os principais indicadores. TUDO com drill-down: clica no número, abre uma view com as transações que compõem aquele saldo."*
+**Nota sobre divergências do plano original:**
+- AR/AP em aberto: não entregue (requer tabela de contas a receber/pagar estruturada — diferido)
+- BP via tabelas de apoio (`fixed_assets`, `loans`, etc.): substituído por BP via upload de relatório (snapshot por mês) — mais aderente ao fluxo real de PMEs
+- Ciclo financeiro: null no MVP (requer PMR + PME + PMP, o que exige AR/AP estruturado)
 
-**Definition of Done:**
-- Você abre /dashboard e vê instantaneamente como sua empresa está
-- DRE bate com o que o contador entrega (com possíveis diferenças explicáveis de timing)
-- BP gerencial está coerente
+**Definition of Done — ✅ FASE 6 COMPLETA:**
+- ✅ Você abre `/dashboard` e vê instantaneamente como a empresa está (com alertas automáticos)
+- ✅ DRE bate com o que o contador entrega
+- ✅ BP gerencial coerente via upload de relatório
+- ✅ Indicadores financeiros com semáforo contextual
+- ✅ Queries de caixa usam `effective_date` (quando disponível) e fallback para `date`
 
-**Tempo:** 2-3 semanas
+**Tempo:** concluída ao longo de múltiplas sessões após Fase 5
 
 ---
 
@@ -1067,9 +1073,10 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.6** — Sessão 4.A concluída: `react-pluggy-connect` integrado em `/contas`, fluxo de connect token → widget → `onSuccess` → upsert em `data_sources` funcionando em sandbox. Lista de conexões com reautenticação.
 - **v1.7** — Sessões 4.B e 4.C concluídas: sync inicial via Inngest (`syncPluggyItem`) e webhook `POST /api/webhooks/pluggy` + cron diário `syncAllPluggyItems` (03h BRT). Próxima: 4.D (reconciliação Pluggy × upload manual).
 - **v1.8** — Fase 4 fechada (4.D reconciliação + 4.E UX /contas + 4.F hint Pluggy IA). Fase 5 reescrita para refletir execução real: analytics financeiro (Dashboard KPIs, DRE 12 meses, Indicadores, Fluxo de Caixa projetado) + Expert drawer com chat Sonnet. Sessões 5.B, 5.D, 5.E, 5.F todas marcadas ✅. Pendente: 5.G (relatório fechamento mensal). Nota sobre divergência entre plano original (tool use) e execução atual (chat simples com KPI context) — tool use diferido para fase futura documentada.
+- **v1.9** — Fase 6 fechada. Deliverables entregues: BP via upload + seletor de mês + indicadores financeiros completos (Margem EBITDA, Liquidez Corrente/Seca, DCSR, Endividamento Geral, ROE, Ciclo Financeiro) + alertas no dashboard + separação date/effective_date (competência vs caixa) em todo o pipeline. Divergências do plano original documentadas (AR/AP diferido, BP via snapshot em vez de tabelas de apoio). Fase 7 (SEFAZ) suspensa por decisão de produto.
 
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-05-19*
-*Versão: 1.8*
+*Última atualização: 2026-05-23*
+*Versão: 1.9*
