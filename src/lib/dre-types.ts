@@ -113,6 +113,10 @@ export interface DrillDownTransaction {
   accountNumber:       string | null
   connectionLogoUrl:   string | null
   connectionBadge:     string | null
+  // Hierarquia da categoria (usado nos subtotais do drill-down)
+  parentCategoryId:    string | null
+  parentCategoryName:  string | null
+  parentCategoryType:  string | null
 }
 
 export interface LeafCategory {

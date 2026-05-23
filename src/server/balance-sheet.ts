@@ -311,6 +311,10 @@ export async function getBalancoDrillDown(
     amount:             string
     category_id:        string | null
     category_name:      string | null
+    category_type:      string | null
+    parent_category_id:   string | null
+    parent_category_name: string | null
+    parent_category_type: string | null
     cost_center_id:     string | null
     cost_center_name:   string | null
     business_unit_id:   string | null
@@ -334,6 +338,10 @@ export async function getBalancoDrillDown(
       t.amount::numeric        AS amount,
       t.category_id::text      AS category_id,
       c.name                   AS category_name,
+      c.type                   AS category_type,
+      p.id::text               AS parent_category_id,
+      p.name                   AS parent_category_name,
+      p.type                   AS parent_category_type,
       t.cost_center_id::text   AS cost_center_id,
       cc.name                  AS cost_center_name,
       t.business_unit_id::text AS business_unit_id,
@@ -348,6 +356,7 @@ export async function getBalancoDrillDown(
       ds.metadata              AS ds_metadata
     FROM transactions t
     LEFT JOIN categories c      ON t.category_id      = c.id
+    LEFT JOIN categories p      ON c.parent_id        = p.id
     LEFT JOIN cost_centers cc   ON t.cost_center_id   = cc.id
     LEFT JOIN business_units bu ON t.business_unit_id = bu.id
     LEFT JOIN legal_entities le ON t.legal_entity_id  = le.id
@@ -384,6 +393,13 @@ export async function getBalancoDrillDown(
     const customLogo = r.data_source_id ? signedMap.get(r.data_source_id) ?? null : null
     const badge = (meta.customBadge as { text?: string } | undefined)?.text || null
 
+    // Quando a transação está classificada diretamente numa Natureza Pai
+    // (categoria sem filhos), parent_* vem nulo — usamos a própria categoria
+    // como "Pai" para que os subtotais agrupem corretamente.
+    const parentId   = r.parent_category_id   ?? r.category_id   ?? null
+    const parentName = r.parent_category_name ?? r.category_name ?? null
+    const parentType = r.parent_category_type ?? r.category_type ?? null
+
     return {
       id:                 r.id,
       date:               String(r.date),
@@ -405,6 +421,9 @@ export async function getBalancoDrillDown(
       accountNumber:      r.account_number ?? null,
       connectionLogoUrl:  customLogo ?? autoLogo,
       connectionBadge:    badge,
+      parentCategoryId:   parentId,
+      parentCategoryName: parentName,
+      parentCategoryType: parentType,
     }
   })
 

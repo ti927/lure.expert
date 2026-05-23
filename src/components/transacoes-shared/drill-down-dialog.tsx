@@ -17,6 +17,8 @@ import {
 import { cn } from '@/lib/utils'
 import { classifyTransaction, deleteTransactions } from '@/server/transactions'
 import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
+import { DRE_TYPE_LABELS } from '@/lib/dre-types'
+import { BP_TYPE_LABELS } from '@/lib/bp-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
@@ -25,6 +27,14 @@ import { MultiSelectFilter, DescFilter, AmountFilter, DirectionFilter } from './
 import { CellCombobox, CategoryCellCombobox } from './cell-combobox'
 import { BatchClassifyDialog } from './batch-classify-dialog'
 import { ACCT_LABELS } from './types'
+
+// Mapeamento unificado tipo → label (cobre DRE e BP).
+function getTypeLabel(type: string | null): string {
+  if (!type) return 'Sem grupo'
+  if (type in DRE_TYPE_LABELS) return DRE_TYPE_LABELS[type as keyof typeof DRE_TYPE_LABELS]
+  if (type in BP_TYPE_LABELS)  return BP_TYPE_LABELS[type as keyof typeof BP_TYPE_LABELS]
+  return type
+}
 
 function fmtNum(v: number): string {
   return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v)
@@ -259,6 +269,34 @@ export function DrillDownDialog({
   const hasAnyFilter = !!(search || direction || amountMin || amountMax || catFilter || ccFilter || buFilter || leFilter || acctFilter)
   const totalNet = sorted.reduce((s, t) => s + t.netAmount, 0)
 
+  // Subtotais por Grupo (parentCategoryType) e por Natureza Pai (parentCategoryId).
+  // Computado a partir do conjunto filtrado — respeita os filtros do dialog.
+  const subtotals = useMemo(() => {
+    const byType = new Map<string, { label: string; net: number }>()
+    const byParent = new Map<string, { label: string; net: number; type: string | null }>()
+    for (const tx of filtered) {
+      const typeKey = tx.parentCategoryType ?? '__none__'
+      const parentKey = tx.parentCategoryId ?? '__none__'
+      if (!byType.has(typeKey)) {
+        byType.set(typeKey, { label: getTypeLabel(tx.parentCategoryType), net: 0 })
+      }
+      byType.get(typeKey)!.net += tx.netAmount
+      if (!byParent.has(parentKey)) {
+        byParent.set(parentKey, {
+          label: tx.parentCategoryName ?? 'Sem natureza',
+          net: 0,
+          type: tx.parentCategoryType,
+        })
+      }
+      byParent.get(parentKey)!.net += tx.netAmount
+    }
+    const types  = Array.from(byType.values()).sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'))
+    const pais   = Array.from(byParent.values()).sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'))
+    return { types, pais }
+  }, [filtered])
+
+  const showSubtotals = subtotals.types.length >= 2 || subtotals.pais.length >= 2
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex flex-col w-[98vw] max-w-none max-h-[92vh] p-0 sm:rounded-lg">
@@ -291,6 +329,50 @@ export function DrillDownDialog({
           </div>
         ) : (
           <div className="flex flex-col min-h-0 flex-1 px-6 pb-2">
+            {showSubtotals && (
+              <div className="mb-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs space-y-1.5 shrink-0">
+                {subtotals.types.length >= 2 && (
+                  <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                    <span className="font-medium text-muted-foreground shrink-0">
+                      Por grupo ({subtotals.types.length})
+                    </span>
+                    {subtotals.types.map(s => (
+                      <span key={s.label} className="inline-flex items-baseline gap-1.5">
+                        <span className="text-foreground/80">{s.label}</span>
+                        <span className={cn(
+                          'font-semibold tabular-nums',
+                          s.net > 0 ? 'text-emerald-700'
+                            : s.net < 0 ? 'text-rose-600'
+                            : 'text-muted-foreground',
+                        )}>
+                          {s.net < 0 && '−'}{fmtNum(Math.abs(s.net))}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {subtotals.pais.length >= 2 && (
+                  <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                    <span className="font-medium text-muted-foreground shrink-0">
+                      Por natureza pai ({subtotals.pais.length})
+                    </span>
+                    {subtotals.pais.map(s => (
+                      <span key={s.label} className="inline-flex items-baseline gap-1.5">
+                        <span className="text-foreground/80">{s.label}</span>
+                        <span className={cn(
+                          'font-semibold tabular-nums',
+                          s.net > 0 ? 'text-emerald-700'
+                            : s.net < 0 ? 'text-rose-600'
+                            : 'text-muted-foreground',
+                        )}>
+                          {s.net < 0 && '−'}{fmtNum(Math.abs(s.net))}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex-1 min-h-0 overflow-auto border rounded-lg">
               <table className="w-full text-sm table-fixed [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0">
                 <colgroup>

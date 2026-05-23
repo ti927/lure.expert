@@ -166,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras**, **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)**, **tabela "Geração de Caixa por Categoria" em `/fluxo` (mensal, hierárquica, com drill-down e filtros de dimensão)** e **split OPEX/CAPEX nas Naturezas Pai (badge em /configuracoes/categorias + seções separadas em /fluxo)** **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras**, **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)**, **tabela "Geração de Caixa por Categoria" em `/fluxo` (mensal, hierárquica, com drill-down e filtros de dimensão)**, **split OPEX/CAPEX nas Naturezas Pai (badge em /configuracoes/categorias + seções separadas em /fluxo)** e **subtotais por grupo/natureza pai no drill-down compartilhado** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -175,7 +175,7 @@ Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
 **Próximas sessões:**
-- **Fase 6 continuação** — Indicador BP/DRE na coluna de `/transacoes`; subtotais por grupo/pai no drill-down do `/balanco`
+- **Fase 6 continuação** — Indicador BP/DRE na coluna de `/transacoes`
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
@@ -189,6 +189,39 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Subtotais por grupo/natureza pai no drill-down compartilhado *(concluída)*
+
+**Contexto:** o `DrillDownDialog` (usado por `/balanco` e `/dre`) listava transações sem nenhuma agregação intermediária. Quando o usuário abria o drill de uma seção inteira do BP (ATIVO/PASSIVO via clique no label do Grupo), aparecia uma lista plana com transações de múltiplas Naturezas Pai e múltiplos tipos BP, sem dar visão do peso de cada agrupamento. Esta sessão adiciona uma tira de subtotais entre o header e a tabela.
+
+**O que mudou:**
+
+- **`src/lib/dre-types.ts`** — `DrillDownTransaction` ganhou 3 campos: `parentCategoryId`, `parentCategoryName`, `parentCategoryType` (todos `string | null`).
+
+- **`src/server/balance-sheet.ts`** — `getBalancoDrillDown`: SQL inclui `LEFT JOIN categories p ON c.parent_id = p.id` e seleciona `c.type`, `p.id`, `p.name`, `p.type`. Mapeamento aplica fallback: quando a transação está classificada diretamente numa Natureza Pai (sem filhos), `parent_*` vem nulo → usa a própria categoria como "Pai" para que subtotais funcionem corretamente.
+
+- **`src/server/dre.ts`** — `getDreDrillDown`: mesma extensão de JOIN e mapeamento, para manter o tipo `DrillDownTransaction` consistente entre as duas chamadas.
+
+- **`src/components/transacoes-shared/drill-down-dialog.tsx`** —
+  - Helper `getTypeLabel(type)` unifica lookup em `DRE_TYPE_LABELS` e `BP_TYPE_LABELS`.
+  - `useMemo` `subtotals` agrupa o conjunto **filtrado** (filter-aware, sort-agnostic) por `parentCategoryType` (Grupo) e por `parentCategoryId` (Pai), ordenado por label.
+  - `showSubtotals = types ≥ 2 || pais ≥ 2` — a tira só aparece quando há variedade que justifique a agregação. Drill de Filho único ou Pai único não polui a UI.
+  - Render: bloco compacto entre header e tabela; linha 1 "Por grupo (N)" + chips; linha 2 "Por natureza pai (N)" + chips. Cores semânticas (emerald-700 positivo / rose-600 negativo / muted zero), tabular-nums, sem decimais.
+  - Subtotais reagem em tempo real aos filtros do dialog (categoria, CC, UN, entidade, banco, valor, etc.).
+
+**Comportamento por cenário (a partir do `/balanco`):**
+
+| Clique | Tira de subtotais |
+|---|---|
+| Filho (label ou célula) | Não aparece — 1 pai, 1 tipo |
+| Pai com N filhos | Não aparece — 1 pai, 1 tipo |
+| Pai sem filhos | Não aparece — 1 pai, 1 tipo (fallback usa a própria categoria como pai) |
+| Grupo (Ativo Circulante, etc.) | Aparece "Por natureza pai" se ≥ 2 pais |
+| Seção (ATIVO, PASSIVO) | Aparece "Por grupo" e "Por natureza pai" |
+
+TypeScript: 0 erros.
 
 ---
 
