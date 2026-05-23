@@ -5,8 +5,29 @@ import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships } from '@/db/schema'
 import { eq, and, isNotNull, sql } from 'drizzle-orm'
-import { startOfMonth, endOfMonth, subMonths, subDays, format } from 'date-fns'
+import { startOfMonth, endOfMonth, subMonths, subDays, format, parseISO } from 'date-fns'
 import type { DrillDownTransaction } from '@/lib/dre-types'
+
+// Resolve uma referência de mês ('YYYY-MM' ou undefined) em todos os marcos
+// usados pelas server actions do dashboard. Quando referenceMonth é inválido
+// ou undefined, cai pro mês corrente.
+function resolveMonthRange(referenceMonth?: string) {
+  let base: Date
+  if (referenceMonth && /^\d{4}-\d{2}$/.test(referenceMonth)) {
+    const y = Number(referenceMonth.slice(0, 4))
+    const m = Number(referenceMonth.slice(5, 7))
+    base = new Date(y, m - 1, 1)
+  } else {
+    base = new Date()
+  }
+  return {
+    curFrom:  format(startOfMonth(base),                'yyyy-MM-dd'),
+    curTo:    format(endOfMonth(base),                  'yyyy-MM-dd'),
+    prevFrom: format(startOfMonth(subMonths(base, 1)),  'yyyy-MM-dd'),
+    prevTo:   format(endOfMonth(subMonths(base, 1)),    'yyyy-MM-dd'),
+    from12m:  format(startOfMonth(subMonths(base, 11)), 'yyyy-MM-dd'),
+  }
+}
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -44,17 +65,27 @@ export type CashFlowDay = {
 }
 
 export type TopExpenseCategory = {
-  parentId:   string
-  parentName: string
-  parentCode: string | null
-  parentType: string
-  total:      number
-  txCount:    number
-  leafIds:    string[]
+  // Categoria-folha (Filho, ou Pai-sem-filhos quando a transação está direto nela).
+  categoryId:   string
+  categoryName: string
+  categoryCode: string | null
+  categoryType: string
+  // Contexto: Natureza Pai. Null quando a categoria-folha já é uma Pai-sem-filhos.
+  parentId:     string | null
+  parentName:   string | null
+  parentCode:   string | null
+  total:        number
+  txCount:      number
 }
 
 const expenseTypes = sql.raw(
   `'deducoes_tributarias','deducoes_operacionais','cpv','sga','resultado_financeiro','ir'`
+)
+// Tipos que representam saída de caixa "operacional + não-operacional" — usado pelo Top 5
+// (que inclui financiamentos/investimentos como "despesa" no sentido colloquial), mas
+// exclui transfers e BP (ver bpAndTransferTypes para a contraparte).
+const cashOutflowTypes = sql.raw(
+  `'deducoes_tributarias','deducoes_operacionais','cpv','sga','resultado_financeiro','ir','emprestimos_amortizacoes','investimentos_retiradas'`
 )
 const bpAndTransferTypes = sql.raw(
   `'transfer','ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido','emprestimos_amortizacoes','investimentos_retiradas'`
@@ -64,14 +95,10 @@ function pct(a: number, b: number): number | null {
   return b !== 0 ? ((a - b) / Math.abs(b)) * 100 : null
 }
 
-export async function getDashboardKPIs(): Promise<DashboardKPIs> {
+export async function getDashboardKPIs(referenceMonth?: string): Promise<DashboardKPIs> {
   const { organizationId } = await getAuthContext()
 
-  const now      = new Date()
-  const curFrom  = format(startOfMonth(now), 'yyyy-MM-dd')
-  const curTo    = format(endOfMonth(now),   'yyyy-MM-dd')
-  const prevFrom = format(startOfMonth(subMonths(now, 1)), 'yyyy-MM-dd')
-  const prevTo   = format(endOfMonth(subMonths(now, 1)),   'yyyy-MM-dd')
+  const { curFrom, curTo, prevFrom, prevTo } = resolveMonthRange(referenceMonth)
 
   type MonthRow = { receita: string; despesas: string; lucro: string; tx_count: string }
   type BalRow   = { saldo: string }
@@ -106,6 +133,7 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       FROM transactions
       WHERE organization_id = ${organizationId}::uuid
         AND status NOT IN ('pending', 'duplicate')
+        AND date::date <= ${curTo}::date
     `),
   ])
 
@@ -136,13 +164,10 @@ export type FinancialIndicators = {
   meses12mDisponiveis:    number          // 1..12 — quantos meses entraram no lucro acumulado
 }
 
-export async function getFinancialIndicators(): Promise<FinancialIndicators> {
+export async function getFinancialIndicators(referenceMonth?: string): Promise<FinancialIndicators> {
   const { organizationId } = await getAuthContext()
 
-  const now     = new Date()
-  const curFrom = format(startOfMonth(now), 'yyyy-MM-dd')
-  const curTo   = format(endOfMonth(now),   'yyyy-MM-dd')
-  const from12m = format(startOfMonth(subMonths(now, 11)), 'yyyy-MM-dd')
+  const { curFrom, curTo, from12m } = resolveMonthRange(referenceMonth)
 
   const dreTypes = sql.raw(
     `'receita_operacional','deducoes_tributarias','deducoes_operacionais','cpv','sga'`
@@ -203,6 +228,7 @@ export async function getFinancialIndicators(): Promise<FinancialIndicators> {
       LEFT JOIN categories p  ON c.parent_id   = p.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
+        AND t.date::date <= ${curTo}::date
     `),
     db.execute<Lucro12mRow>(sql`
       SELECT
@@ -258,63 +284,68 @@ export async function getFinancialIndicators(): Promise<FinancialIndicators> {
   }
 }
 
-// Top 5 categorias de despesa do mês corrente, agregadas por Natureza Pai.
-// Quando a transação está classificada direto numa Pai sem filhos, a própria
-// categoria entra como "pai" (mesmo padrão dos subtotais do drill-down).
-export async function getTopExpenseCategories(): Promise<TopExpenseCategory[]> {
+// Top 5 categorias-folha (Filho) com maior SAÍDA de caixa no mês.
+// - Inclui tipos DRE de despesa (sga, cpv, etc.) + emprestimos + investimentos
+//   (saídas não-operacionais que o usuário também considera "despesa")
+// - Exclui receita, transfer e BP
+// - Conta SÓ outflows (não neta com inflows — assim financiamentos com receivement +
+//   pagamento no mesmo mês não somem do top)
+// - Respeita hide_in_cashflow (mesmo critério de /fluxo)
+// Quando uma transação está classificada direto numa Pai-sem-filhos, a própria Pai
+// aparece como categoria-folha (parentId fica null).
+export async function getTopExpenseCategories(referenceMonth?: string): Promise<TopExpenseCategory[]> {
   const { organizationId } = await getAuthContext()
 
-  const now     = new Date()
-  const curFrom = format(startOfMonth(now), 'yyyy-MM-dd')
-  const curTo   = format(endOfMonth(now),   'yyyy-MM-dd')
+  const { curFrom, curTo } = resolveMonthRange(referenceMonth)
 
   type Row = {
-    pai_id:    string
-    pai_name:  string
-    pai_code:  string | null
-    pai_type:  string
-    total:     string
-    tx_count:  string
-    leaf_ids:  string[]
+    cat_id:      string
+    cat_name:    string
+    cat_code:    string | null
+    cat_type:    string
+    parent_id:   string | null
+    parent_name: string | null
+    parent_code: string | null
+    total:       string
+    tx_count:    string
   }
 
   const rows = await db.execute<Row>(sql`
     SELECT
-      COALESCE(p.id, c.id)::text   AS pai_id,
-      COALESCE(p.name, c.name)     AS pai_name,
-      COALESCE(p.code, c.code)     AS pai_code,
-      COALESCE(p.type, c.type)     AS pai_type,
-      COALESCE(SUM(
-        CASE WHEN t.direction = 'outflow' THEN  t.amount::numeric
-                                          ELSE -t.amount::numeric END
-      ), 0)::text                  AS total,
-      COUNT(*)::text               AS tx_count,
-      ARRAY_AGG(DISTINCT c.id::text) AS leaf_ids
+      c.id::text       AS cat_id,
+      c.name           AS cat_name,
+      c.code           AS cat_code,
+      c.type           AS cat_type,
+      p.id::text       AS parent_id,
+      p.name           AS parent_name,
+      p.code           AS parent_code,
+      SUM(t.amount::numeric)::text AS total,
+      COUNT(*)::text               AS tx_count
     FROM transactions t
     JOIN categories c           ON t.category_id = c.id
     LEFT JOIN categories p      ON c.parent_id   = p.id
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')
+      AND t.direction = 'outflow'
       AND t.date::date >= ${curFrom}::date
       AND t.date::date <= ${curTo}::date
-      AND COALESCE(p.type, c.type) IN (${expenseTypes})
-    GROUP BY COALESCE(p.id, c.id), COALESCE(p.name, c.name), COALESCE(p.code, c.code), COALESCE(p.type, c.type)
-    HAVING COALESCE(SUM(
-      CASE WHEN t.direction = 'outflow' THEN  t.amount::numeric
-                                        ELSE -t.amount::numeric END
-    ), 0) > 0
-    ORDER BY total DESC
+      AND c.type IN (${cashOutflowTypes})
+      AND COALESCE(c.hide_in_cashflow, false) = false
+    GROUP BY c.id, c.name, c.code, c.type, p.id, p.name, p.code
+    ORDER BY SUM(t.amount::numeric) DESC
     LIMIT 5
   `)
 
   return rows.map(r => ({
-    parentId:   r.pai_id,
-    parentName: r.pai_name,
-    parentCode: r.pai_code,
-    parentType: r.pai_type,
-    total:      Number(r.total),
-    txCount:    Number(r.tx_count),
-    leafIds:    r.leaf_ids,
+    categoryId:   r.cat_id,
+    categoryName: r.cat_name,
+    categoryCode: r.cat_code,
+    categoryType: r.cat_type,
+    parentId:     r.parent_id,
+    parentName:   r.parent_name,
+    parentCode:   r.parent_code,
+    total:        Number(r.total),
+    txCount:      Number(r.tx_count),
   }))
 }
 
@@ -453,11 +484,12 @@ export async function getDashboardCategoryDrillDown(
   return { transactions }
 }
 
-export async function getCashFlowChart(): Promise<CashFlowDay[]> {
+export async function getCashFlowChart(referenceMonth?: string): Promise<CashFlowDay[]> {
   const { organizationId } = await getAuthContext()
 
-  const toDate   = format(new Date(), 'yyyy-MM-dd')
-  const fromDate = format(subDays(new Date(), 89), 'yyyy-MM-dd')
+  const { curTo } = resolveMonthRange(referenceMonth)
+  const toDate   = curTo
+  const fromDate = format(subDays(parseISO(curTo), 89), 'yyyy-MM-dd')
 
   type DayRow = { date: string; inflow: string; outflow: string }
 
@@ -481,3 +513,4 @@ export async function getCashFlowChart(): Promise<CashFlowDay[]> {
     outflow: Number(r.outflow),
   }))
 }
+

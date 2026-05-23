@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { KPICard } from '@/components/financial/kpi-card'
 import { EmptyState } from '@/components/states/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,7 +19,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart } from 'lucide-react'
+import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart, Loader2 } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
 import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
@@ -191,6 +192,7 @@ interface DashboardClientProps {
   indicators:     FinancialIndicators
   topExpenses:    TopExpenseCategory[]
   monthRange:     { from: string; to: string; label: string }
+  selectedMonth:  string   // 'YYYY-MM'
   leafCategories: LeafCategory[]
   costCenters:    CostCenter[]
   businessUnits:  BusinessUnit[]
@@ -206,8 +208,10 @@ interface DrillState {
 
 export function DashboardClient({
   kpis, cashFlow, indicators,
-  topExpenses, monthRange, leafCategories, costCenters, businessUnits, legalEntities,
+  topExpenses, monthRange, selectedMonth, leafCategories, costCenters, businessUnits, legalEntities,
 }: DashboardClientProps) {
+  const router = useRouter()
+  const [isNavPending, startNavTransition] = useTransition()
   const weeklyData  = useMemo(() => groupByWeek(cashFlow), [cashFlow])
   const hasChart    = cashFlow.length > 0
 
@@ -215,16 +219,26 @@ export function DashboardClient({
   const [drillData, setDrillData] = useState<DrillDownTransaction[] | null>(null)
   const [isDrillLoading, startDrillTransition] = useTransition()
 
+  function handleMonthChange(newMonth: string) {
+    if (!newMonth || !/^\d{4}-\d{2}$/.test(newMonth)) return
+    startNavTransition(() => {
+      router.push(`/dashboard?month=${newMonth}`)
+    })
+  }
+
   function openCategoryDrill(cat: TopExpenseCategory) {
+    const title = cat.categoryCode ? `${cat.categoryCode} – ${cat.categoryName}` : cat.categoryName
+    const subtitleParts = [monthRange.label]
+    if (cat.parentName) subtitleParts.unshift(cat.parentName)
     setDrill({
-      title:       cat.parentCode ? `${cat.parentCode} – ${cat.parentName}` : cat.parentName,
-      subtitle:    monthRange.label,
-      categoryIds: cat.leafIds,
+      title,
+      subtitle:    subtitleParts.join(' · '),
+      categoryIds: [cat.categoryId],
       dateRange:   { from: monthRange.from, to: monthRange.to },
     })
     setDrillData(null)
     startDrillTransition(async () => {
-      const result = await getDashboardCategoryDrillDown(cat.leafIds, { from: monthRange.from, to: monthRange.to })
+      const result = await getDashboardCategoryDrillDown([cat.categoryId], { from: monthRange.from, to: monthRange.to })
       setDrillData(result.transactions)
     })
   }
@@ -253,6 +267,21 @@ export function DashboardClient({
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-end gap-2">
+        <label htmlFor="dashboard-month" className="text-xs text-muted-foreground">
+          Mês de referência
+        </label>
+        <input
+          id="dashboard-month"
+          type="month"
+          value={selectedMonth}
+          onChange={e => handleMonthChange(e.target.value)}
+          disabled={isNavPending}
+          className="h-8 rounded-md border border-input px-2 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+        />
+        {isNavPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+      </div>
+
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <KPICard
           label="Receita do Mês"
@@ -280,7 +309,9 @@ export function DashboardClient({
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold">Fluxo de Caixa — 90 dias</CardTitle>
+          <CardTitle className="text-base font-semibold capitalize">
+            Fluxo de Caixa — 90 dias até {monthRange.label}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {!hasChart ? (
@@ -343,15 +374,22 @@ export function DashboardClient({
                 const barPct     = maxTopExpense > 0 ? (cat.total / maxTopExpense) * 100 : 0
                 return (
                   <button
-                    key={cat.parentId}
+                    key={cat.categoryId}
                     onClick={() => openCategoryDrill(cat)}
                     className="w-full group flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-muted/40 transition-colors text-left"
                   >
-                    <span className="text-sm font-medium text-foreground/90 truncate flex-1 min-w-0">
-                      {cat.parentCode && <span className="text-muted-foreground mr-1.5">{cat.parentCode}</span>}
-                      {cat.parentName}
-                    </span>
-                    <div className="flex-1 max-w-[40%] h-2 rounded-full bg-muted overflow-hidden">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-foreground/90 truncate">
+                        {cat.categoryCode && <span className="text-muted-foreground mr-1.5">{cat.categoryCode}</span>}
+                        {cat.categoryName}
+                      </div>
+                      {cat.parentName && (
+                        <div className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+                          {cat.parentName}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 max-w-[40%] h-2 rounded-full bg-muted overflow-hidden shrink-0">
                       <div
                         className="h-full bg-rose-500 group-hover:bg-rose-600 transition-colors rounded-full"
                         style={{ width: `${barPct}%` }}
@@ -376,7 +414,9 @@ export function DashboardClient({
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold">Indicadores Financeiros — mês atual</CardTitle>
+          <CardTitle className="text-base font-semibold capitalize">
+            Indicadores Financeiros — {monthRange.label}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {allNull ? (

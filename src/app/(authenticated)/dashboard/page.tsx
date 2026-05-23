@@ -11,27 +11,41 @@ import { signOut } from "./actions";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
-export default async function DashboardPage() {
+function isValidMonth(s?: string): s is string {
+  return !!s && /^\d{4}-\d{2}$/.test(s);
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: { month?: string };
+}) {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const monthParam = isValidMonth(searchParams.month) ? searchParams.month : undefined;
+
   const [kpis, cashFlow, indicators, topExpenses, costCenters, businessUnits, legalEntities, leafCategories] = await Promise.all([
-    getDashboardKPIs(),
-    getCashFlowChart(),
-    getFinancialIndicators(),
-    getTopExpenseCategories(),
+    getDashboardKPIs(monthParam),
+    getCashFlowChart(monthParam),
+    getFinancialIndicators(monthParam),
+    getTopExpenseCategories(monthParam),
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
     getLeafCategories(),
   ]);
 
-  const now      = new Date();
-  const mesAtual = format(now, "MMMM yyyy", { locale: ptBR });
-  const monthFrom = format(startOfMonth(now), "yyyy-MM-dd");
-  const monthTo   = format(endOfMonth(now),   "yyyy-MM-dd");
+  // Base do mês de referência — selecionado pelo usuário ou mês atual.
+  const baseDate = monthParam
+    ? new Date(Number(monthParam.slice(0, 4)), Number(monthParam.slice(5, 7)) - 1, 1)
+    : new Date();
+  const selectedMonth = monthParam ?? format(baseDate, "yyyy-MM");
+  const mesAtual      = format(baseDate, "MMMM yyyy", { locale: ptBR });
+  const monthFrom     = format(startOfMonth(baseDate), "yyyy-MM-dd");
+  const monthTo       = format(endOfMonth(baseDate),   "yyyy-MM-dd");
   const semDados = cashFlow.length === 0 && kpis.saldoCaixa === 0;
 
   return (
@@ -63,6 +77,7 @@ export default async function DashboardPage() {
         indicators={indicators}
         topExpenses={topExpenses}
         monthRange={{ from: monthFrom, to: monthTo, label: mesAtual }}
+        selectedMonth={selectedMonth}
         leafCategories={leafCategories}
         costCenters={costCenters.filter(c => c.isActive)}
         businessUnits={businessUnits.filter(b => b.isActive)}
