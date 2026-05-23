@@ -10,6 +10,7 @@ export type PdfParseResult = {
 
 type LlmRow = {
   date: string | null
+  effectiveDate: string | null
   amount: number | null
   direction: 'inflow' | 'outflow' | null
   description: string | null
@@ -21,10 +22,11 @@ Analise o conteúdo fornecido e extraia cada movimentação financeira individua
 Retorne APENAS um array JSON válido. Sem explicações, sem markdown, sem código fence — apenas o JSON bruto.
 
 Formato de cada elemento:
-{"date":"YYYY-MM-DD","amount":1234.56,"direction":"inflow","description":"descrição"}
+{"date":"YYYY-MM-DD","effectiveDate":"YYYY-MM-DD","amount":1234.56,"direction":"inflow","description":"descrição"}
 
 Regras:
-- date: formato YYYY-MM-DD. Converta DD/MM/AAAA ou outras variações para este padrão.
+- date: data de competência — quando o evento econômico ocorreu (ex: data da NF, data da compra no cartão). Formato YYYY-MM-DD. Converta DD/MM/AAAA ou outras variações para este padrão.
+- effectiveDate: data em que o dinheiro efetivamente entrou ou saiu da conta (ex: data do crédito ou débito no extrato). Formato YYYY-MM-DD. Se o documento tiver apenas uma data, repita o mesmo valor de date.
 - amount: número positivo (nunca negativo). Remova R$, pontos de milhar, converta vírgula decimal.
 - direction: "inflow" para entradas/créditos/depósitos/recebimentos/estornos/reembolsos; "outflow" para saídas/débitos/pagamentos/compras.
 - Valores precedidos de sinal negativo (ex: -R$120,00 ou (120,00)) indicam crédito/estorno → direction "inflow".
@@ -73,8 +75,10 @@ function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
   for (const item of parsed) {
     if (typeof item !== 'object' || item === null) continue
     const r = item as Record<string, unknown>
+    const date = typeof r.date === 'string' ? r.date : null
     rows.push({
-      date: typeof r.date === 'string' ? r.date : null,
+      date,
+      effectiveDate: typeof r.effectiveDate === 'string' ? r.effectiveDate : date,
       amount: typeof r.amount === 'number' ? Math.abs(r.amount) : null,
       direction: r.direction === 'inflow' || r.direction === 'outflow' ? r.direction : null,
       description: typeof r.description === 'string' ? r.description.slice(0, 200) : null,
@@ -87,8 +91,9 @@ function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
 function toStagingRows(llmRows: LlmRow[]): StagingRow[] {
   return llmRows.map((r, i) => ({
     rowIndex: i,
-    rawData: { llm: true, date: r.date, amount: r.amount, direction: r.direction, description: r.description },
+    rawData: { llm: true, date: r.date, effectiveDate: r.effectiveDate, amount: r.amount, direction: r.direction, description: r.description },
     date: r.date,
+    effectiveDate: r.effectiveDate,
     amount: r.amount,
     direction: r.direction,
     description: r.description,

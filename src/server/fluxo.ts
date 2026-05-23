@@ -84,35 +84,35 @@ export async function getFluxoData(): Promise<FluxoData> {
 
     db.execute<DayRow>(sql`
       SELECT
-        t.date::date::text AS date,
+        COALESCE(t.effective_date, t.date)::date::text AS date,
         COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0)::text AS inflow,
         COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0)::text AS outflow
       FROM transactions t
       LEFT JOIN categories c ON t.category_id = c.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
-        AND t.date::date >= ${hist60}::date
-        AND t.date::date <= ${todayStr}::date
+        AND COALESCE(t.effective_date, t.date)::date >= ${hist60}::date
+        AND COALESCE(t.effective_date, t.date)::date <= ${todayStr}::date
         AND (c.id IS NULL OR c.hide_in_cashflow = false)
-      GROUP BY t.date::date
-      ORDER BY t.date::date ASC
+      GROUP BY COALESCE(t.effective_date, t.date)::date
+      ORDER BY COALESCE(t.effective_date, t.date)::date ASC
     `),
 
     db.execute<RecRow>(sql`
       WITH deduped AS (
-        SELECT DISTINCT ON (lower(trim(t.description)), t.direction, t.date::date)
+        SELECT DISTINCT ON (lower(trim(t.description)), t.direction, COALESCE(t.effective_date, t.date)::date)
           lower(trim(t.description)) AS desc_key,
           t.description,
           t.direction,
           t.amount::numeric AS amount,
-          t.date::date AS tx_date
+          COALESCE(t.effective_date, t.date)::date AS tx_date
         FROM transactions t
         LEFT JOIN categories c ON t.category_id = c.id
         WHERE t.organization_id = ${organizationId}::uuid
           AND t.status NOT IN ('pending', 'duplicate')
-          AND t.date::date >= CURRENT_DATE - INTERVAL '180 days'
+          AND COALESCE(t.effective_date, t.date)::date >= CURRENT_DATE - INTERVAL '180 days'
           AND (c.id IS NULL OR c.hide_in_cashflow = false)
-        ORDER BY lower(trim(t.description)), t.direction, t.date::date, t.amount::numeric DESC
+        ORDER BY lower(trim(t.description)), t.direction, COALESCE(t.effective_date, t.date)::date, t.amount::numeric DESC
       ),
       grouped AS (
         SELECT

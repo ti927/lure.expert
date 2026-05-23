@@ -106,6 +106,7 @@ export const syncPluggyItem = inngest.createFunction(
                     dataSourceId,
                     externalId: tx.id,
                     date: tx.date.toISOString().split('T')[0],
+                    effectiveDate: tx.date.toISOString().split('T')[0],
                     amount: String(Math.abs(tx.amount)),
                     currency: tx.currencyCode ?? 'BRL',
                     direction: tx.type === 'CREDIT' ? 'inflow' : 'outflow',

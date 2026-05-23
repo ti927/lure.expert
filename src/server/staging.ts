@@ -211,6 +211,7 @@ export async function approveAndInsert(documentId: string) {
         organizationId,
         dataSourceId: dataSource.id,
         date: r.date!,
+        effectiveDate: r.effectiveDate ?? r.date,
         amount: String(Math.abs(Number(r.amount))),
         currency: 'BRL',
         direction: r.direction!,

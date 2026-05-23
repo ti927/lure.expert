@@ -5,6 +5,7 @@ export type StagingRow = {
   rowIndex: number
   rawData: Record<string, unknown>
   date: string | null
+  effectiveDate: string | null
   amount: number | null
   direction: 'inflow' | 'outflow' | null
   description: string | null
@@ -12,6 +13,7 @@ export type StagingRow = {
 
 type LlmRow = {
   date: string | null
+  effectiveDate: string | null
   amount: number | null
   direction: 'inflow' | 'outflow' | null
   description: string | null
@@ -23,10 +25,11 @@ Analise o conteúdo fornecido e extraia cada movimentação financeira individua
 Retorne APENAS um array JSON válido. Sem explicações, sem markdown, sem código fence — apenas o JSON bruto.
 
 Formato de cada elemento:
-{"date":"YYYY-MM-DD","amount":1234.56,"direction":"inflow","description":"descrição"}
+{"date":"YYYY-MM-DD","effectiveDate":"YYYY-MM-DD","amount":1234.56,"direction":"inflow","description":"descrição"}
 
 Regras:
-- date: formato YYYY-MM-DD. Converta DD/MM/AAAA, "31 jul.", "09 ago." e outras variações para este padrão. Para meses abreviados em português sem ano, use o ano mais recente plausível.
+- date: data de competência — quando o evento econômico ocorreu (ex: data da NF, data da compra no cartão, data do lançamento no ERP). Formato YYYY-MM-DD. Converta DD/MM/AAAA, "31 jul.", "09 ago." e outras variações para este padrão. Para meses abreviados em português sem ano, use o ano mais recente plausível.
+- effectiveDate: data em que o dinheiro efetivamente entrou ou saiu da conta (ex: data do crédito ou débito no extrato bancário). Formato YYYY-MM-DD, mesmas regras de conversão. Se o documento tiver apenas uma data, repita o mesmo valor de date.
 - amount: número positivo (nunca negativo). Remova R$, pontos de milhar, converta vírgula decimal. Se a célula contiver valor em moeda estrangeira + BRL, use sempre o valor em BRL.
 - direction: "inflow" para entradas/créditos/depósitos/recebimentos/estornos/reembolsos/resgate de aplicação; "outflow" para saídas/débitos/pagamentos/compras/aplicações.
 - Valores precedidos de sinal negativo (ex: -R$120,00 ou (120,00)) na perspectiva do extrato indicam débito → direction "outflow". Valores positivos indicam crédito → direction "inflow".
@@ -67,8 +70,10 @@ function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
   for (const item of parsed) {
     if (typeof item !== 'object' || item === null) continue
     const r = item as Record<string, unknown>
+    const date = typeof r.date === 'string' ? r.date : null
     rows.push({
-      date: typeof r.date === 'string' ? r.date : null,
+      date,
+      effectiveDate: typeof r.effectiveDate === 'string' ? r.effectiveDate : date,
       amount: typeof r.amount === 'number' ? Math.abs(r.amount) : null,
       direction: r.direction === 'inflow' || r.direction === 'outflow' ? r.direction : null,
       description: typeof r.description === 'string' ? r.description.slice(0, 200) : null,
@@ -81,8 +86,9 @@ function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
 function toStagingRows(llmRows: LlmRow[]): StagingRow[] {
   return llmRows.map((r, i) => ({
     rowIndex: i,
-    rawData: { llm: true, date: r.date, amount: r.amount, direction: r.direction, description: r.description },
+    rawData: { llm: true, date: r.date, effectiveDate: r.effectiveDate, amount: r.amount, direction: r.direction, description: r.description },
     date: r.date,
+    effectiveDate: r.effectiveDate,
     amount: r.amount,
     direction: r.direction,
     description: r.description,

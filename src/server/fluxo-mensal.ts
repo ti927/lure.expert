@@ -83,7 +83,7 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
       p.name                                                                 AS parent_name,
       p.code                                                                 AS parent_code,
       p.opex_capex                                                           AS parent_opex_capex,
-      TO_CHAR(DATE_TRUNC('month', t.date::date), 'YYYY-MM')                 AS month,
+      TO_CHAR(DATE_TRUNC('month', COALESCE(t.effective_date, t.date)::date), 'YYYY-MM') AS month,
       COALESCE(SUM(
         CASE WHEN t.direction = 'inflow'
              THEN  t.amount::numeric
@@ -94,8 +94,8 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
     JOIN categories p ON c.parent_id   = p.id
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')
-      AND t.date::date >= ${from}::date
-      AND t.date::date <= ${to}::date
+      AND COALESCE(t.effective_date, t.date)::date >= ${from}::date
+      AND COALESCE(t.effective_date, t.date)::date <= ${to}::date
       AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
       AND c.hide_in_cashflow = false
       ${ccFilter}
@@ -104,7 +104,7 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
     GROUP BY
       c.id, c.name, c.code,
       c.parent_id, p.name, p.code, p.opex_capex,
-      DATE_TRUNC('month', t.date::date)
+      DATE_TRUNC('month', COALESCE(t.effective_date, t.date)::date)
     ORDER BY
       p.code NULLS LAST,
       c.code,

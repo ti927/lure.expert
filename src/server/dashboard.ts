@@ -133,7 +133,7 @@ export async function getDashboardKPIs(referenceMonth?: string): Promise<Dashboa
       FROM transactions
       WHERE organization_id = ${organizationId}::uuid
         AND status NOT IN ('pending', 'duplicate')
-        AND date::date <= ${curTo}::date
+        AND COALESCE(effective_date, date)::date <= ${curTo}::date
     `),
   ])
 
@@ -327,8 +327,8 @@ export async function getTopExpenseCategories(referenceMonth?: string): Promise<
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')
       AND t.direction = 'outflow'
-      AND t.date::date >= ${curFrom}::date
-      AND t.date::date <= ${curTo}::date
+      AND COALESCE(t.effective_date, t.date)::date >= ${curFrom}::date
+      AND COALESCE(t.effective_date, t.date)::date <= ${curTo}::date
       AND c.type IN (${cashOutflowTypes})
       AND COALESCE(c.hide_in_cashflow, false) = false
     GROUP BY c.id, c.name, c.code, c.type, p.id, p.name, p.code
@@ -420,8 +420,8 @@ export async function getDashboardCategoryDrillDown(
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.category_id IN (${sql.join(categoryIds.map(id => sql`${id}::uuid`), sql`, `)})
       AND t.status NOT IN ('pending', 'duplicate')
-      AND t.date::date >= ${dateRange.from}::date
-      AND t.date::date <= ${dateRange.to}::date
+      AND COALESCE(t.effective_date, t.date)::date >= ${dateRange.from}::date
+      AND COALESCE(t.effective_date, t.date)::date <= ${dateRange.to}::date
     ORDER BY t.date DESC, t.created_at DESC
   `)
 
@@ -495,16 +495,16 @@ export async function getCashFlowChart(referenceMonth?: string): Promise<CashFlo
 
   const rows = await db.execute<DayRow>(sql`
     SELECT
-      t.date::date::text AS date,
+      COALESCE(t.effective_date, t.date)::date::text AS date,
       COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0)::text AS inflow,
       COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0)::text AS outflow
     FROM transactions t
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')
-      AND t.date::date >= ${fromDate}::date
-      AND t.date::date <= ${toDate}::date
-    GROUP BY t.date::date
-    ORDER BY t.date::date ASC
+      AND COALESCE(t.effective_date, t.date)::date >= ${fromDate}::date
+      AND COALESCE(t.effective_date, t.date)::date <= ${toDate}::date
+    GROUP BY COALESCE(t.effective_date, t.date)::date
+    ORDER BY COALESCE(t.effective_date, t.date)::date ASC
   `)
 
   return rows.map(r => ({

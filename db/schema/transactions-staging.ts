@@ -19,6 +19,7 @@ export const transactionsStaging = pgTable(
     rawData: jsonb('raw_data').notNull().default(sql`'{}'::jsonb`),
     // campos mapeados pela heurística de colunas (nullable — mapeamento pode ser parcial)
     date: text('date'),
+    effectiveDate: text('effective_date'),
     amount: numeric('amount', { precision: 15, scale: 2 }),
     // inflow | outflow
     direction: text('direction'),
