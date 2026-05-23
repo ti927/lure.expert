@@ -5,8 +5,18 @@ import { categorizeTransactions } from '@/jobs/categorize-transaction'
 import { syncPluggyItem } from '@/jobs/sync-pluggy-item'
 import { syncAllPluggyItems } from '@/jobs/sync-all-pluggy-items'
 import { reconcilePluggyTransactions } from '@/jobs/reconcile-pluggy-transactions'
+import { syncSefazItem } from '@/jobs/sync-sefaz-item'
+import { syncAllSefazItems } from '@/jobs/sync-all-sefaz-items'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [processDocument, categorizeTransactions, syncPluggyItem, syncAllPluggyItems, reconcilePluggyTransactions],
+  functions: [
+    processDocument,
+    categorizeTransactions,
+    syncPluggyItem,
+    syncAllPluggyItems,
+    reconcilePluggyTransactions,
+    syncSefazItem,
+    syncAllSefazItems,
+  ],
 })
