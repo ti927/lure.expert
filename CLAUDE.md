@@ -191,6 +191,25 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 
 ---
 
+### ✅ Sessão — Popovers explicativos em cada indicador do dashboard *(concluída)*
+
+**Contexto:** o card "Indicadores Financeiros" do `/dashboard` mostrava 7 indicadores com `hint` discreto, mas isso é insuficiente para usuário não-financeiro entender como cada número é calculado e como interpretá-lo. Esta sessão adiciona um ícone "?" ao lado de cada label que abre um balão explicativo ao clicar.
+
+**O que mudou:**
+
+- **`src/app/(authenticated)/dashboard/dashboard-client.tsx`** —
+  - `IndicatorExplanation` (tipo novo): `{ formula, description, interpretation }`.
+  - `IndicatorItemProps` ganhou `explanation?: IndicatorExplanation`.
+  - `IndicatorItem` renderiza um `<Popover>` ao lado do label quando `explanation` é fornecido. Trigger é `<button>` com `HelpCircle` (lucide, `h-3.5 w-3.5`), cor sutil `text-muted-foreground/60` com hover. `aria-label` descritivo para acessibilidade.
+  - `PopoverContent` (`w-80`) mostra: título do indicador + 3 seções (Fórmula em fonte mono sobre `bg-muted/40`, O que é, Como interpretar).
+  - Os 7 indicadores receberam textos em PT-BR seguindo `docs/AI_VOICE.md` (direto, sem firulas).
+
+**Não-objetivos:** não criou componente `HelpPopover` em `/components/ui/` (uso restrito); não tocou no cálculo em `src/server/dashboard.ts`; não adicionou popovers aos 4 KPI cards do topo.
+
+TypeScript: 0 erros. ESLint: 0 warnings.
+
+---
+
 ### ✅ Sessão — Indicadores faltantes da Fase 6 (Liquidez Seca, Endividamento, ROE, Ciclo Financeiro) *(concluída)*
 
 **Contexto:** o card "Indicadores Financeiros" do `/dashboard` tinha apenas 3 indicadores entregues na Sessão 5.D (Margem EBITDA, Liquidez Corrente, Cobertura do Serviço da Dívida). O plano original da Fase 6 listava outros 4 indicadores: Liquidez Seca, Endividamento Geral, Ciclo Financeiro e ROE. Esta sessão completa o deliverable de indicadores.
