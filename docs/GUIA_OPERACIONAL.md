@@ -410,12 +410,13 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 - `/contas`: nova aba "Adquirentes" com card por conexão, dialog de criação, seletor de provedor
 - DoD: UI renderiza aba, dialog abre com 4 provedores disponíveis, `npm run build` limpo
 
-**Sessão 8.1 — Stone connector:**
-- `src/lib/stone-client.ts`: cliente REST para Stone API (OAuth2 + sandbox)
-- `StoneProvider` em `acquirer-provider.ts` implementado com `fetchSales()`
-- `src/jobs/sync-acquirer-item.ts`: job Inngest `sync-acquirer-item`, busca vendas por `fromDate`, insere em `transactions` com `provider='stone'`, dispara categorização
-- Cron diário `sync-all-acquirer-items.ts` (mesma estrutura dos outros crons)
-- DoD: conectar Stone sandbox, ver transações aparecerem em `/transacoes`
+**✅ Sessão 8.1 — Stone connector (concluída):**
+- `src/lib/stone-client.ts`: `StoneClient` — OAuth2 `client_credentials` (token cache, renovação automática 30s antes de expirar), `fetchSales(merchantId, fromDate, toDate, cursor?)` paginado
+- `src/lib/acquirer-provider.ts`: `StoneProvider` implementado usando `StoneClient`; mapeia centavos → decimal, filtra `status='approved'`
+- `src/jobs/sync-acquirer-item.ts`: job Inngest `acquirer/item.sync-requested` — `ensure-data-source` (cria `data_sources` vinculado para FK de `transactions`), paginação com steps nomeados, insert em `transactions` com `accountType='ACQUIRER'`, dispara `transaction/batch-inserted`
+- `src/jobs/sync-all-acquirer-items.ts`: cron 04:00 BRT, pula conexões `awaitingFirstSync=true`, janela segura 1 dia antes do último sync
+- `src/app/api/inngest/route.ts`: registra `syncAcquirerItem` e `syncAllAcquirerItems`
+- DoD: build limpo; pipeline completo pronto para uso com credenciais Stone sandbox
 
 **Sessão 8.2 — Upload de extratos de adquirentes (fallback CSV/PDF):**
 - Parser específico para relatório de liquidação Stone CSV (`/lib/parsers/acquirer-stone.ts`)

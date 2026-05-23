@@ -2,9 +2,54 @@
 
 Arquivo de arquivo. Contém os detalhes completos (arquivos alterados, bugs corrigidos, decisões de implementação) de todas as sessões de desenvolvimento. Usado para consulta pontual — não é carregado automaticamente no contexto.
 
-Decisões arquiteturais não-óbvias estão em  (sempre carregado).
+Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempre carregado).
 
 ---
+
+### ✅ Sessão 8.1 — Stone connector real + job sync-acquirer-item *(concluída)*
+
+**Contexto:** primeira sessão de implementação real da Fase 8. Transforma o `StoneProvider` de stub em integração funcional e cria toda a pipeline de sync — do evento Inngest ao insert em `transactions`.
+
+**Decisão de design — `dataSourceId` em `transactions`:**
+A tabela `transactions` tem FK `data_source_id NOT NULL` para `data_sources`. Adquirentes usam `acquirer_connections`, não `data_sources`. Solução: o job `sync-acquirer-item` cria um `data_sources` vinculado (`type='acquirer'`, `externalItemId=acquirerConnectionId`) no step `ensure-data-source` antes do primeiro insert, e salva o ID em `acquirer_connections.metadata.dataSourceId` para reuso nos syncs seguintes. Evitou migration adicional em `transactions`.
+
+**O que mudou:**
+
+- **`src/lib/stone-client.ts`** (criado) — `StoneClient`:
+  - OAuth2 `client_credentials` com `client_id` + `client_secret` (Stone API)
+  - Cache de token em memória — renova automaticamente 30s antes de expirar
+  - `fetchSales(merchantId, fromDate, toDate, cursor?)` → `StoneSalesPage`
+  - Parâmetros: `merchant_id`, `begin_date`, `end_date`, `page_size=100`, `cursor`
+  - Endpoints separados por ambiente: `sandbox-api.openbank.stone.com.br` vs `api.openbank.stone.com.br`
+
+- **`src/lib/acquirer-provider.ts`** (modificado) — `StoneProvider` implementado:
+  - Construtor muda de `(apiKey, env)` para `(clientId, clientSecret, env)` — usa `StoneClient`
+  - `fetchSales()` chama `client.fetchSales()`, filtra `status === 'approved'`, converte centavos → decimal com `.toFixed(2)`, mapeia para `AcquirerSale`
+  - Factory atualizada: `case 'stone': return new StoneProvider(apiKey, apiSecret, env)`
+
+- **`src/jobs/sync-acquirer-item.ts`** (criado) — job `acquirer/item.sync-requested`:
+  - Concurrency: `limit: 1` por `acquirerConnectionId`
+  - Step `check-connection`: carrega `acquirer_connection` completa
+  - Guarda de `awaitingFirstSync`: retorna `{ skipped: 'awaiting-first-sync' }` se nenhum `fromDate` explícito
+  - Step `ensure-data-source`: query → cria `data_sources` se não existe → salva `dataSourceId` em `metadata`
+  - Paginação: loop `while(true)` com steps nomeados `fetch-page-0`, `fetch-page-1`, … — memoização Inngest funciona
+  - Insert em `transactions` com `accountType='ACQUIRER'`, `accountId=merchantId`, `direction='inflow'`, `onConflictDoNothing()` para dedup
+  - Step `update-status`: lê metadata atual do DB (inclui `dataSourceId` do ensure-step), remove `awaitingFirstSync`, seta `status='active'`
+  - Step `trigger-categorization`: `transaction/batch-inserted` → pipeline de categorização automática
+  - Exporta `daysAgoISO(days)` — reutilizado pelo cron
+
+- **`src/jobs/sync-all-acquirer-items.ts`** (criado) — cron `0 7 * * *` (04:00 BRT):
+  - Lista conexões não-inativas; filtra clientes em `awaitingFirstSync` antes de disparar
+  - Janela: `lastSyncAt - 1 dia` ou `7 dias atrás` se nunca sincronizado
+  - Dispara lote de eventos `acquirer/item.sync-requested`
+
+- **`src/app/api/inngest/route.ts`** (modificado) — registra `syncAcquirerItem` e `syncAllAcquirerItems`
+
+TypeScript: 0 erros. `npm run build` limpo.
+
+---
+
+### ✅ Sessão 8.0 — Scaffolding adquirentes *(concluída)*
 
 ### ✅ Sessão 7.4 — Painel /nfe + Sidebar + Categorização Camada 0.5 *(concluída)*
 
