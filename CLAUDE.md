@@ -166,7 +166,7 @@ Tabelas adicionadas em fases posteriores: `transactions_staging` (Fase 2.3) — 
 
 ## Fase atual
 
-**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras**, **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)**, **tabela "Geração de Caixa por Categoria" em `/fluxo` (mensal, hierárquica, com drill-down e filtros de dimensão)**, **split OPEX/CAPEX nas Naturezas Pai (badge em /configuracoes/categorias + seções separadas em /fluxo)** e **subtotais por grupo/natureza pai no drill-down compartilhado** **concluídas**.
+**Status:** Fase 6 — Balanço Patrimonial gerencial **em andamento**. Sessão 6.0 redesenhada (BP via upload + migration 0016) **concluída**. Sessões de melhorias UX de categorias, fixes de classificação, redesign do `/balanco` multi-coluna, isolamento de domínio BP/DRE, persistência de filtros no localStorage, fix do bug de fuso horário no DRE, **redesign completo UX/UI da tabela de transações + padrão Data Table Pro**, **UX Pluggy (sync sob demanda + customização de conexão)**, **categorizador LLM com contexto da conta**, **regras escopadas por accountId**, **drill-down do DRE com UX igual a /transacoes**, **fix dos 3 bugs do motor de regras (accountId no job + formato novo em review.ts)**, **tela de gestão de regras em /configuracoes/regras**, **drill-down no /balanco (células e labels clicáveis → dialog compartilhado)**, **tabela "Geração de Caixa por Categoria" em `/fluxo` (mensal, hierárquica, com drill-down e filtros de dimensão)**, **split OPEX/CAPEX nas Naturezas Pai (badge em /configuracoes/categorias + seções separadas em /fluxo)**, **subtotais por grupo/natureza pai no drill-down compartilhado** e **seletor de mês no dashboard + indicadores financeiros completos + Top 5 categorias de despesa** **concluídas**.
 
 Fase 5 — DRE interativo com filtros por dimensão **100% concluída** (5.0, 5.A, fixes pós-5.A, 5.B, 5.D, 5.E e 5.F concluídas; 5.C entregue como parte dos fixes pós-5.A; 5.G movida para Fase 9).
 
@@ -174,7 +174,7 @@ Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próximas sessões:** a definir (deliverable original da Fase 6 restante: alertas no dashboard).
+**Próximas sessões:** alertas no dashboard (único deliverable restante da Fase 6).
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
@@ -191,34 +191,37 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 
 ---
 
-### ✅ Sessão — Top 5 Categorias de Despesa no dashboard *(concluída)*
+### ✅ Sessão — Seletor de mês no dashboard + Top 5 por categoria-filho + fix sort text *(concluída)*
 
-**Contexto:** o `/dashboard` tinha KPIs agregados (Receita/Despesas/Lucro/Caixa), gráfico de fluxo e indicadores — mas nenhuma visão de **onde** o dinheiro está saindo. Esta sessão adiciona um card com as 5 maiores categorias de despesa do mês corrente, agregadas por Natureza Pai, com barra horizontal proporcional, percentual e drill-down clicável.
+**Contexto:** o `/dashboard` calculava todos os cards com base em `new Date()` (mês corrente do servidor). Esta sessão adiciona seletor de mês no cabeçalho, refina o Top 5 para agregar por categoria-filho (não pai), e resolve bug crítico de ordenação textual no SQL.
 
 **O que mudou:**
 
 - **`src/server/dashboard.ts`** —
-  - Tipo novo `TopExpenseCategory`: `{ parentId, parentName, parentCode, parentType, total, txCount, leafIds[] }`.
-  - `getTopExpenseCategories()` — query agregada por Natureza Pai (`COALESCE(p.id, c.id)`) filtrada pelos `expenseTypes` reaproveitados do KPI Despesas (deduções tributárias/operacionais, CPV, SG&A, resultado financeiro, IR); soma com sinal (outflow positivo, inflow negativo); `HAVING > 0` exclui categorias com net negativo (estornos/recuperações); `ORDER BY total DESC LIMIT 5`. Retorna `leafIds` (`ARRAY_AGG(DISTINCT c.id)`) — os IDs reais usados pelas transações naquele Pai (suporta drill-down sem nova query).
-  - `getDashboardCategoryDrillDown(categoryIds, dateRange)` — drill-down genérico por IDs de categoria + range de datas. Sem filtro por document_id (≠ `/balanco`). Retorna `DrillDownTransaction[]` com parent info + signed URLs de logo.
-  - Import de `DrillDownTransaction` de `@/lib/dre-types` para tipagem.
+  - Helper `resolveMonthRange(referenceMonth?)` centraliza cálculo de `curFrom/curTo/prevFrom/prevTo/from12m` a partir de `'YYYY-MM'` ou `new Date()`. Parse sem `new Date(string)` (bug de fuso horário como na 0017).
+  - As 4 funções exportadas (`getDashboardKPIs`, `getFinancialIndicators`, `getTopExpenseCategories`, `getCashFlowChart`) recebem `referenceMonth?: string` e delegam ao helper.
+  - **Snapshot semantics:** `getDashboardKPIs` — `saldoCaixa` ganha `AND date::date <= ${curTo}`; `getFinancialIndicators` — query BP ganha `AND date::date <= ${curTo}`.
+  - **Janela deslizante no gráfico:** `getCashFlowChart` — `toDate = curTo`, `fromDate = curTo − 89 dias` (`format(subDays(parseISO(curTo), 89), ...)`).
+  - **`getTopExpenseCategories` refatorado:** agrega por categoria-folha (Filho) em vez de Pai; `cashOutflowTypes` (8 tipos: 6 DRE + `emprestimos_amortizacoes` + `investimentos_retiradas`); `WHERE direction = 'outflow'`; `SUM(amount)` puro (não neta com inflows); `SELECT p.id/name/code`; inclui `hide_in_cashflow = false`.
+  - **Fix crítico de ORDER BY:** `SUM(t.amount::numeric)::text AS total` + `ORDER BY total DESC` causava sort lexicográfico ("915" > "7918" porque '9' > '7'). Corrigido para `ORDER BY SUM(t.amount::numeric) DESC`. Causa raiz: alias de texto em ORDER BY no PostgreSQL é resolvido como string, não como o valor numérico da expressão.
 
-- **`src/app/(authenticated)/dashboard/page.tsx`** — `Promise.all` estendido com `getTopExpenseCategories`, `getCostCenters`, `getBusinessUnits`, `getLegalEntities`, `getLeafCategories`. Computa `monthFrom/monthTo` no servidor e passa como prop `monthRange = { from, to, label }`.
+- **`src/app/(authenticated)/dashboard/page.tsx`** — aceita `searchParams.month`; helper `isValidMonth()` valida `YYYY-MM`; deriva `baseDate/selectedMonth/monthFrom/monthTo/mesAtual` do mês selecionado; passa tudo ao `DashboardClient`.
 
 - **`src/app/(authenticated)/dashboard/dashboard-client.tsx`** —
-  - Props estendidas com `topExpenses`, `monthRange`, `leafCategories`, `costCenters`, `businessUnits`, `legalEntities`.
-  - State `drill: DrillState | null` + `drillData`; `openCategoryDrill(cat)` dispara `getDashboardCategoryDrillDown` em `useTransition`.
-  - Novo `<Card>` entre o gráfico de fluxo e o card de Indicadores: título capitalizado com nome do mês, lista de 5 linhas com `[código] Nome | barra rose-500 | R$ valor | %`. Barra proporcional ao maior valor da lista. Percentual relativo ao total das 5 categorias (não ao total geral de despesas — comunica "peso entre as listadas"). Hover destaca background e darken na barra. EmptyState quando sem dados.
-  - `<DrillDownDialog>` compartilhado renderizado no final, ancorado em `drill !== null`.
+  - Prop `selectedMonth: string` + `handleMonthChange` → `router.push('/dashboard?month=YYYY-MM')` em `useTransition`.
+  - `MonthPicker` inline: `<input type="month">` + `<Loader2>` quando `isNavPending`.
+  - Labels dinâmicos: "Fluxo de Caixa — 90 dias até [mês]" e "Indicadores Financeiros — [mês]".
+  - Top 5 agora exibe Filho (com `parentName` como subtítulo abaixo do nome) — nível de granularidade mais útil para orgs com múltiplos filhos por Pai.
 
-**Decisões de design:**
-
-- **Agregação por Natureza Pai (não Filho):** clientes pensam em "Folha", "Insumos", "Marketing" — não em "Salários", "Encargos", "Bônus" separados. A query usa `COALESCE(p.id, c.id)` para também cobrir Pais sem filhos (transações classificadas direto numa Pai).
-- **Net amount (outflow − inflow):** alinhado com o KPI Despesas. Categoria com mais estornos que despesas no mês não entra no top.
-- **Tipos incluídos:** apenas os 6 tipos de despesa do DRE (mesma constante `expenseTypes` do KPI). Empréstimos/Investimentos/Transferências ficam de fora — são "abaixo da linha" e merecem visualização própria no futuro.
-- **% relativo aos 5 listados, não ao total geral:** comunica "qual peso entre as principais"; "% do total da empresa" é informação que o usuário pode tirar do KPI Despesas comparado ao valor.
+**Indicadores financeiros completos (Liquidez Seca, Endividamento Geral, ROE, Ciclo Financeiro) e popovers explicativos — entregues em sessões anteriores, consolidados neste commit junto com o seletor de mês.**
 
 TypeScript: 0 erros. ESLint: 0 warnings.
+
+---
+
+### ✅ Sessão — Top 5 Categorias de Despesa no dashboard *(concluída — detalhes acima)*
+
+Sessão substituída/consolidada na sessão "Seletor de mês" acima. O card foi entregue na mesma iteração.
 
 ---
 
