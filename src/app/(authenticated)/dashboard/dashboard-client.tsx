@@ -1,10 +1,11 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { KPICard } from '@/components/financial/kpi-card'
 import { EmptyState } from '@/components/states/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { DashboardKPIs, CashFlowDay, FinancialIndicators } from '@/server/dashboard'
+import type { DashboardKPIs, CashFlowDay, FinancialIndicators, TopExpenseCategory } from '@/server/dashboard'
+import { getDashboardCategoryDrillDown } from '@/server/dashboard'
 import { format, parseISO, startOfWeek } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import {
@@ -17,8 +18,13 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle } from 'lucide-react'
+import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
+import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
+import type { CostCenter } from '@/db/schema/cost-centers'
+import type { BusinessUnit } from '@/db/schema/business-units'
+import type { LegalEntity } from '@/db/schema/legal-entities'
 
 type WeekData = { label: string; inflow: number; outflow: number }
 
@@ -180,14 +186,56 @@ function IndicatorItem({ icon, label, value, format: fmt, status, hint, explanat
 }
 
 interface DashboardClientProps {
-  kpis: DashboardKPIs
-  cashFlow: CashFlowDay[]
-  indicators: FinancialIndicators
+  kpis:           DashboardKPIs
+  cashFlow:       CashFlowDay[]
+  indicators:     FinancialIndicators
+  topExpenses:    TopExpenseCategory[]
+  monthRange:     { from: string; to: string; label: string }
+  leafCategories: LeafCategory[]
+  costCenters:    CostCenter[]
+  businessUnits:  BusinessUnit[]
+  legalEntities:  LegalEntity[]
 }
 
-export function DashboardClient({ kpis, cashFlow, indicators }: DashboardClientProps) {
+interface DrillState {
+  title:    string
+  subtitle: string
+  categoryIds: string[]
+  dateRange:   { from: string; to: string }
+}
+
+export function DashboardClient({
+  kpis, cashFlow, indicators,
+  topExpenses, monthRange, leafCategories, costCenters, businessUnits, legalEntities,
+}: DashboardClientProps) {
   const weeklyData  = useMemo(() => groupByWeek(cashFlow), [cashFlow])
   const hasChart    = cashFlow.length > 0
+
+  const [drill, setDrill] = useState<DrillState | null>(null)
+  const [drillData, setDrillData] = useState<DrillDownTransaction[] | null>(null)
+  const [isDrillLoading, startDrillTransition] = useTransition()
+
+  function openCategoryDrill(cat: TopExpenseCategory) {
+    setDrill({
+      title:       cat.parentCode ? `${cat.parentCode} – ${cat.parentName}` : cat.parentName,
+      subtitle:    monthRange.label,
+      categoryIds: cat.leafIds,
+      dateRange:   { from: monthRange.from, to: monthRange.to },
+    })
+    setDrillData(null)
+    startDrillTransition(async () => {
+      const result = await getDashboardCategoryDrillDown(cat.leafIds, { from: monthRange.from, to: monthRange.to })
+      setDrillData(result.transactions)
+    })
+  }
+
+  function closeDrill() {
+    setDrill(null)
+    setDrillData(null)
+  }
+
+  const maxTopExpense = topExpenses.length > 0 ? Math.max(...topExpenses.map(c => c.total)) : 0
+  const totalTopExpenses = topExpenses.reduce((s, c) => s + c.total, 0)
 
   const ebitdaStatus       = indicatorStatus(indicators.margemEbitda,           15, 5)
   const liquidezStatus     = indicatorStatus(indicators.liquidezCorrente,        1.5, 1.0)
@@ -271,6 +319,57 @@ export function DashboardClient({ kpis, cashFlow, indicators }: DashboardClientP
                 <Bar dataKey="outflow" name="outflow" fill="#e11d48" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base font-semibold capitalize">
+            Top 5 Categorias de Despesa — {monthRange.label}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {topExpenses.length === 0 ? (
+            <EmptyState
+              icon={<PieChart className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
+              title="Sem despesas classificadas no mês"
+              description="Classifique as transações para ver as categorias com maior peso aqui."
+            />
+          ) : (
+            <div className="space-y-2">
+              {topExpenses.map(cat => {
+                const pctOfTotal = totalTopExpenses > 0 ? (cat.total / totalTopExpenses) * 100 : 0
+                const barPct     = maxTopExpense > 0 ? (cat.total / maxTopExpense) * 100 : 0
+                return (
+                  <button
+                    key={cat.parentId}
+                    onClick={() => openCategoryDrill(cat)}
+                    className="w-full group flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-muted/40 transition-colors text-left"
+                  >
+                    <span className="text-sm font-medium text-foreground/90 truncate flex-1 min-w-0">
+                      {cat.parentCode && <span className="text-muted-foreground mr-1.5">{cat.parentCode}</span>}
+                      {cat.parentName}
+                    </span>
+                    <div className="flex-1 max-w-[40%] h-2 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full bg-rose-500 group-hover:bg-rose-600 transition-colors rounded-full"
+                        style={{ width: `${barPct}%` }}
+                      />
+                    </div>
+                    <span className="text-sm font-semibold tabular-nums text-foreground w-28 text-right shrink-0">
+                      {brl.format(cat.total)}
+                    </span>
+                    <span className="text-xs tabular-nums text-muted-foreground w-12 text-right shrink-0">
+                      {pctOfTotal.toFixed(0)}%
+                    </span>
+                  </button>
+                )
+              })}
+              <p className="text-xs text-muted-foreground/70 pt-2 border-t border-border/40">
+                Percentual relativo ao total das 5 categorias listadas. Clique numa linha para ver as transações.
+              </p>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -387,6 +486,22 @@ export function DashboardClient({ kpis, cashFlow, indicators }: DashboardClientP
           )}
         </CardContent>
       </Card>
+
+      {drill && (
+        <DrillDownDialog
+          open
+          onOpenChange={(o) => { if (!o) closeDrill() }}
+          title={drill.title}
+          subtitle={drill.subtitle}
+          data={drillData}
+          loading={isDrillLoading}
+          onDataChange={setDrillData}
+          leafCategories={leafCategories}
+          costCenters={costCenters}
+          businessUnits={businessUnits}
+          legalEntities={legalEntities}
+        />
+      )}
     </div>
   )
 }

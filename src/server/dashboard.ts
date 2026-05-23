@@ -6,6 +6,7 @@ import { db } from '@/db'
 import { memberships } from '@/db/schema'
 import { eq, and, isNotNull, sql } from 'drizzle-orm'
 import { startOfMonth, endOfMonth, subMonths, subDays, format } from 'date-fns'
+import type { DrillDownTransaction } from '@/lib/dre-types'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -40,6 +41,16 @@ export type CashFlowDay = {
   date: string
   inflow: number
   outflow: number
+}
+
+export type TopExpenseCategory = {
+  parentId:   string
+  parentName: string
+  parentCode: string | null
+  parentType: string
+  total:      number
+  txCount:    number
+  leafIds:    string[]
 }
 
 const expenseTypes = sql.raw(
@@ -245,6 +256,201 @@ export async function getFinancialIndicators(): Promise<FinancialIndicators> {
                               : null,
     meses12mDisponiveis:    meses12m,
   }
+}
+
+// Top 5 categorias de despesa do mês corrente, agregadas por Natureza Pai.
+// Quando a transação está classificada direto numa Pai sem filhos, a própria
+// categoria entra como "pai" (mesmo padrão dos subtotais do drill-down).
+export async function getTopExpenseCategories(): Promise<TopExpenseCategory[]> {
+  const { organizationId } = await getAuthContext()
+
+  const now     = new Date()
+  const curFrom = format(startOfMonth(now), 'yyyy-MM-dd')
+  const curTo   = format(endOfMonth(now),   'yyyy-MM-dd')
+
+  type Row = {
+    pai_id:    string
+    pai_name:  string
+    pai_code:  string | null
+    pai_type:  string
+    total:     string
+    tx_count:  string
+    leaf_ids:  string[]
+  }
+
+  const rows = await db.execute<Row>(sql`
+    SELECT
+      COALESCE(p.id, c.id)::text   AS pai_id,
+      COALESCE(p.name, c.name)     AS pai_name,
+      COALESCE(p.code, c.code)     AS pai_code,
+      COALESCE(p.type, c.type)     AS pai_type,
+      COALESCE(SUM(
+        CASE WHEN t.direction = 'outflow' THEN  t.amount::numeric
+                                          ELSE -t.amount::numeric END
+      ), 0)::text                  AS total,
+      COUNT(*)::text               AS tx_count,
+      ARRAY_AGG(DISTINCT c.id::text) AS leaf_ids
+    FROM transactions t
+    JOIN categories c           ON t.category_id = c.id
+    LEFT JOIN categories p      ON c.parent_id   = p.id
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.status NOT IN ('pending', 'duplicate')
+      AND t.date::date >= ${curFrom}::date
+      AND t.date::date <= ${curTo}::date
+      AND COALESCE(p.type, c.type) IN (${expenseTypes})
+    GROUP BY COALESCE(p.id, c.id), COALESCE(p.name, c.name), COALESCE(p.code, c.code), COALESCE(p.type, c.type)
+    HAVING COALESCE(SUM(
+      CASE WHEN t.direction = 'outflow' THEN  t.amount::numeric
+                                        ELSE -t.amount::numeric END
+    ), 0) > 0
+    ORDER BY total DESC
+    LIMIT 5
+  `)
+
+  return rows.map(r => ({
+    parentId:   r.pai_id,
+    parentName: r.pai_name,
+    parentCode: r.pai_code,
+    parentType: r.pai_type,
+    total:      Number(r.total),
+    txCount:    Number(r.tx_count),
+    leafIds:    r.leaf_ids,
+  }))
+}
+
+// Drill-down para qualquer conjunto de categoryIds + range de datas. Usado pelo card
+// Top 5 categorias do dashboard, mas é genérico — não filtra por document_id (≠ /balanco).
+export async function getDashboardCategoryDrillDown(
+  categoryIds: string[],
+  dateRange:   { from: string; to: string },
+): Promise<{ transactions: DrillDownTransaction[] }> {
+  const { organizationId } = await getAuthContext()
+
+  if (categoryIds.length === 0) return { transactions: [] }
+
+  type TxRow = {
+    id:                   string
+    date:                 string
+    description:          string
+    direction:            string
+    amount:               string
+    category_id:          string | null
+    category_name:        string | null
+    category_type:        string | null
+    parent_category_id:   string | null
+    parent_category_name: string | null
+    parent_category_type: string | null
+    cost_center_id:       string | null
+    cost_center_name:     string | null
+    business_unit_id:     string | null
+    business_unit_name:   string | null
+    legal_entity_id:      string | null
+    legal_entity_name:    string | null
+    account_id:           string | null
+    account_name:         string | null
+    account_type:         string | null
+    account_number:       string | null
+    data_source_id:       string | null
+    ds_metadata:          Record<string, unknown> | null
+  }
+
+  const result = await db.execute<TxRow>(sql`
+    SELECT
+      t.id::text               AS id,
+      t.date                   AS date,
+      t.description            AS description,
+      t.direction              AS direction,
+      t.amount::numeric        AS amount,
+      t.category_id::text      AS category_id,
+      c.name                   AS category_name,
+      c.type                   AS category_type,
+      p.id::text               AS parent_category_id,
+      p.name                   AS parent_category_name,
+      p.type                   AS parent_category_type,
+      t.cost_center_id::text   AS cost_center_id,
+      cc.name                  AS cost_center_name,
+      t.business_unit_id::text AS business_unit_id,
+      bu.name                  AS business_unit_name,
+      t.legal_entity_id::text  AS legal_entity_id,
+      le.name                  AS legal_entity_name,
+      t.account_id             AS account_id,
+      t.account_name           AS account_name,
+      t.account_type           AS account_type,
+      t.account_number         AS account_number,
+      t.data_source_id::text   AS data_source_id,
+      ds.metadata              AS ds_metadata
+    FROM transactions t
+    LEFT JOIN categories c      ON t.category_id      = c.id
+    LEFT JOIN categories p      ON c.parent_id        = p.id
+    LEFT JOIN cost_centers cc   ON t.cost_center_id   = cc.id
+    LEFT JOIN business_units bu ON t.business_unit_id = bu.id
+    LEFT JOIN legal_entities le ON t.legal_entity_id  = le.id
+    LEFT JOIN data_sources ds   ON t.data_source_id   = ds.id
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.category_id IN (${sql.join(categoryIds.map(id => sql`${id}::uuid`), sql`, `)})
+      AND t.status NOT IN ('pending', 'duplicate')
+      AND t.date::date >= ${dateRange.from}::date
+      AND t.date::date <= ${dateRange.to}::date
+    ORDER BY t.date DESC, t.created_at DESC
+  `)
+
+  // Signed URLs em batch para customLogoPath
+  const customLogoByDs = new Map<string, string>()
+  for (const r of result) {
+    const meta = (r.ds_metadata ?? {}) as Record<string, unknown>
+    const path = typeof meta.customLogoPath === 'string' ? meta.customLogoPath : null
+    if (path && r.data_source_id && !customLogoByDs.has(r.data_source_id)) {
+      customLogoByDs.set(r.data_source_id, path)
+    }
+  }
+  const supabase = createClient()
+  const signedEntries = await Promise.all(
+    Array.from(customLogoByDs.entries()).map(async ([dsId, path]) => {
+      const { data } = await supabase.storage.from('documents').createSignedUrl(path, 3600)
+      return [dsId, data?.signedUrl ?? null] as const
+    })
+  )
+  const signedMap = new Map(signedEntries)
+
+  const transactions: DrillDownTransaction[] = result.map(r => {
+    const amount = Number(r.amount)
+    const meta = (r.ds_metadata ?? {}) as Record<string, unknown>
+    const autoLogo = typeof meta.institutionImageUrl === 'string' ? meta.institutionImageUrl : null
+    const customLogo = r.data_source_id ? signedMap.get(r.data_source_id) ?? null : null
+    const badge = (meta.customBadge as { text?: string } | undefined)?.text || null
+
+    const parentId   = r.parent_category_id   ?? r.category_id   ?? null
+    const parentName = r.parent_category_name ?? r.category_name ?? null
+    const parentType = r.parent_category_type ?? r.category_type ?? null
+
+    return {
+      id:                 r.id,
+      date:               String(r.date),
+      description:        r.description,
+      direction:          r.direction,
+      amount,
+      netAmount:          r.direction === 'inflow' ? amount : -amount,
+      categoryId:         r.category_id ?? null,
+      categoryName:       r.category_name ?? null,
+      costCenterId:       r.cost_center_id ?? null,
+      costCenterName:     r.cost_center_name ?? null,
+      businessUnitId:     r.business_unit_id ?? null,
+      businessUnitName:   r.business_unit_name ?? null,
+      legalEntityId:      r.legal_entity_id ?? null,
+      legalEntityName:    r.legal_entity_name ?? null,
+      accountId:          r.account_id ?? null,
+      accountName:        r.account_name ?? null,
+      accountType:        r.account_type ?? null,
+      accountNumber:      r.account_number ?? null,
+      connectionLogoUrl:  customLogo ?? autoLogo,
+      connectionBadge:    badge,
+      parentCategoryId:   parentId,
+      parentCategoryName: parentName,
+      parentCategoryType: parentType,
+    }
+  })
+
+  return { transactions }
 }
 
 export async function getCashFlowChart(): Promise<CashFlowDay[]> {
