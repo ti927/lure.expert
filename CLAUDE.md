@@ -167,7 +167,9 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 6 — Dashboard e Balanço Gerencial **100% concluída**. Todos os deliverables entregues: BP via upload, redesign de tabelas, UX Pluggy, categorizador com contexto de conta, regras escopadas por accountId, drill-downs DRE e BP, tabela Geração de Caixa, split OPEX/CAPEX, subtotais no drill-down compartilhado, seletor de mês + indicadores financeiros completos + Top 5, alertas no dashboard, separação date/effective_date (competência vs caixa) em todo o pipeline. **Fase 7 (SEFAZ) suspensa** por decisão de produto. **Próxima fase a definir.**
+**Status:** Fase 6 **100% concluída**. Fase 7 — Integração SEFAZ / NF-e **em andamento**: 7.1 (schema + tela de configuração) ✅, 7.2 (provedor abstrato + jobs de sync) ✅, 7.3 (reconciliação + server actions) ✅ — pendente: **7.4** (painel /nfe + link sidebar + categorização camada 0.5).
+
+Fase 7 — Integração SEFAZ / NF-e **em andamento** (7.1 ✅ 7.2 ✅ 7.3 ✅ — 7.4 pendente).
 
 Fase 6 — Dashboard e Balanço Gerencial **100% concluída** (6.0 + todas as sessões de melhoria acima).
 
@@ -183,6 +185,7 @@ Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (
 - ✅ `db/migrations/rls/0019_reset_categorization_rules.sql` — `DELETE FROM categorization_rules` (reset para introduzir escopo por accountId)
 - ✅ `db/migrations/rls/0020_category_opex_capex.sql` — `opex_capex text NOT NULL DEFAULT 'opex'` em `categories`; seed defaults CAPEX para tipos 8/9/10
 - ✅ `db/migrations/rls/0021_staging_effective_date.sql` — `effective_date text` em `transactions_staging`
+- ⚠️ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas — **aplicar no Supabase Studio (SQL Editor) antes de testar a Fase 7**
 
 **Convenção crítica — date vs effective_date em `transactions`:**
 - `date` (competência) → alimenta **DRE** e **BP** (quando o fato econômico ocorreu)
@@ -196,6 +199,105 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão 7.3 — Reconciliação NF-e + Server Actions de Invoices *(concluída)*
+
+**Contexto:** após o sync inserir NFs em `invoices`, um job de reconciliação as cruza com as transações bancárias usando score composto pg_trgm. Server actions expõem os dados para o painel `/nfe` (Sessão 7.4).
+
+**O que mudou:**
+
+- **`src/jobs/reconcile-invoices.ts`** — job Inngest `reconcile-invoices`, acionado pelo evento `sefaz/invoices.batch-inserted`:
+  - Concurrency: `limit: 1` por `organizationId`
+  - Para cada invoice com `status='nova'`, busca a melhor transação candidata via SQL com score composto:
+    - **40%** `pg_trgm similarity(tx.description, nome_contraparte)` — nome do destinatário (NF saída) ou emitente (NF entrada)
+    - **40%** match de valor binário (amount dentro de ±0.5% do `total_nf`)
+    - **20%** proximidade de data linear (`0 dias → 1.0`, `7 dias → 0.0`)
+  - Candidatas: mesma org, direção coerente (saída→inflow, entrada→outflow), amount ±0.5%, data ±7 dias, `status='confirmed'`, `invoice_id IS NULL`
+  - ≥ 0.85 → casa automático: `invoice.status='casada'`, `invoice.transactionId=tx.id`, `transactions.date=invoice.dataEmissao` (competência real para o DRE), `transactions.invoiceId=invoice.id`
+  - 0.50–0.84 → `invoice.status='pendente_revisao'` (fila manual no painel /nfe)
+  - < 0.50 → invoice fica `'nova'` (A/R ou A/P em aberto)
+  - Processamento em lotes de 50 por `step.run` (respeita limite de 1000 steps/run do Inngest)
+
+- **`src/server/invoices.ts`** — três server actions:
+  - `listInvoices(filters)` — paginado 100/pág com filtros: tipo, status, legalEntityId, dateFrom, dateTo, amountMin, amountMax; JOIN com `legalEntities` para nome da entidade; ordena por `dataEmissao DESC`
+  - `getInvoiceStats()` — query única retorna: totalAReceber (NFs saída não casadas/canceladas), totalAPagar (NFs entrada idem), countPendenteRevisao, countNova — para os cards de resumo do painel /nfe
+  - `manualReconcile(invoiceId, transactionId)` — reconciliação manual com validação de ownership; seta `transactions.date = invoice.dataEmissao`; revalida /nfe, /dre, /transacoes
+
+- **`src/app/api/inngest/route.ts`** — `reconcileInvoices` registrado no `serve()`.
+
+**Impacto no DRE:** quando uma NF é reconciliada (auto ou manual), `transactions.date` passa a ser a data de emissão da NF (competência) em vez da data do extrato bancário. O `effectiveDate` permanece inalterado — cash flow não é afetado. Resultado: DRE reflete a competência real do faturamento.
+
+TypeScript: 0 erros.
+
+---
+
+### ✅ Sessão 7.2 — Provedor Abstrato + Jobs de Sync *(concluída)*
+
+**Contexto:** implementa a camada de integração SEFAZ — abstração de provedor pluggável, job de sync por conexão e cron diário.
+
+**O que mudou:**
+
+- **`src/lib/sefaz-provider.ts`** (criado) — abstração completa do provedor SEFAZ:
+  - `NFeItem` — tipo unificado para NF de saída e entrada
+  - `SefazProvider` — interface com `fetchNFeSaida`, `fetchNFeEntrada`, `manifestar`
+  - `AbstractSefazProvider` — stub de desenvolvimento (retorna arrays vazios; permite testar o pipeline sem credenciais reais)
+  - `FocusNFeProvider` — integração HTTP com Focus NF-e (Basic Auth, URLs por ambiente, mapeamento de campos, filtro de itens inválidos)
+  - `createSefazProvider(conn)` — factory que aceita `Pick<SefazConnection, 'provider' | 'apiKeyEncrypted' | 'environment'>` (Pick necessário para compatibilidade com `JsonifyObject` do Inngest, que serializa timestamps como strings)
+
+- **`src/jobs/sync-sefaz-item.ts`** (criado) — job Inngest `sync-sefaz-item`, acionado por `sefaz/item.sync-requested`:
+  - Concurrency: `limit: 1` por `connectionId`
+  - Padrão `awaitingFirstSync`: aborta se metadata tem flag e sem `forceFirstSync` no payload
+  - Busca NFs de saída e entrada conforme flags `pullSaida`/`pullEntrada` da conexão
+  - Erros de API marcam conexão como `status='error'`
+  - `insertInvoices` — helper com lotes de 100, `onConflictDoNothing` por chave de acesso
+  - Manifestação automática ("Ciência da Operação") para NFs de entrada novas quando `autoManifest=true`
+  - Após sync: limpa `awaitingFirstSync` do metadata, atualiza `lastSyncAt/Status`
+  - Dispara `sefaz/invoices.batch-inserted` para o job de reconciliação
+
+- **`src/jobs/sync-all-sefaz-items.ts`** (criado) — cron Inngest `0 5 * * *` (02:00 BRT):
+  - Busca conexões `status='active'`; conexões com `awaitingFirstSync=true` são puladas
+  - `fromDate` = lastSyncAt − 1 dia (incremental) ou `daysAgoISO(7)` se nunca sincronizado
+
+- **`src/app/api/webhooks/sefaz/route.ts`** (criado) — webhook genérico para provedores SEFAZ:
+  - Resolve conexão por `connectionId` ou `cnpj` no body
+  - Eventos de sucesso → dispara sync incremental; eventos de erro → atualiza status da conexão
+
+- **`src/app/api/inngest/route.ts`** — `syncSefazItem` e `syncAllSefazItems` registrados.
+
+TypeScript: 0 erros.
+
+---
+
+### ✅ Sessão 7.1 — Schema + Tela de Configuração SEFAZ *(concluída)*
+
+**Contexto:** fundação da Fase 7 — schema das duas novas tabelas, server actions de CRUD e tela de configuração para conectar entidades jurídicas ao SEFAZ.
+
+**O que mudou:**
+
+- **`db/migrations/rls/0022_sefaz_invoices.sql`** (⚠️ aplicar manualmente no Supabase Studio) — cria tabelas `sefaz_connections` e `invoices` com RLS isolado por org; adiciona coluna `invoice_id uuid` em `transactions`.
+
+- **`db/schema/sefaz-connections.ts`** (criado) — conexão por CNPJ/entidade jurídica; campos: provider, providerCompanyId, apiKeyEncrypted, certificateExpiry, environment, pullSaida, pullEntrada, autoManifest, status, lastSyncAt, metadata; UNIQUE(organizationId, cnpj).
+
+- **`db/schema/invoices.ts`** (criado) — documento fiscal; campos: chaveAcesso, numeroNf, serie, tipo (saída/entrada), emitente/destinatário, dataEmissao (competência), totalNf, status (nova/manifestada/casada/pendente_revisao/cancelada/denegada), transactionId, reconciliationScore, xmlContent; UNIQUE(organizationId, chaveAcesso).
+
+- **`db/schema/transactions.ts`** — campo `invoiceId uuid` adicionado (FK criada via SQL na migration, não via Drizzle — referência circular).
+
+- **`db/schema/index.ts`** — exports de `sefaz-connections` e `invoices` adicionados.
+
+- **`src/server/sefaz.ts`** (criado) — 6 server actions:
+  - `listSefazConnections` — lista conexões ativas com nome da entidade jurídica
+  - `createSefazConnection` — valida CNPJ, verifica duplicata, cria conexão com `status='pending'` + `metadata.awaitingFirstSync=true`; atualiza CNPJ da entidade se estava vazio
+  - `updateSefazConnection` — patch parcial de provider/apiKey/environment/toggles
+  - `deleteSefazConnection` — soft delete via `status='inactive'`
+  - `triggerSefazSync(connectionId, fromDate)` — dispara `sefaz/item.sync-requested` com `forceFirstSync: true`
+  - `getLegalEntitiesForSefaz` — lista entidades com flag `alreadyConnected` para o dialog de criação
+  - `decryptApiKey` exportado para uso no sefaz-provider
+
+- **`src/app/(authenticated)/configuracoes/sefaz/page.tsx`** + **`sefaz-client.tsx`** (criados) — tela de configuração: lista conexões por entidade jurídica, dialog de nova conexão (provedor, API key, ambiente, toggles), card de status com última sync, botão "Sincronizar" que abre date picker para data de corte.
+
+TypeScript: 0 erros.
 
 ---
 
