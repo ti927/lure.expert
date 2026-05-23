@@ -74,6 +74,8 @@ export const transactions = pgTable(
     accountName:   text('account_name'),
     // FK para a transação canônica (Pluggy) quando esta é marcada como duplicata de upload
     duplicateOf: uuid('duplicate_of').references((): AnyPgColumn => transactions.id, { onDelete: 'set null' }),
+    // FK para NF-e reconciliada — quando preenchido, transactions.date = invoice.data_emissao
+    invoiceId: uuid('invoice_id'),
     rawData: jsonb('raw_data').notNull().default(sql`'{}'::jsonb`),
     // populado assincronamente após insert, não bloqueia a operação
     embedding: vector('embedding'),
