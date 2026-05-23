@@ -115,9 +115,14 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
 }
 
 export type FinancialIndicators = {
-  margemEbitda: number | null
-  liquidezCorrente: number | null
+  margemEbitda:           number | null
+  liquidezCorrente:       number | null
+  liquidezSeca:           number | null
   coberturaServicoDivida: number | null
+  endividamentoGeral:     number | null   // proporção 0..1 (passivo / ativo)
+  cicloFinanceiro:        number | null   // sempre null no MVP — requer AR/AP estruturados
+  roe:                    number | null   // % anualizado
+  meses12mDisponiveis:    number          // 1..12 — quantos meses entraram no lucro acumulado
 }
 
 export async function getFinancialIndicators(): Promise<FinancialIndicators> {
@@ -126,15 +131,24 @@ export async function getFinancialIndicators(): Promise<FinancialIndicators> {
   const now     = new Date()
   const curFrom = format(startOfMonth(now), 'yyyy-MM-dd')
   const curTo   = format(endOfMonth(now),   'yyyy-MM-dd')
+  const from12m = format(startOfMonth(subMonths(now, 11)), 'yyyy-MM-dd')
 
   const dreTypes = sql.raw(
     `'receita_operacional','deducoes_tributarias','deducoes_operacionais','cpv','sga'`
   )
 
-  type DreRow = { receita_bruta: string; ebitda: string; servico_divida: string }
-  type BpRow  = { ativo_circ: string; passivo_circ: string }
+  type DreRow      = { receita_bruta: string; ebitda: string; servico_divida: string }
+  type BpRow       = {
+    ativo_circ:        string
+    ativo_nao_circ:    string
+    passivo_circ:      string
+    passivo_nao_circ:  string
+    pl:                string
+    estoque:           string
+  }
+  type Lucro12mRow = { lucro: string; meses: string }
 
-  const [dreRows, bpRows] = await Promise.all([
+  const [dreRows, bpRows, lucro12mRows] = await Promise.all([
     db.execute<DreRow>(sql`
       SELECT
         COALESCE(SUM(CASE WHEN c.type = 'receita_operacional'
@@ -157,29 +171,79 @@ export async function getFinancialIndicators(): Promise<FinancialIndicators> {
         COALESCE(SUM(CASE WHEN c.type = 'ativo_circulante'
           THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
           ELSE 0 END), 0)::text AS ativo_circ,
+        COALESCE(SUM(CASE WHEN c.type = 'ativo_nao_circulante'
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS ativo_nao_circ,
         COALESCE(SUM(CASE WHEN c.type = 'passivo_circulante'
           THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS passivo_circ
+          ELSE 0 END), 0)::text AS passivo_circ,
+        COALESCE(SUM(CASE WHEN c.type = 'passivo_nao_circulante'
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS passivo_nao_circ,
+        COALESCE(SUM(CASE WHEN c.type = 'patrimonio_liquido'
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS pl,
+        COALESCE(SUM(CASE WHEN c.type = 'ativo_circulante'
+          AND (c.name ILIKE '%estoque%' OR p.name ILIKE '%estoque%')
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS estoque
+      FROM transactions t
+      JOIN categories c       ON t.category_id = c.id
+      LEFT JOIN categories p  ON c.parent_id   = p.id
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+    `),
+    db.execute<Lucro12mRow>(sql`
+      SELECT
+        COALESCE(SUM(CASE WHEN c.type NOT IN (${bpAndTransferTypes})
+          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
+          ELSE 0 END), 0)::text AS lucro,
+        COUNT(DISTINCT date_trunc('month', t.date::date))::text AS meses
       FROM transactions t
       JOIN categories c ON t.category_id = c.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
+        AND t.date::date >= ${from12m}::date
+        AND t.date::date <= ${curTo}::date
     `),
   ])
 
-  const dre = dreRows[0]  ?? { receita_bruta: '0', ebitda: '0', servico_divida: '0' }
-  const bp  = bpRows[0]   ?? { ativo_circ: '0', passivo_circ: '0' }
+  const dre  = dreRows[0]      ?? { receita_bruta: '0', ebitda: '0', servico_divida: '0' }
+  const bp   = bpRows[0]       ?? { ativo_circ: '0', ativo_nao_circ: '0', passivo_circ: '0', passivo_nao_circ: '0', pl: '0', estoque: '0' }
+  const luc  = lucro12mRows[0] ?? { lucro: '0', meses: '0' }
 
-  const receitaBruta  = Number(dre.receita_bruta)
-  const ebitda        = Number(dre.ebitda)
-  const servicoDivida = Number(dre.servico_divida)
-  const ativoCirc     = Number(bp.ativo_circ)
-  const passivoCirc   = Number(bp.passivo_circ)
+  const receitaBruta    = Number(dre.receita_bruta)
+  const ebitda          = Number(dre.ebitda)
+  const servicoDivida   = Number(dre.servico_divida)
+  const ativoCirc       = Number(bp.ativo_circ)
+  const ativoNaoCirc    = Number(bp.ativo_nao_circ)
+  const passivoCirc     = Number(bp.passivo_circ)
+  const passivoNaoCirc  = Number(bp.passivo_nao_circ)
+  const plDireto        = Number(bp.pl)
+  const estoque         = Number(bp.estoque)
+  const lucro12m        = Number(luc.lucro)
+  const meses12m        = Math.max(1, Math.min(12, Number(luc.meses) || 0))
+
+  const ativoTotal      = ativoCirc + ativoNaoCirc
+  const passivoTotal    = passivoCirc + passivoNaoCirc
+  // PL: prioriza valores lançados em patrimonio_liquido; cai para Ativo − Passivo (identidade contábil) quando não há.
+  const patrimonioLiquido = plDireto !== 0 ? plDireto : (ativoTotal - passivoTotal)
+
+  // ROE anualizado: lucro acumulado dos últimos N meses (N = meses com dados, máx 12),
+  // anualizado proporcionalmente quando há menos de 12 meses.
+  const lucroAnualizado = lucro12m * (12 / meses12m)
 
   return {
-    margemEbitda:           receitaBruta > 0  ? (ebitda / receitaBruta) * 100 : null,
-    liquidezCorrente:       passivoCirc  > 0  ? ativoCirc / passivoCirc       : null,
-    coberturaServicoDivida: servicoDivida > 0 ? ebitda / servicoDivida        : null,
+    margemEbitda:           receitaBruta > 0   ? (ebitda / receitaBruta) * 100      : null,
+    liquidezCorrente:       passivoCirc > 0    ? ativoCirc / passivoCirc            : null,
+    liquidezSeca:           passivoCirc > 0    ? (ativoCirc - estoque) / passivoCirc : null,
+    coberturaServicoDivida: servicoDivida > 0  ? ebitda / servicoDivida             : null,
+    endividamentoGeral:     ativoTotal > 0     ? passivoTotal / ativoTotal          : null,
+    cicloFinanceiro:        null,   // Requer AR/AP estruturados — Fase futura
+    roe:                    patrimonioLiquido > 0 && Number(luc.meses) > 0
+                              ? (lucroAnualizado / patrimonioLiquido) * 100
+                              : null,
+    meses12mDisponiveis:    meses12m,
   }
 }
 

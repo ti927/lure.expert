@@ -17,7 +17,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { BarChart2, TrendingUp, Droplets, ShieldCheck } from 'lucide-react'
+import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet } from 'lucide-react'
 
 type WeekData = { label: string; inflow: number; outflow: number }
 
@@ -92,6 +92,14 @@ function indicatorStatus(value: number | null, good: number, warn: number): Indi
   return 'bad'
 }
 
+// Para indicadores onde "menor é melhor" (ex: Endividamento Geral).
+function indicatorStatusInverse(value: number | null, goodMax: number, warnMax: number): IndicatorStatus {
+  if (value === null) return 'neutral'
+  if (value <= goodMax) return 'good'
+  if (value <= warnMax) return 'warn'
+  return 'bad'
+}
+
 const statusColor: Record<IndicatorStatus, string> = {
   good:    'bg-emerald-500',
   warn:    'bg-amber-500',
@@ -141,13 +149,19 @@ export function DashboardClient({ kpis, cashFlow, indicators }: DashboardClientP
   const weeklyData  = useMemo(() => groupByWeek(cashFlow), [cashFlow])
   const hasChart    = cashFlow.length > 0
 
-  const ebitdaStatus   = indicatorStatus(indicators.margemEbitda,           15, 5)
-  const liquidezStatus = indicatorStatus(indicators.liquidezCorrente,        1.5, 1.0)
-  const dcsrStatus     = indicatorStatus(indicators.coberturaServicoDivida,  1.5, 1.0)
+  const ebitdaStatus       = indicatorStatus(indicators.margemEbitda,           15, 5)
+  const liquidezStatus     = indicatorStatus(indicators.liquidezCorrente,        1.5, 1.0)
+  const liquidezSecaStatus = indicatorStatus(indicators.liquidezSeca,            1.0, 0.7)
+  const dcsrStatus         = indicatorStatus(indicators.coberturaServicoDivida,  1.5, 1.0)
+  const endividStatus      = indicatorStatusInverse(indicators.endividamentoGeral, 0.5, 0.7)
+  const roeStatus          = indicatorStatus(indicators.roe,                    15, 8)
 
-  const allNull = indicators.margemEbitda === null
-    && indicators.liquidezCorrente === null
-    && indicators.coberturaServicoDivida === null
+  const allNull = indicators.margemEbitda           === null
+    && indicators.liquidezCorrente        === null
+    && indicators.liquidezSeca            === null
+    && indicators.coberturaServicoDivida  === null
+    && indicators.endividamentoGeral      === null
+    && indicators.roe                     === null
 
   return (
     <div className="space-y-6">
@@ -249,12 +263,50 @@ export function DashboardClient({ kpis, cashFlow, indicators }: DashboardClientP
                 hint={indicators.liquidezCorrente === null ? 'Requer lançamentos de Balanço Patrimonial' : 'Referência saudável: acima de 1,5x'}
               />
               <IndicatorItem
+                icon={<Activity className="h-4 w-4" strokeWidth={1.5} />}
+                label="Liquidez Seca"
+                value={indicators.liquidezSeca}
+                format={v => `${v.toFixed(2)}x`}
+                status={liquidezSecaStatus}
+                hint={indicators.liquidezSeca === null ? 'Requer Balanço Patrimonial' : 'Ativo Circulante menos estoque ÷ Passivo Circulante. Referência: acima de 1,0x'}
+              />
+              <IndicatorItem
+                icon={<Scale className="h-4 w-4" strokeWidth={1.5} />}
+                label="Endividamento Geral"
+                value={indicators.endividamentoGeral !== null ? indicators.endividamentoGeral * 100 : null}
+                format={v => `${v.toFixed(1)}%`}
+                status={endividStatus}
+                hint={indicators.endividamentoGeral === null ? 'Requer Balanço Patrimonial' : 'Passivo total ÷ Ativo total. Referência: abaixo de 50%'}
+              />
+              <IndicatorItem
                 icon={<ShieldCheck className="h-4 w-4" strokeWidth={1.5} />}
                 label="Cobertura do Serviço da Dívida"
                 value={indicators.coberturaServicoDivida}
                 format={v => `${v.toFixed(2)}x`}
                 status={dcsrStatus}
                 hint={indicators.coberturaServicoDivida === null ? 'Sem amortizações no mês' : 'Referência saudável: acima de 1,5x'}
+              />
+              <IndicatorItem
+                icon={<Wallet className="h-4 w-4" strokeWidth={1.5} />}
+                label="ROE — Retorno sobre Patrimônio"
+                value={indicators.roe}
+                format={v => `${v.toFixed(1)}% a.a.`}
+                status={roeStatus}
+                hint={
+                  indicators.roe === null
+                    ? 'Requer Balanço Patrimonial com Patrimônio Líquido positivo'
+                    : indicators.meses12mDisponiveis < 12
+                      ? `Anualizado a partir de ${indicators.meses12mDisponiveis} ${indicators.meses12mDisponiveis === 1 ? 'mês' : 'meses'} de dados. Referência: acima de 15% a.a.`
+                      : 'Lucro 12m ÷ Patrimônio Líquido. Referência: acima de 15% a.a.'
+                }
+              />
+              <IndicatorItem
+                icon={<Clock className="h-4 w-4" strokeWidth={1.5} />}
+                label="Ciclo Financeiro"
+                value={indicators.cicloFinanceiro}
+                format={v => `${v.toFixed(0)} dias`}
+                status="neutral"
+                hint="Requer estrutura de Contas a Receber e Contas a Pagar (Fase futura)"
               />
             </div>
           )}

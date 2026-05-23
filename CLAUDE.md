@@ -174,7 +174,7 @@ Fase 4 — Open Finance via **Pluggy** **100% concluída** (4.0, 4.A, 4.B, 4.C, 
 
 Fase 3 — Dimensões Analíticas + Categorização com IA **100% concluída** (3.0, 3A, 3B, 3C, 3D, 3E, 3F + parser LLM + migrations 0009/0010/0011/0012 todas aplicadas no Supabase). Plano de contas com 15 tipos (10 DRE + 5 BP), estrutura 3 níveis (Tipo → Pai → Filho), import CSV das 4 dimensões, categorização IA em 4 camadas, gestão completa em `/configuracoes`.
 
-**Próximas sessões:** a definir (sessões pendentes da Fase 6 concluídas; aguardando próximas direções).
+**Próximas sessões:** a definir (deliverables originais da Fase 6 restantes: top 5 categorias do mês + alertas no dashboard).
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
@@ -188,6 +188,41 @@ Atualmente o system prompt do expert inclui apenas os 4 KPIs do dashboard. Numa 
 - BP (ativo/passivo circulante) quando a org tiver lançamentos classificados nesses tipos
 - Histórico de N meses para permitir análise de tendência ("você perguntou sobre a queda de margem em março...")
 - `organization_facts` curados como memória de longo prazo do expert
+
+---
+
+### ✅ Sessão — Indicadores faltantes da Fase 6 (Liquidez Seca, Endividamento, ROE, Ciclo Financeiro) *(concluída)*
+
+**Contexto:** o card "Indicadores Financeiros" do `/dashboard` tinha apenas 3 indicadores entregues na Sessão 5.D (Margem EBITDA, Liquidez Corrente, Cobertura do Serviço da Dívida). O plano original da Fase 6 listava outros 4 indicadores: Liquidez Seca, Endividamento Geral, Ciclo Financeiro e ROE. Esta sessão completa o deliverable de indicadores.
+
+**O que mudou:**
+
+- **`src/server/dashboard.ts`** — `FinancialIndicators` ganhou 4 campos novos (`liquidezSeca`, `endividamentoGeral`, `cicloFinanceiro`, `roe`) + `meses12mDisponiveis` (1..12). `getFinancialIndicators` foi reescrito:
+  - **Liquidez Seca:** `(Ativo Circulante − Estoque) / Passivo Circulante`. Identificação de estoque via `ILIKE '%estoque%'` em `c.name OR p.name` dentro de `c.type = 'ativo_circulante'`. Se org não tem estoque cadastrado, fallback equivale à Liquidez Corrente.
+  - **Endividamento Geral:** `(Passivo Circulante + Passivo Não-Circulante) / (Ativo Circulante + Ativo Não-Circulante)`. Retorna proporção 0..1; exibido como % no client. Direção invertida (menor é melhor).
+  - **ROE:** `(Lucro Líquido 12m anualizado) / Patrimônio Líquido × 100`. Anualização proporcional quando há menos de 12 meses (`lucro × 12 / meses_disponíveis`). PL: prioriza valores em `c.type = 'patrimonio_liquido'`; se zero, usa identidade contábil `Ativo Total − Passivo Total`. Retorna null se PL ≤ 0.
+  - **Ciclo Financeiro:** sempre `null` no MVP — requer estrutura de Contas a Receber/Pagar para calcular PMR + PME − PMP. Hint do indicador explicita "(Fase futura)".
+
+- **`src/app/(authenticated)/dashboard/dashboard-client.tsx`** — 4 novos `IndicatorItem`:
+  - Liquidez Seca (ícone `Activity`, thresholds 1.0/0.7, "higher is better")
+  - Endividamento Geral (ícone `Scale`, thresholds 50%/70%, "lower is better" via novo helper `indicatorStatusInverse`)
+  - ROE (ícone `Wallet`, thresholds 15%/8% a.a., hint dinâmico cita o número de meses quando < 12)
+  - Ciclo Financeiro (ícone `Clock`, status sempre `neutral`, hint fixo)
+  - `indicatorStatusInverse(value, goodMax, warnMax)` adicionado para indicadores onde "menor é melhor".
+  - `allNull` estendido para incluir todos os 6 indicadores antes de mostrar o fallback "Sem dados suficientes".
+
+**Convenções de threshold:**
+
+| Indicador | Bom | Atenção | Direção |
+|---|---|---|---|
+| Margem EBITDA | ≥ 15% | ≥ 5% | Maior é melhor |
+| Liquidez Corrente | ≥ 1,5x | ≥ 1,0x | Maior é melhor |
+| Liquidez Seca | ≥ 1,0x | ≥ 0,7x | Maior é melhor |
+| Cobertura Serviço Dívida | ≥ 1,5x | ≥ 1,0x | Maior é melhor |
+| Endividamento Geral | ≤ 50% | ≤ 70% | Menor é melhor |
+| ROE | ≥ 15% a.a. | ≥ 8% a.a. | Maior é melhor |
+
+TypeScript: 0 erros. ESLint: 0 warnings.
 
 ---
 
