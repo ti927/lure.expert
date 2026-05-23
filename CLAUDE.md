@@ -172,7 +172,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 **Sessões Fase 8:**
 - ✅ 8.0: Schema `acquirer_connections`, migration 0023, `acquirer-provider.ts` (Abstract + Stone/Cielo/Rede stubs), server actions CRUD, aba Adquirentes em `/contas`
-- 🔲 8.1: Stone connector real (API REST + job sync)
+- ✅ 8.1: Stone connector real (`stone-client.ts` OAuth2, `StoneProvider` implementado, job `sync-acquirer-item`, cron `sync-all-acquirer-items`)
 - 🔲 8.2: Upload de extratos de adquirentes (CSV/PDF fallback)
 - 🔲 8.3: Cielo connector
 - 🔲 8.4: Reconciliação lote bancário × vendas individuais
@@ -212,6 +212,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Fase 8 — Adquirentes (em andamento)** | |
+| 8.1 | `stone-client.ts` (OAuth2 client_credentials, token cache, `fetchSales` paginado) + `StoneProvider` implementado + job `sync-acquirer-item` (ensure-data-source, insert em transactions, trigger categorização) + cron `sync-all-acquirer-items` |
 | 8.0 | Schema `acquirer_connections` + migration 0023 + `acquirer-provider.ts` (stubs Stone/Cielo/Rede/PagBank) + server actions CRUD + aba Adquirentes em `/contas` |
 | **Fase 7 — SEFAZ / NF-e (concluída)** | |
 | 7.4 | Painel `/nfe` com cards AR/AP, tabela DATA_TABLE_PATTERN, sidebar badge pendentes, categorização camada 0.5 com `NfContext` |

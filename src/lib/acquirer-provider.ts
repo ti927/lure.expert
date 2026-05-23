@@ -1,4 +1,5 @@
 import type { AcquirerConnection } from '@/db/schema'
+import { StoneClient } from './stone-client'
 
 // ─────────────────────────────────────────
 // Tipos públicos
@@ -57,31 +58,49 @@ export class AbstractAcquirerProvider implements AcquirerProvider {
 }
 
 // ─────────────────────────────────────────
-// Stone provider (estrutura para integração — Sessão 8.1)
+// Stone provider — integração real via StoneClient
 // Documentação: https://docs.stone.com.br/
 // ─────────────────────────────────────────
 
 export class StoneProvider implements AcquirerProvider {
-  private readonly apiKey: string
-  private readonly baseUrl: string
+  private readonly client: StoneClient
 
-  constructor(apiKey: string, environment: 'producao' | 'sandbox') {
-    this.apiKey = apiKey
-    this.baseUrl = environment === 'producao'
-      ? 'https://api.openbank.stone.com.br'
-      : 'https://sandbox-api.openbank.stone.com.br'
+  constructor(clientId: string, clientSecret: string, environment: 'producao' | 'sandbox') {
+    this.client = new StoneClient(clientId, clientSecret, environment)
   }
 
   async fetchSales(
-    _merchantId: string,
-    _fromDate: string,
-    _toDate: string,
-    _cursor?: string,
+    merchantId: string,
+    fromDate: string,
+    toDate: string,
+    cursor?: string,
   ): Promise<AcquirerSyncResult> {
-    // TODO Sessão 8.1: implementar autenticação OAuth2 + paginação Stone
-    void this.apiKey
-    void this.baseUrl
-    return { sales: [], hasMore: false, nextCursor: null }
+    const page = await this.client.fetchSales(merchantId, fromDate, toDate, cursor)
+
+    const sales: AcquirerSale[] = page.items
+      .filter(item => item.status === 'approved')
+      .map(item => ({
+        externalId: item.id,
+        merchantId,
+        saleDate: item.created_at.split('T')[0],
+        settlementDate: item.settlement_date,
+        grossAmount: (item.amount / 100).toFixed(2),
+        netAmount: (item.net_amount / 100).toFixed(2),
+        mdrRate: item.mdr_rate != null ? String(item.mdr_rate) : null,
+        cardBrand: item.brand ?? null,
+        cardType: item.type ?? null,
+        installments: item.installments || null,
+        authorizationCode: item.authorization_code ?? null,
+        nsu: item.nsu ?? null,
+        description: item.description ?? null,
+        metadata: {
+          status: item.status,
+          mdrFee: (item.mdr_fee / 100).toFixed(2),
+          installments: item.installments,
+        },
+      }))
+
+    return { sales, hasMore: page.has_more, nextCursor: page.cursor }
   }
 }
 
@@ -188,7 +207,7 @@ export function createAcquirerProvider(
 
   switch (connection.provider) {
     case 'stone':
-      return new StoneProvider(apiKey, env)
+      return new StoneProvider(apiKey, apiSecret, env)
     case 'cielo':
       return new CieloProvider(apiKey, apiSecret, env)
     case 'rede':

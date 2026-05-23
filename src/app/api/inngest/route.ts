@@ -8,6 +8,8 @@ import { reconcilePluggyTransactions } from '@/jobs/reconcile-pluggy-transaction
 import { syncSefazItem } from '@/jobs/sync-sefaz-item'
 import { syncAllSefazItems } from '@/jobs/sync-all-sefaz-items'
 import { reconcileInvoices } from '@/jobs/reconcile-invoices'
+import { syncAcquirerItem } from '@/jobs/sync-acquirer-item'
+import { syncAllAcquirerItems } from '@/jobs/sync-all-acquirer-items'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -20,5 +22,7 @@ export const { GET, POST, PUT } = serve({
     syncSefazItem,
     syncAllSefazItems,
     reconcileInvoices,
+    syncAcquirerItem,
+    syncAllAcquirerItems,
   ],
 })
