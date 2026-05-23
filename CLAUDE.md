@@ -168,7 +168,15 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 7 — Integração SEFAZ / NF-e **100% concluída** (7.1 ✅ 7.2 ✅ 7.3 ✅ 7.4 ✅). Fase 6 **100% concluída**. Todas as fases anteriores concluídas.
+**Status:** Fase 8 — Connectors de Cartão e Adquirentes **em andamento** (8.0 ✅). Fases 0–7 **100% concluídas**.
+
+**Sessões Fase 8:**
+- ✅ 8.0: Schema `acquirer_connections`, migration 0023, `acquirer-provider.ts` (Abstract + Stone/Cielo/Rede stubs), server actions CRUD, aba Adquirentes em `/contas`
+- 🔲 8.1: Stone connector real (API REST + job sync)
+- 🔲 8.2: Upload de extratos de adquirentes (CSV/PDF fallback)
+- 🔲 8.3: Cielo connector
+- 🔲 8.4: Reconciliação lote bancário × vendas individuais
+- 🔲 8.5: UX polish + MDR calculado
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
@@ -177,6 +185,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 - ✅ `db/migrations/rls/0020_category_opex_capex.sql` — `opex_capex text NOT NULL DEFAULT 'opex'` em `categories`; seed defaults CAPEX para tipos 8/9/10
 - ✅ `db/migrations/rls/0021_staging_effective_date.sql` — `effective_date text` em `transactions_staging`
 - ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
+- 🔲 `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS (aplicar no Supabase Studio)
 
 **Convenção crítica — date vs effective_date em `transactions`:**
 - `date` (competência) → alimenta **DRE** e **BP** (quando o fato econômico ocorreu)
@@ -202,6 +211,8 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Fase 8 — Adquirentes (em andamento)** | |
+| 8.0 | Schema `acquirer_connections` + migration 0023 + `acquirer-provider.ts` (stubs Stone/Cielo/Rede/PagBank) + server actions CRUD + aba Adquirentes em `/contas` |
 | **Fase 7 — SEFAZ / NF-e (concluída)** | |
 | 7.4 | Painel `/nfe` com cards AR/AP, tabela DATA_TABLE_PATTERN, sidebar badge pendentes, categorização camada 0.5 com `NfContext` |
 | 7.3 | Job `reconcile-invoices` (score pg_trgm+valor+data, thresholds 0.85/0.50), server actions `listInvoices`/`getInvoiceStats`/`manualReconcile` |

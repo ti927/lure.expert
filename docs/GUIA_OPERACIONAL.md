@@ -397,6 +397,49 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 
 ---
 
+### FASE 8 — Connectors de Cartão e Adquirentes (5-6 sessões)
+
+**Texto pro CLAUDE.md:**
+> Iniciando Fase 8 — Connectors de Adquirentes. Stone, Cielo, Rede, PagBank via API REST + fallback de upload CSV/PDF. Reconciliação lote bancário × vendas individuais. Tabela `acquirer_connections` (padrão sefaz_connections). Provider abstrato com stubs por provedor.
+
+**✅ Sessão 8.0 — Scaffolding (concluída):**
+- `db/schema/acquirer-connections.ts`: tabela `acquirer_connections` com provider, merchantId, apiKeyEncrypted, apiSecretEncrypted, environment, status, lastSyncAt, metadata
+- `db/migrations/rls/0023_acquirer_connections.sql`: CREATE TABLE + índices + RLS 4 políticas
+- `src/lib/acquirer-provider.ts`: interface `AcquirerProvider`, `AcquirerSale`, `AbstractAcquirerProvider` stub, stubs StoneProvider/CieloProvider/RedeProvider/PagBankProvider, factory `createAcquirerProvider()`
+- `src/server/acquirer-connections.ts`: 6 server actions — `getAcquirerConnections`, `createAcquirerConnection`, `updateAcquirerConnection`, `deleteAcquirerConnection`, `triggerAcquirerSync`, `getAcquirerConnectionById`
+- `/contas`: nova aba "Adquirentes" com card por conexão, dialog de criação, seletor de provedor
+- DoD: UI renderiza aba, dialog abre com 4 provedores disponíveis, `npm run build` limpo
+
+**Sessão 8.1 — Stone connector:**
+- `src/lib/stone-client.ts`: cliente REST para Stone API (OAuth2 + sandbox)
+- `StoneProvider` em `acquirer-provider.ts` implementado com `fetchSales()`
+- `src/jobs/sync-acquirer-item.ts`: job Inngest `sync-acquirer-item`, busca vendas por `fromDate`, insere em `transactions` com `provider='stone'`, dispara categorização
+- Cron diário `sync-all-acquirer-items.ts` (mesma estrutura dos outros crons)
+- DoD: conectar Stone sandbox, ver transações aparecerem em `/transacoes`
+
+**Sessão 8.2 — Upload de extratos de adquirentes (fallback CSV/PDF):**
+- Parser específico para relatório de liquidação Stone CSV (`/lib/parsers/acquirer-stone.ts`)
+- Parser genérico para extratos Cielo/Rede em CSV
+- Integração com pipeline de upload existente: novo `sourceType='acquirer'`
+- DoD: upload de relatório Stone CSV → staging → revisão → transactions
+
+**Sessão 8.3 — Cielo connector:**
+- `src/lib/cielo-client.ts`: cliente REST Cielo (API Key + sandbox)
+- `CieloProvider` implementado, reutiliza job `sync-acquirer-item`
+- DoD: idem Stone para Cielo sandbox
+
+**Sessão 8.4 — Reconciliação lote × vendas individuais:**
+- Job `reconcile-acquirer-transactions.ts`: match entre depósito líquido Pluggy (provider='pluggy', type='bank') e vendas individuais do adquirente (mesmo dia, valor total ≈ soma das vendas − MDR)
+- Score por valor líquido + data + provider metadata; threshold 0.85 auto, 0.50 revisão
+- DoD: lote de R$ X da Stone no banco casado com N vendas individuais do mesmo dia
+
+**Sessão 8.5 — UX polish + MDR:**
+- Cards de conexão em `/contas/adquirentes` com: provedor logo, merchantId, última sync, volume do mês, MDR médio calculado
+- Botão "Reconciliar agora" manual
+- DoD: tela mostra saúde de todas as conexões de adquirentes com métricas reais
+
+---
+
 ### FASE 9 — Agente Proativo, Fechamento Mensal e Notificações (4-6 sessões)
 
 **Texto pro CLAUDE.md:**

@@ -119,7 +119,7 @@ export const syncSefazItem = inngest.createFunction(
         if (conn.autoManifest && ids.length > 0) {
           await step.run('manifest-entrada', async () => {
             // Busca as chaves das NFs recém inseridas para manifestar
-            const newInvoices = nfsEntrada.filter(nf => {
+            const newInvoices = nfsEntrada.filter(_nf => {
               // Manifesta apenas NFs novas (ids inseridos, não duplicatas)
               return ids.length > 0 // simplificado — manifesta o lote completo de novas
             })

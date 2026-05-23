@@ -13,7 +13,7 @@ import { Check, ChevronsUpDown, ExternalLink } from 'lucide-react'
 // Constantes
 // ─────────────────────────────────────────
 
-const PAGE_SIZE = 100
+const _PAGE_SIZE = 100
 const STORAGE_KEY = 'lure:nfe:filters'
 
 const STATUS_OPTIONS = [

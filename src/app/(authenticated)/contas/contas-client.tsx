@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
 import {
   Landmark, Plus, RefreshCw, Loader2, AlertCircle, GitCompare,
-  Trash2, Check, RotateCcw, ChevronLeft, ChevronRight, Pencil,
+  Trash2, Check, RotateCcw, ChevronLeft, ChevronRight, Pencil, CreditCard,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -51,6 +51,8 @@ import {
 import { deleteTransactions } from '@/server/transactions'
 import { createClient } from '@/lib/supabase/client'
 import type { PendingSource, OrgConnection } from '@/server/connections'
+import { AdquirentesTab } from './adquirentes-tab'
+import type { AcquirerConnectionWithEntity } from '@/server/acquirer-connections'
 
 const PluggyConnect = dynamic(
   () => import('react-pluggy-connect').then(m => m.PluggyConnect),
@@ -65,9 +67,10 @@ interface ContasClientProps {
   reconciliationCount: number
   pendingSources: PendingSource[]
   orgId: string
+  acquirerConnections: AcquirerConnectionWithEntity[]
 }
 
-export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources, orgId }: ContasClientProps) {
+export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources, orgId, acquirerConnections }: ContasClientProps) {
   const router = useRouter()
   const [connectToken, setConnectToken] = useState<string | null>(null)
   const [isWidgetOpen, setIsWidgetOpen] = useState(false)
@@ -183,6 +186,15 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="adquirentes">
+            <CreditCard className="mr-1.5 h-3.5 w-3.5" />
+            Adquirentes
+            {acquirerConnections.length > 0 && (
+              <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-slate-200 px-1.5 text-[11px] font-semibold text-slate-700 tabular-nums">
+                {acquirerConnections.length}
+              </span>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         {/* Aba: Contas conectadas */}
@@ -237,6 +249,11 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
           ) : (
             <PendingExtractTab sources={pendingSources} />
           )}
+        </TabsContent>
+
+        {/* Aba: Adquirentes */}
+        <TabsContent value="adquirentes" className="mt-4">
+          <AdquirentesTab connections={acquirerConnections} />
         </TabsContent>
       </Tabs>
     </>
