@@ -184,6 +184,59 @@ Todas as queries de caixa usam `COALESCE(t.effective_date, t.date)` em SELECT, W
 
 ---
 
+## Decisão 8 — Score de reconciliação NF-e × Transaction (`reconcile-invoices.ts`)
+
+**Contexto:** o job `reconcile-invoices` cruza NFs inseridas via SEFAZ com transações bancárias existentes.
+
+**Fórmula do score composto (0.0–1.0):**
+- **40%** `pg_trgm similarity(tx.description, nome_contraparte)` — destinatário para NF saída; emitente para NF entrada
+- **40%** match de valor binário: `1.0` se `amount` dentro de ±0.5% do `total_nf`; `0.0` caso contrário
+- **20%** proximidade de data linear: `1.0` em 0 dias de diferença → `0.0` em 7 dias
+
+**Filtro de candidatas:** mesma org, direção coerente (saída→inflow, entrada→outflow), amount ±0.5%, data ±7 dias, `status='confirmed'`, `invoice_id IS NULL`.
+
+**Thresholds de decisão:**
+- ≥ 0.85 → casa automático: `invoice.status='casada'`, `invoice.transactionId=tx.id`, `transactions.invoiceId=invoice.id`, **`transactions.date=invoice.dataEmissao`**
+- 0.50–0.84 → `invoice.status='pendente_revisao'` (fila manual no painel /nfe)
+- < 0.50 → invoice fica `'nova'` (A/R ou A/P em aberto, sem vínculo)
+
+**Arquivo:** `src/jobs/reconcile-invoices.ts`
+
+---
+
+## Decisão 9 — `transactions.date` atualizado na reconciliação NF-e
+
+**Contexto:** ao reconciliar uma NF com uma transação bancária, a data do extrato (data de caixa) é substituída pela data de emissão da NF (data de competência) no campo `transactions.date`.
+
+**Por que:** o DRE é baseado em competência — o fato econômico (venda/compra) ocorreu na emissão da NF, não quando o banco registrou o crédito/débito. Sem essa atualização, o DRE refletiria a data do extrato, que pode diferir da NF em dias ou semanas.
+
+**O que muda e o que NÃO muda:**
+- `transactions.date` ← `invoice.dataEmissao` (atualizado na reconciliação)
+- `transactions.effectiveDate` ← **não alterado** (permanece a data do extrato bancário, para o fluxo de caixa)
+
+**Impacto:** DRE de competência passa a refletir a data real da NF. O fluxo de caixa (que usa `COALESCE(effective_date, date)`) não é afetado porque `effectiveDate` é preservado.
+
+**Arquivos:** `src/jobs/reconcile-invoices.ts` (automático) e `src/server/invoices.ts:manualReconcile` (manual).
+
+---
+
+## Decisão 10 — Isolamento de domínio bp/dre no motor de categorização
+
+**Contexto:** o sistema tem 15 tipos de categoria — 10 DRE e 5 BP. Uma regra ou sugestão que atribui uma categoria BP a uma transação de extrato DRE seria semanticamente incorreta.
+
+**Implementação:** `categorizeTransaction(tx, ctx, documentDomain)` recebe o domínio do documento (`'dre'` | `'bp'`), derivado de `documents.reportType` via `domainFromReportType()`.
+
+**Regra em cada camada:**
+1. Regras (`applyRules`): ignora regras cujo `targetCategoryId` pertença ao domínio oposto
+2. Recorrência: filtra por `inArray(categoryId, domainCategoryIds)` — só aceita precedentes do mesmo domínio
+3. LLM (Haiku): prompt inclui a nota `CONTEXTO: DRE` ou `CONTEXTO: BP`; lista de categorias disponíveis já filtrada pelo domínio
+
+**Por que não uma restrição no banco:** documentos diferentes da mesma org podem ter domínios diferentes (extrato bancário = DRE; upload de BP gerencial = BP). A restrição é por transação, não por org.
+
+**Arquivo:** `src/lib/categorizer.ts` — `loadOrgContext` carrega todas as categorias ativas; `categorizeTransaction` filtra para o domínio antes de executar as 4 camadas.
+
+---
+
 ## Decisão 4 — Policy SELECT de memberships sem auto-referência (Sessão 1.8)
 
 **Contexto:** A policy SELECT original de `memberships` continha uma subquery na própria tabela:
