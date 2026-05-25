@@ -234,6 +234,12 @@ export default function ReviewClient({ documentId, initialData }: Props) {
       if (result.skipped > 0) {
         toast.warning(`${result.skipped} linha${result.skipped > 1 ? 's ignoradas' : ' ignorada'} por dados incompletos (sem data, valor ou direção).`)
       }
+      if (result.inserted > 0 && result.categorizationDispatched === false) {
+        toast.warning(
+          `${result.inserted} transações importadas, mas a categorização não foi iniciada. Vá em /transações e clique em "Categorizar agora".`,
+          { duration: 15000 },
+        )
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erro ao importar transações')
     } finally {

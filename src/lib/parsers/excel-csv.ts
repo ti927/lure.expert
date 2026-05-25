@@ -297,21 +297,21 @@ function deriveDirection(
 export async function parseExcelOrCsv(
   buffer: Buffer,
   mimeType?: string,
-): Promise<{ rows: StagingRow[]; warnings: string[] }> {
+): Promise<{ rows: StagingRow[]; warnings: string[]; detectedHints: string[] }> {
   const warnings: string[] = []
 
   let tabular: string[][]
   try {
     tabular = readTabular(buffer, mimeType)
   } catch (err) {
-    return { rows: [], warnings: [`Falha ao ler arquivo: ${err instanceof Error ? err.message : String(err)}`] }
+    return { rows: [], warnings: [`Falha ao ler arquivo: ${err instanceof Error ? err.message : String(err)}`], detectedHints: [] }
   }
 
   if (tabular.length === 0) {
-    return { rows: [], warnings: ['Arquivo sem linhas legíveis'] }
+    return { rows: [], warnings: ['Arquivo sem linhas legíveis'], detectedHints: [] }
   }
   if (tabular.length === 1) {
-    return { rows: [], warnings: ['Arquivo só tem cabeçalho, sem linhas de dados'] }
+    return { rows: [], warnings: ['Arquivo só tem cabeçalho, sem linhas de dados'], detectedHints: [] }
   }
 
   const header = tabular[0].map(c => String(c ?? ''))
@@ -322,7 +322,7 @@ export async function parseExcelOrCsv(
 
   if (mapping.date === null && mapping.amount === null) {
     warnings.push('Não conseguimos identificar colunas de data e valor. Verifique se o cabeçalho está na primeira linha e usa nomes reconhecíveis (Data, Valor, etc.).')
-    return { rows: [], warnings }
+    return { rows: [], warnings, detectedHints: [] }
   }
 
   if (mapping.date === null) warnings.push('Coluna de data não detectada — linhas terão date=null')
@@ -372,5 +372,6 @@ export async function parseExcelOrCsv(
     }
   })
 
-  return { rows: stagingRows, warnings }
+  const detectedHints = hintIdxs.map(i => (header[i] || `col_${i}`).trim()).filter(Boolean)
+  return { rows: stagingRows, warnings, detectedHints }
 }

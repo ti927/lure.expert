@@ -257,18 +257,24 @@ export async function approveAndInsert(documentId: string) {
     insertedIds.push(...rows.map(r => r.id))
   }
 
-  // Dispara categorização assíncrona via Inngest (não bloqueia a resposta)
+  // Dispara categorização assíncrona via Inngest. As transactions já estão
+  // gravadas; se o send falhar, NÃO desfazemos os inserts. Mas sinalizamos
+  // visivelmente pro frontend pra usuário poder rodar "Categorizar agora"
+  // depois — em vez de silenciar e deixar a tabela cheia de categorias em
+  // branco sem nenhuma pista do motivo.
+  let categorizationDispatched = true
   if (insertedIds.length > 0) {
     try {
       await inngest.send({
         name: 'transaction/batch-inserted',
         data: { transactionIds: insertedIds, organizationId },
       })
-    } catch {
-      // Não bloqueia a importação se o Inngest estiver offline
+    } catch (err) {
+      console.error('[approveAndInsert] inngest.send falhou:', err)
+      categorizationDispatched = false
     }
   }
 
   revalidatePath(`/upload/${documentId}/review`)
-  return { inserted: valid.length, skipped, total: approved.length }
+  return { inserted: valid.length, skipped, total: approved.length, categorizationDispatched }
 }

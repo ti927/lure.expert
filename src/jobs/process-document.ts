@@ -104,16 +104,21 @@ export const processDocument = inngest.createFunction(
           }
         }
 
+        const detectedCategoryHints = 'detectedHints' in parsed ? parsed.detectedHints : []
+
         await db
           .update(documents)
           .set({
             extractionStatus: 'completed',
             extractionMethod: 'llm',
-            extractedData: { warnings: parsed.warnings },
+            extractedData: {
+              warnings: parsed.warnings,
+              ...(detectedCategoryHints.length > 0 ? { detectedCategoryHints } : {}),
+            },
           })
           .where(eq(documents.id, documentId))
 
-        return { rowCount: parsed.rows.length, warnings: parsed.warnings }
+        return { rowCount: parsed.rows.length, warnings: parsed.warnings, detectedCategoryHints }
       } catch (err) {
         await db
           .update(documents)
