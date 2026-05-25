@@ -429,8 +429,10 @@ export async function triggerCategorization(): Promise<{ triggered: boolean; cou
       name: 'transaction/batch-inserted',
       data: { transactionIds: uncategorized.map(t => t.id), organizationId, forceRun: true },
     })
-  } catch {
-    return { error: 'Não foi possível iniciar a categorização. Verifique se o Inngest está rodando.' }
+  } catch (err) {
+    console.error('[triggerCategorization] inngest.send falhou:', err)
+    const detail = err instanceof Error ? err.message : String(err)
+    return { error: `Não foi possível iniciar a categorização: ${detail}` }
   }
 
   return { triggered: true, count: uncategorized.length }
