@@ -12,7 +12,7 @@ import {
   dataSources,
 } from '@/db/schema'
 import { eq, and, isNotNull, inArray, isNull, sql } from 'drizzle-orm'
-import { inngest } from '@/lib/inngest'
+import { sendCategorizationEvents } from '@/lib/inngest'
 
 const SOURCE_LABELS: Record<string, string> = {
   bank: 'Extrato bancário',
@@ -265,12 +265,9 @@ export async function approveAndInsert(documentId: string) {
   let categorizationDispatched = true
   if (insertedIds.length > 0) {
     try {
-      await inngest.send({
-        name: 'transaction/batch-inserted',
-        data: { transactionIds: insertedIds, organizationId },
-      })
+      await sendCategorizationEvents(insertedIds, organizationId)
     } catch (err) {
-      console.error('[approveAndInsert] inngest.send falhou:', err)
+      console.error('[approveAndInsert] sendCategorizationEvents falhou:', err)
       categorizationDispatched = false
     }
   }

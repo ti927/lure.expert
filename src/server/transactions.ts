@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships, transactions, categorizationRules, categories, documents, costCenters, businessUnits, legalEntities, dataSources } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
-import { inngest } from '@/lib/inngest'
+import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
 
 async function getAuthContext() {
@@ -425,12 +425,9 @@ export async function triggerCategorization(): Promise<{ triggered: boolean; cou
   if (uncategorized.length === 0) return { triggered: false, count: 0 }
 
   try {
-    await inngest.send({
-      name: 'transaction/batch-inserted',
-      data: { transactionIds: uncategorized.map(t => t.id), organizationId, forceRun: true },
-    })
+    await sendCategorizationEvents(uncategorized.map(t => t.id), organizationId, true)
   } catch (err) {
-    console.error('[triggerCategorization] inngest.send falhou:', err)
+    console.error('[triggerCategorization] sendCategorizationEvents falhou:', err)
     const detail = err instanceof Error ? err.message : String(err)
     return { error: `Não foi possível iniciar a categorização: ${detail}` }
   }
