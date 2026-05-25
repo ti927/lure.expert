@@ -56,7 +56,8 @@ function fileToText(buffer: Buffer, mimeType?: string): string {
   }
   // Remove BOM (U+FEFF) — se sobreviver, contamina o header de todos os chunks
   // e o fetch interno do SDK Anthropic falha em serializar caractere fora do Latin-1.
-  return text.replace(/^﻿/, '')
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
+  return text
 }
 
 function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
