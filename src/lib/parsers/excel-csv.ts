@@ -44,14 +44,19 @@ Regras:
 const CHUNK_SIZE = 120
 
 function fileToText(buffer: Buffer, mimeType?: string): string {
+  let text: string
   if (mimeType === 'text/plain' || mimeType === 'text/csv') {
-    return buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    text = buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  } else {
+    // Excel binário: converte primeira sheet para CSV puro
+    const wb = XLSX.read(buffer, { type: 'buffer', raw: true })
+    const sheetName = wb.SheetNames[0]
+    if (!sheetName) return ''
+    text = XLSX.utils.sheet_to_csv(wb.Sheets[sheetName])
   }
-  // Excel binário: converte primeira sheet para CSV puro
-  const wb = XLSX.read(buffer, { type: 'buffer', raw: true })
-  const sheetName = wb.SheetNames[0]
-  if (!sheetName) return ''
-  return XLSX.utils.sheet_to_csv(wb.Sheets[sheetName])
+  // Remove BOM (U+FEFF) — se sobreviver, contamina o header de todos os chunks
+  // e o fetch interno do SDK Anthropic falha em serializar caractere fora do Latin-1.
+  return text.replace(/^﻿/, '')
 }
 
 function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
