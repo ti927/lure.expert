@@ -342,7 +342,7 @@ export async function classifyTransaction(id: string, data: DimensionData) {
 export async function deleteTransactions(ids: string[]) {
   const { organizationId } = await getAuthContext()
   if (ids.length === 0) return { error: 'Nenhuma transação selecionada.' }
-  if (ids.length > 500) return { error: 'Máximo de 500 transações por operação.' }
+  if (ids.length > 1000) return { error: 'Máximo de 1000 transações por operação.' }
 
   await db
     .delete(transactions)
