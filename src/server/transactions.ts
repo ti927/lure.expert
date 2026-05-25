@@ -8,6 +8,7 @@ import { db } from '@/db'
 import { memberships, transactions, categorizationRules, categories, documents, costCenters, businessUnits, legalEntities, dataSources } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { inngest } from '@/lib/inngest'
+import { sanitizePageSize } from '@/lib/transactions-page-size'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -24,13 +25,6 @@ async function getAuthContext() {
   return { userId: user.id, organizationId: membership.organizationId }
 }
 
-export const ALLOWED_PAGE_SIZES = [100, 500, 1000] as const
-export type AllowedPageSize = typeof ALLOWED_PAGE_SIZES[number]
-const DEFAULT_PAGE_SIZE: AllowedPageSize = 100
-
-function sanitizePageSize(n: number | undefined): AllowedPageSize {
-  return ALLOWED_PAGE_SIZES.includes(n as AllowedPageSize) ? (n as AllowedPageSize) : DEFAULT_PAGE_SIZE
-}
 
 // Parseia filtros multi-select: "id1,id2,__none__,__classified__" → { ids, includeNone, includeClassified }
 function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean; includeClassified: boolean } {

@@ -14,7 +14,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
-import { classifyTransaction, deleteTransactions, triggerCategorization, ALLOWED_PAGE_SIZES } from '@/server/transactions'
+import { classifyTransaction, deleteTransactions, triggerCategorization } from '@/server/transactions'
+import { ALLOWED_PAGE_SIZES } from '@/lib/transactions-page-size'
 import { ColHeader } from '@/components/transacoes-shared/col-header'
 import {
   MultiSelectFilter, AmountFilter, DescFilter, DirectionFilter, ReportTypeFilter,
