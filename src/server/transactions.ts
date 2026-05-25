@@ -24,7 +24,13 @@ async function getAuthContext() {
   return { userId: user.id, organizationId: membership.organizationId }
 }
 
-const PAGE_SIZE = 100
+export const ALLOWED_PAGE_SIZES = [100, 500, 1000] as const
+export type AllowedPageSize = typeof ALLOWED_PAGE_SIZES[number]
+const DEFAULT_PAGE_SIZE: AllowedPageSize = 100
+
+function sanitizePageSize(n: number | undefined): AllowedPageSize {
+  return ALLOWED_PAGE_SIZES.includes(n as AllowedPageSize) ? (n as AllowedPageSize) : DEFAULT_PAGE_SIZE
+}
 
 // Parseia filtros multi-select: "id1,id2,__none__,__classified__" → { ids, includeNone, includeClassified }
 function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean; includeClassified: boolean } {
@@ -56,6 +62,7 @@ function buildMultiFilterCondition(
 
 interface GetTransactionsParams {
   page?: number
+  pageSize?: number
   q?: string
   from?: string
   to?: string
@@ -74,8 +81,9 @@ interface GetTransactionsParams {
 
 export async function getTransactions(params: GetTransactionsParams = {}) {
   const { organizationId } = await getAuthContext()
-  const { page = 1, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, accountId, sort, reportType, amountMin, amountMax } = params
-  const offset = (page - 1) * PAGE_SIZE
+  const { page = 1, pageSize, q, from, to, direction, category, costCenter, businessUnit, legalEntity, documentId, accountId, sort, reportType, amountMin, amountMax } = params
+  const size = sanitizePageSize(pageSize)
+  const offset = (page - 1) * size
 
   const conditions: SQL[] = [
     eq(transactions.organizationId, organizationId),
@@ -169,7 +177,7 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     .leftJoin(documents, eq(transactions.documentId, documents.id))
 
   const [rows, [{ total }], [totals]] = await Promise.all([
-    baseQuery.where(whereClause).orderBy(...orderBy).limit(PAGE_SIZE).offset(offset),
+    baseQuery.where(whereClause).orderBy(...orderBy).limit(size).offset(offset),
     countQuery.where(whereClause),
     totalsQuery.where(whereClause),
   ])
@@ -210,7 +218,8 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   return {
     rows: enrichedRows,
     total,
-    pages: Math.ceil(total / PAGE_SIZE),
+    pages: Math.ceil(total / size),
+    pageSize: size,
     page,
     totals: { inflow: totals.inflow, outflow: totals.outflow },
   }

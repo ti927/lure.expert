@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
-import { classifyTransaction, deleteTransactions, triggerCategorization } from '@/server/transactions'
+import { classifyTransaction, deleteTransactions, triggerCategorization, ALLOWED_PAGE_SIZES } from '@/server/transactions'
 import { ColHeader } from '@/components/transacoes-shared/col-header'
 import {
   MultiSelectFilter, AmountFilter, DescFilter, DirectionFilter, ReportTypeFilter,
@@ -31,6 +31,7 @@ import type { LegalEntity } from '@/db/schema/legal-entities'
 
 interface SearchParams {
   page?: string
+  pageSize?: string
   q?: string
   from?: string
   to?: string
@@ -89,7 +90,7 @@ function formatBRL(amount: string | number): string {
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
 const LS_FILTERS_KEY = 'lure:transacoes:filters'
-const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'documentId', 'accountId', 'sort', 'reportType', 'amountMin', 'amountMax'] as const
+const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'documentId', 'accountId', 'sort', 'reportType', 'amountMin', 'amountMax', 'pageSize'] as const
 
 function saveFiltersToStorage(sp: SearchParams) {
   try {
@@ -507,8 +508,8 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
           </div>
       </div>
 
-      {/* ── Rodapé: totais selecionados + paginação ───────────────────────── */}
-      {(selectedIds.size > 0 || data.pages > 1) && (
+      {/* ── Rodapé: totais selecionados + page size + paginação ───────────── */}
+      {(selectedIds.size > 0 || data.pages > 1 || data.total > 100) && (
         <div className="shrink-0 flex items-center justify-between px-6 py-2 border-t gap-4">
           {/* Totais selecionados */}
           {selectedIds.size > 0 ? (
@@ -519,18 +520,31 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
               <span>Líquido <span className={cn('font-medium tabular-nums', selTotals.net >= 0 ? 'text-emerald-600' : 'text-rose-600')}>{selTotals.net >= 0 ? '' : '−'}{formatBRL(Math.abs(selTotals.net))}</span></span>
             </div>
           ) : <div />}
-          {/* Paginação */}
-          {data.pages > 1 && (
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => updateFilters({ page: String(data.page - 1) })} disabled={data.page <= 1}>
-                <ChevronLeft className="h-4 w-4 mr-1" />Anterior
-              </Button>
-              <span className="text-sm text-muted-foreground px-2">Página {data.page} de {data.pages}</span>
-              <Button variant="outline" size="sm" onClick={() => updateFilters({ page: String(data.page + 1) })} disabled={data.page >= data.pages}>
-                Próxima<ChevronRight className="h-4 w-4 ml-1" />
-              </Button>
+          {/* Page size + Paginação */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <label htmlFor="pageSize">Linhas por página</label>
+              <select
+                id="pageSize"
+                value={searchParams.pageSize ?? '100'}
+                onChange={e => updateFilters({ pageSize: e.target.value, page: undefined })}
+                className="rounded border border-border bg-background px-2 py-1 text-xs cursor-pointer hover:bg-muted/30 transition-colors"
+              >
+                {ALLOWED_PAGE_SIZES.map(n => <option key={n} value={String(n)}>{n}</option>)}
+              </select>
             </div>
-          )}
+            {data.pages > 1 && (
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => updateFilters({ page: String(data.page - 1) })} disabled={data.page <= 1}>
+                  <ChevronLeft className="h-4 w-4 mr-1" />Anterior
+                </Button>
+                <span className="text-sm text-muted-foreground px-2">Página {data.page} de {data.pages}</span>
+                <Button variant="outline" size="sm" onClick={() => updateFilters({ page: String(data.page + 1) })} disabled={data.page >= data.pages}>
+                  Próxima<ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

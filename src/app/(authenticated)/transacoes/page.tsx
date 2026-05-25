@@ -12,6 +12,7 @@ import TransacoesClient from './transacoes-client'
 
 interface SearchParams {
   page?: string
+  pageSize?: string
   q?: string
   from?: string
   to?: string
@@ -34,10 +35,12 @@ interface Props {
 
 export default async function TransacoesPage({ searchParams }: Props) {
   const page = Math.max(1, Number(searchParams.page) || 1)
+  const pageSize = Number(searchParams.pageSize) || undefined
 
   const [txData, cats, ccs, bus, les, dataSrcs, reviewCount] = await Promise.all([
     getTransactions({
       page,
+      pageSize,
       q: searchParams.q,
       from: searchParams.from,
       to: searchParams.to,
