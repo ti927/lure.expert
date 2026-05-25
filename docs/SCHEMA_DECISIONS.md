@@ -237,6 +237,29 @@ Todas as queries de caixa usam `COALESCE(t.effective_date, t.date)` em SELECT, W
 
 ---
 
+## Decisão 11 — Tabelas `fixed_assets` / `loans` / `equity_movements` dropadas, mas schema TS permanece
+
+**Contexto:** A migration `db/migrations/rls/0015_drop_bp_support_tables.sql` (Fase 6) executou `DROP TABLE IF EXISTS` em quatro tabelas — `fixed_assets`, `loans`, `equity_movements`, `inventory_snapshots`. Motivo registrado na própria migration: *"redesign do BP — os dados virão via importação de relatórios classificados como transações com categorias de tipo BP, igual ao fluxo do DRE. As tabelas são substituídas pelo modelo de transactions + document_type."*
+
+**Estado atual do código:**
+- ✅ Tabelas físicas: **não existem** no Supabase
+- ⚠️ Arquivos TS: `db/schema/fixed-assets.ts`, `db/schema/loans.ts`, `db/schema/equity-movements.ts` **continuam no repo** descrevendo as tabelas dropadas
+- ✅ Barrel `db/schema/index.ts`: **não exporta** esses módulos (foram intencionalmente omitidos quando a 0015 rodou)
+
+**Por que isso é uma armadilha:**
+Os arquivos TS ainda compilam e podem ser importados diretamente (`import { fixedAssets } from '@/db/schema/fixed-assets'`). Qualquer query Drizzle usando esses módulos passa TypeScript mas falha em runtime com `relation "fixed_assets" does not exist` (código Postgres `42P01`). O overlay do Next.js esconde a causa raiz atrás de "Failed query" — a mensagem do PG só aparece no terminal do dev server.
+
+**Regra prática para futuras sessões:**
+- **NÃO** referenciar `fixedAssets`, `loans`, `equityMovements`, nem `inventory_snapshots` em código novo
+- **NÃO** adicionar exports desses arquivos ao `db/schema/index.ts` (mesmo se o TypeScript reclamar que algo "não está exportado" — investigue primeiro por que está omitido)
+- Para limpar tabelas que referenciam `categories.id`, hoje só `transactions` e `categorization_rules` têm essa FK relevante
+
+**Arquivos:**
+- `db/migrations/rls/0015_drop_bp_support_tables.sql` — a migration de drop
+- `db/schema/{fixed-assets,loans,equity-movements}.ts` — lápides que sobreviveram, mantidas por enquanto pra não criar diff vazio no git
+
+---
+
 ## Decisão 4 — Policy SELECT de memberships sem auto-referência (Sessão 1.8)
 
 **Contexto:** A policy SELECT original de `memberships` continha uma subquery na própria tabela:

@@ -6,6 +6,105 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão de hardening do pipeline de upload — *commitada e deployada*
+
+**Contexto:** usuário relatou que arquivo CSV de ~7.000 linhas enviado via `/upload` (em produção, `lure-expert.vercel.app`) ficava eternamente em "Processando…". Doc travado por >1h em `extraction_status = 'pending'`, zero linhas em `transactions_staging`.
+
+**Diagnóstico em camadas:**
+
+1. **Suspeita inicial (errada):** parser do Haiku travando em arquivo grande. Inspeção do código mostrou: parser nem foi chamado — o `step.run('mark-processing')` setaria `processing` em milissegundos, mas o doc estava em `pending` desde a criação. **O job Inngest nunca rodou.**
+2. **Suspeita 2 (correta direção, errada conclusão):** config Inngest faltando na Vercel. Falso — `INNGEST_EVENT_KEY` e `INNGEST_SIGNING_KEY` estavam setados em produção há 9 dias (`npx vercel env ls`). Outro PDF foi processado com sucesso em `2026-05-21` pela mesma config.
+3. **Causa raiz confirmada via Vercel logs:** múltiplas linhas `error  λ HEAD /api/inngest  401  Signature validation failed`. **App Inngest desincronizado** — funções não registradas no Inngest Cloud apontando pra essa URL, ou a `signing_key` em uso pelo Cloud divergiu do valor armazenado na Vercel.
+
+**Resolução do incidente (manual, via dashboard Inngest):**
+- App `lure-expert` foi removido da lista de Apps no Inngest Cloud em algum momento entre `2026-05-21` (último deploy que funcionou) e `2026-05-25` (incidente)
+- Usuário fez `Apps → Sync new app → URL = https://lure-expert.vercel.app/api/inngest` (com `/api/inngest`, não a raiz). Sync retornou Success, 10 funções registradas
+- Após sync, `inngest.send` da Vercel pro Cloud retornou HTTP 200 e o Cloud invocou `/api/inngest` com sucesso (HTTP 206, normal pra step.run)
+
+**Fixes de código entregues neste commit (`178c0f8`):**
+
+1. **Chunking do parser** ([src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts))
+   - Antes: arquivo inteiro ia num único `anthropic.messages.create` com `max_tokens: 8192`. Pra 7k linhas, output esperado seria ~500k tokens → resposta truncada → `JSON.parse` falha → retorna `rows: []` com warning, marca doc como `completed` com 0 linhas. Falha silenciosa.
+   - Depois: arquivo é convertido pra CSV uniforme via `fileToText`, dividido em chunks de 120 linhas preservando o header. Cada chunk vai num call separado, warnings por chunk são acumulados. Arquivos com ≤120 linhas mantêm o caminho antigo (um único call).
+   - `CHUNK_SIZE = 120` foi escolhido com margem: ~40 tokens por objeto JSON × 120 = ~4800 tokens de saída, metade do budget de 8192.
+
+2. **Catch loud no enfileiramento** ([src/server/documents.ts:137-160](src/server/documents.ts))
+   - Antes: `try { await inngest.send(...) } catch (err) { console.warn(...) }` — silencia falha de enfileiramento, deixa doc preso em `pending`, front mostra "sucesso" pro usuário.
+   - Depois: catch deleta o registro do doc (DB), faz `console.error`, devolve `{ error }` pro server action. Front em [upload-form.tsx:138](src/app/(authenticated)/upload/upload-form.tsx#L138) já trata erro de `createDocumentRecord` removendo o arquivo do Storage e exibindo mensagem. Comportamento limpo de retry pelo usuário.
+
+3. **Watchdog de docs travados** ([src/jobs/watchdog-stuck-documents.ts](src/jobs/watchdog-stuck-documents.ts))
+   - Cron Inngest `*/10 * * * *` (a cada 10 min)
+   - Dois steps: `fail-stuck-pending` (status='pending' há >15min) e `fail-stuck-processing` (status='processing' há >30min)
+   - Marca como `failed` com `extractedData = { error, stuckAt, timeoutMin }` — mensagem visível no /upload pro usuário saber que precisa reenviar
+   - **Validado em produção real**: o doc `fatur syndata.csv` (criado 15:14 UTC, preso por 1h+) foi marcado como failed pelo watchdog em sua primeira execução pós-deploy. Mensagem registrada: *"Processamento não foi iniciado em tempo hábil. Pode ter sido um problema temporário na fila — reenvie o arquivo."*
+
+4. **`maxDuration = 300`** ([src/app/api/inngest/route.ts](src/app/api/inngest/route.ts))
+   - Necessário pra acomodar parsing chunked de arquivos grandes — 7k linhas em chunks de 120 = ~58 calls × ~3-5s = 2-4 min total. Vercel Hobby (10s) e Pro default (60s) cortariam.
+   - Também registra a nova função `watchdogStuckDocuments`. Total agora: **11 funções** registradas em `serve()`.
+
+**Validações em produção pós-deploy `178c0f8`:**
+
+- `curl https://lure-expert.vercel.app/api/inngest` → 401 com header `X-Inngest-Sdk-Handled: true` (comportamento esperado do SDK pra GET sem assinatura)
+- `Vercel logs --since=2m` → zero `Signature validation failed` desde o resync
+- `inngest.send` manual pra `document/uploaded` (script descartável, deletado após uso) → HTTP 200 com event ID `01KSG1C3ZZV1MQZ3PA9XHTG266`
+- POST /api/inngest invocado pelo Cloud → 206 Partial Content (normal pra Inngest step.run em andamento)
+- DB: doc travado transicionou `pending → failed` via watchdog automaticamente
+
+**Lições aprendidas (registradas pra próximas sessões):**
+
+- **Inngest Cloud pode "perder" um app sem aviso.** Aconteceu entre dois deploys. Sem auto-sync no deploy, sem health check, sem alerta — só um cliente real perdendo upload pra descobrir. Mitigação proposta: configurar Deploy Hook do Inngest (Vercel → Settings → Git → Deploy Hooks) pra forçar re-sync a cada push em `main`. **Não implementado nesta sessão** — requer pegar URL do hook no dashboard Inngest.
+- **Padrão `try { send } catch { console.warn }` é tóxico** em qualquer ponto do pipeline. Repetido em [src/server/](src/server/) em vários lugares? Auditoria pendente — pelo menos `documents.ts` corrigido aqui.
+- **Vercel CLI funciona localmente sem login interativo** se `.vercel/` já tiver state — `npx vercel env ls` / `npx vercel env pull` / `npx vercel logs` foram essenciais pro diagnóstico. Bom de saber pra próximas investigações de produção.
+- **Status 206 do Inngest é normal**, não é erro — significa "step.run executou, mais invocações virão pro próximo step". Não confundir com falha.
+
+**Arquivos:**
+- Novo: [src/jobs/watchdog-stuck-documents.ts](src/jobs/watchdog-stuck-documents.ts)
+- Modificados: [src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts), [src/server/documents.ts](src/server/documents.ts), [src/app/api/inngest/route.ts](src/app/api/inngest/route.ts)
+
+**Commit:** `178c0f8` — *fix(upload): chunking do parser + catch loud + watchdog de pendentes*
+
+---
+
+### ⏪ Sessão de UX import CSV de categorias — *revertida, nada commitado*
+
+**Contexto:** tentativa de melhorar o fluxo de import de plano de contas em `/configuracoes` → Categorias.
+
+**O que foi tentado e revertido:**
+
+1. **Dialog mais largo** — `max-w-3xl` → `max-w-[90vw]` + `flex flex-col` com scroll interno. Funcionava, mas foi revertido junto com o resto.
+2. **`LABEL_MAP` expandido em `normalizeTypeSlug`** ([src/server/imports.ts](src/server/imports.ts)) para aceitar rótulos da UI no CSV (ex: `"cpv / cmv / csp"` → `cpv`, `"receitas & despesas financeiras"` → `resultado_financeiro`, `"impostos sobre renda"` → `ir`). Funcionava — destravava 8 das 9 linhas falhando do CSV de teste do usuário.
+3. **Feature "Substituir plano de contas"** — dois checkboxes ("Substituir DRE" / "Substituir BP"), banner amber de aviso, botão `variant="destructive"`, e bloco de wipe em `commitCategoryImport` (DELETE em `transactions.category_id`, `categorization_rules`, depois `categories`). Esse foi o motivo da reversão (ver abaixo).
+
+**Por que foi revertido:**
+
+A feature de substituir foi enxertada em cima do pipeline `preview → confirm` existente, que é desenhado pra import **incremental** (insert vs update sem conflito). Quando o usuário marca "Substituir DRE", o preview ainda compara linha-a-linha com o banco atual e marca **40 linhas como erro** ("código X já existe sob Natureza Pai Y, mover entre Pais não é permitido via CSV") — porque a tela não sabe que o wipe vai limpar tudo antes do commit. UX confusa, com o botão de confirmar desabilitado por conflitos que não existem semanticamente.
+
+**Decisão:** reverter sessão inteira via `git restore .` e repensar a feature do zero numa próxima sessão. Working tree limpo, HEAD em `a11a6b7`.
+
+**Ganhos de conhecimento desta sessão (registrados pra próxima):**
+
+- **Bug real no `normalizeTypeSlug`**: o `LABEL_MAP` em [src/server/imports.ts:672-677](src/server/imports.ts) só cobre `sg&a`/`transitorios`/`transferencias`. Falta mapeamento pra `cpv / cmv / csp` → `cpv`, `receitas & despesas financeiras` → `resultado_financeiro`, e `impostos sobre renda` → `ir`. Sintoma: usuário copia o nome da UI pro CSV e leva erro "tipo X inválido". **Fix isolado** (sem misturar com substituir-plano) é trivial: adicionar 6 entries no `LABEL_MAP`.
+
+- **Largura do dialog é limitante**: `max-w-3xl` (~768px) com 7 colunas + mensagens de erro longas é apertado. Mexer em `csv-import-dialog.tsx:104` resolve sem impacto em outro lugar.
+
+- **Schemas TS órfãos** descobertos: `db/schema/{fixed-assets,loans,equity-movements}.ts` descrevem tabelas dropadas pela migration 0015. Tentar usá-los gera erro Postgres `relation does not exist` mascarado pelo overlay do Next como "Failed query". Documentado em `docs/SCHEMA_DECISIONS.md` Decisão 11.
+
+- **Arquitetura: "substituir tudo" precisa de fluxo separado**, não convive no mesmo dialog que o import incremental. Opções pra próxima conversa:
+  1. Dois dialogs distintos (`Importar` vs `Substituir`)
+  2. Botão "Resetar plano" como ação independente, fora do fluxo de import
+  3. Modo de preview diferente quando substituir está ativo (oculta diff com banco, só valida CSV estruturalmente)
+
+**Arquivos restaurados ao estado de `a11a6b7`:**
+- `src/server/imports.ts`
+- `src/components/settings/csv-import-dialog.tsx`
+- `db/schema/equity-movements.ts`
+- `db/schema/fixed-assets.ts`
+- `db/schema/loans.ts`
+
+Nada commitado. Nada deployado.
+
+---
+
 ### ✅ Sessão 8.1 — Stone connector real + job sync-acquirer-item *(concluída)*
 
 **Contexto:** primeira sessão de implementação real da Fase 8. Transforma o `StoneProvider` de stub em integração funcional e cria toda a pipeline de sync — do evento Inngest ao insert em `transactions`.

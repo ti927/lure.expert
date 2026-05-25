@@ -168,7 +168,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 8 — Connectors de Cartão e Adquirentes **em andamento** (8.0 ✅). Fases 0–7 **100% concluídas**.
+**Status:** Fase 8 — Connectors de Cartão e Adquirentes **em andamento** (8.0 ✅, 8.1 ✅). Fases 0–7 **100% concluídas**.
 
 **Sessões Fase 8:**
 - ✅ 8.0: Schema `acquirer_connections`, migration 0023, `acquirer-provider.ts` (Abstract + Stone/Cielo/Rede stubs), server actions CRUD, aba Adquirentes em `/contas`
@@ -177,6 +177,9 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 - 🔲 8.3: Cielo connector
 - 🔲 8.4: Reconciliação lote bancário × vendas individuais
 - 🔲 8.5: UX polish + MDR calculado
+
+**Hardening intercalado (sessão de incidente, fora de fase):**
+- ✅ Pipeline de upload — chunking do parser Haiku (120 linhas/call), catch loud em `documents.ts` (falha de `inngest.send` agora deleta doc e retorna erro visível), watchdog cron `*/10 * * * *` que marca docs travados em `pending` >15min ou `processing` >30min como `failed`, `maxDuration=300` na rota `/api/inngest`. Commit `178c0f8`. Detalhes em `docs/SESSION_LOG.md`.
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
@@ -211,6 +214,8 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Hardening intercalado** | |
+| Upload pipeline (`178c0f8`) | Chunking do parser Haiku (120 linhas/call) + catch loud em `documents.ts` (apaga doc e devolve erro) + watchdog cron `*/10 * * * *` (marca pending>15min e processing>30min como failed) + `maxDuration=300` na rota `/api/inngest`. Diagnóstico: doc CSV 7k linhas travado por dessincronia do app Inngest Cloud — resolvido via resync manual + 3 defeitos de código que mantinham o problema invisível |
 | **Fase 8 — Adquirentes (em andamento)** | |
 | 8.1 | `stone-client.ts` (OAuth2 client_credentials, token cache, `fetchSales` paginado) + `StoneProvider` implementado + job `sync-acquirer-item` (ensure-data-source, insert em transactions, trigger categorização) + cron `sync-all-acquirer-items` |
 | 8.0 | Schema `acquirer_connections` + migration 0023 + `acquirer-provider.ts` (stubs Stone/Cielo/Rede/PagBank) + server actions CRUD + aba Adquirentes em `/contas` |
