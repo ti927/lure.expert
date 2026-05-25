@@ -1,3 +1,4 @@
+import { parse } from 'csv-parse/sync'
 import * as XLSX from 'xlsx'
 import { anthropic } from '@/lib/anthropic'
 
@@ -11,149 +12,324 @@ export type StagingRow = {
   description: string | null
 }
 
-type LlmRow = {
-  date: string | null
-  effectiveDate: string | null
+type ColumnMapping = {
+  date: number | null
+  effectiveDate: number | null
   amount: number | null
-  direction: 'inflow' | 'outflow' | null
-  description: string | null
+  direction: number | null
+  description: number | null
+  amountSignIndicatesDirection: boolean
 }
 
-const SYSTEM_PROMPT = `Você é um extrator especializado de dados de extratos bancários e relatórios financeiros em formato planilha ou CSV.
-Analise o conteúdo fornecido e extraia cada movimentação financeira individual.
+const SYSTEM_PROMPT = `Você analisa cabeçalhos de planilhas/CSV financeiros em português e retorna o índice (0-based) de cada coluna semântica.
 
-Retorne APENAS um array JSON válido. Sem explicações, sem markdown, sem código fence — apenas o JSON bruto.
-
-Formato de cada elemento:
-{"date":"YYYY-MM-DD","effectiveDate":"YYYY-MM-DD","amount":1234.56,"direction":"inflow","description":"descrição"}
+Retorne APENAS um objeto JSON válido, sem markdown ou explicação:
+{"date": <int|null>, "effectiveDate": <int|null>, "amount": <int|null>, "direction": <int|null>, "description": <int|null>, "amountSignIndicatesDirection": <bool>}
 
 Regras:
-- date: data de competência — quando o evento econômico ocorreu (ex: data da NF, data da compra no cartão, data do lançamento no ERP). Formato YYYY-MM-DD. Converta DD/MM/AAAA, "31 jul.", "09 ago." e outras variações para este padrão. Para meses abreviados em português sem ano, use o ano mais recente plausível.
-- effectiveDate: data em que o dinheiro efetivamente entrou ou saiu da conta (ex: data do crédito ou débito no extrato bancário). Formato YYYY-MM-DD, mesmas regras de conversão. Se o documento tiver apenas uma data, repita o mesmo valor de date.
-- amount: número positivo (nunca negativo). Remova R$, pontos de milhar, converta vírgula decimal. Se a célula contiver valor em moeda estrangeira + BRL, use sempre o valor em BRL.
-- direction: "inflow" para entradas/créditos/depósitos/recebimentos/estornos/reembolsos/resgate de aplicação; "outflow" para saídas/débitos/pagamentos/compras/aplicações.
-- Valores precedidos de sinal negativo (ex: -R$120,00 ou (120,00)) na perspectiva do extrato indicam débito → direction "outflow". Valores positivos indicam crédito → direction "inflow".
-- description: texto identificador da transação, máximo 200 caracteres. Use o campo de lançamento/histórico/descrição.
-- Ignore: saldos, totais, subtotais, cabeçalhos, rodapés, linhas de resumo, linhas em branco, metadados (nome, agência, conta, atualização).
-- Extraia APENAS movimentações individuais.
-- Se um campo não for determinável, use null.`
+- date: coluna de competência — quando o evento ocorreu (ex: "Data", "Data da NF", "Data da compra", "Vencimento", "Emissão", "Lançamento").
+- effectiveDate: coluna de caixa — quando o dinheiro se moveu (ex: "Data Pagamento", "Crédito", "Débito", "Liquidação"). Se não existir, retorne null (NÃO repita date).
+- amount: coluna de valor monetário (ex: "Valor", "Total", "Bruto", "Líquido", "Montante", "VLR").
+- direction: coluna que indica se é entrada/saída (ex: "Tipo", "Natureza", "C/D", "Entrada/Saída"). Se não houver coluna explícita, retorne null.
+- amountSignIndicatesDirection: true se os valores de amount podem vir negativos (= saída) ou positivos (= entrada). Olhe as amostras pra decidir.
+- description: coluna identificadora da transação (ex: "Descrição", "Histórico", "Produto", "Lançamento", "Obs"). Se houver várias candidatas (ex: produto + cliente), escolha a MAIS DESCRITIVA.
+- Se um campo não existir no arquivo, use null. Não invente.`
 
-// Output budget: max_tokens=8192. Cada objeto JSON ocupa ~40-60 tokens.
-// Com margem de segurança usamos 120 linhas por chunk — comporta header + ~120 rows
-// e ainda deixa folga para descrições longas sem truncar o JSON.
-const CHUNK_SIZE = 120
+// ─────────────────────────────────────────────────────────────────────
+// 1) LEITURA TABULAR (CSV ou Excel) → array de array de strings
+// ─────────────────────────────────────────────────────────────────────
 
-function fileToText(buffer: Buffer, mimeType?: string): string {
-  let text: string
+function readTabular(buffer: Buffer, mimeType?: string): string[][] {
   if (mimeType === 'text/plain' || mimeType === 'text/csv') {
-    text = buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  } else {
-    // Excel binário: converte primeira sheet para CSV puro
-    const wb = XLSX.read(buffer, { type: 'buffer', raw: true })
-    const sheetName = wb.SheetNames[0]
-    if (!sheetName) return ''
-    text = XLSX.utils.sheet_to_csv(wb.Sheets[sheetName])
+    const text = buffer.toString('utf-8')
+    // Detecta delimitador olhando a primeira linha não-vazia
+    const firstLine = text.split('\n').find(l => l.trim().length > 0) ?? ''
+    const semicolons = (firstLine.match(/;/g) ?? []).length
+    const commas = (firstLine.match(/,/g) ?? []).length
+    const tabs = (firstLine.match(/\t/g) ?? []).length
+    const delimiter = semicolons >= commas && semicolons >= tabs ? ';'
+      : tabs >= commas ? '\t'
+      : ','
+    return parse(text, {
+      bom: true,
+      delimiter,
+      relax_quotes: true,
+      relax_column_count: true,
+      skip_empty_lines: true,
+      trim: true,
+    }) as string[][]
   }
-  // Remove BOM (U+FEFF) — se sobreviver, contamina o header de todos os chunks
-  // e o fetch interno do SDK Anthropic falha em serializar caractere fora do Latin-1.
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
-  return text
+  // Excel: XLSX → array de arrays
+  const wb = XLSX.read(buffer, { type: 'buffer', raw: false })
+  const sheetName = wb.SheetNames[0]
+  if (!sheetName) return []
+  const sheet = wb.Sheets[sheetName]
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' }) as string[][]
 }
 
-function parseLlmResponse(raw: string): { rows: LlmRow[]; warnings: string[] } {
-  const warnings: string[] = []
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+// ─────────────────────────────────────────────────────────────────────
+// 2) DETECÇÃO DE COLUNAS — LLM primeiro, heurística como fallback
+// ─────────────────────────────────────────────────────────────────────
 
-  let parsed: unknown
+async function detectColumnMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping> {
+  // Tenta LLM primeiro
+  const llmMapping = await tryLlmMapping(header, sampleRows)
+  if (llmMapping && validateMapping(llmMapping, header.length)) {
+    return llmMapping
+  }
+  // Fallback heurístico
+  return heuristicMapping(header, sampleRows)
+}
+
+async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping | null> {
+  const userMsg = [
+    'Cabeçalho (com índices):',
+    header.map((h, i) => `  ${i}: ${h}`).join('\n'),
+    '',
+    `Amostra das ${sampleRows.length} primeiras linhas:`,
+    ...sampleRows.map(row => row.join(' | ')),
+  ].join('\n')
+
   try {
-    parsed = JSON.parse(cleaned)
-  } catch {
-    warnings.push('Resposta do expert não é JSON válido — nenhuma linha extraída')
-    return { rows: [], warnings }
-  }
-
-  if (!Array.isArray(parsed)) {
-    warnings.push('Resposta do expert não é um array — nenhuma linha extraída')
-    return { rows: [], warnings }
-  }
-
-  const rows: LlmRow[] = []
-  for (const item of parsed) {
-    if (typeof item !== 'object' || item === null) continue
-    const r = item as Record<string, unknown>
-    const date = typeof r.date === 'string' ? r.date : null
-    rows.push({
-      date,
-      effectiveDate: typeof r.effectiveDate === 'string' ? r.effectiveDate : date,
-      amount: typeof r.amount === 'number' ? Math.abs(r.amount) : null,
-      direction: r.direction === 'inflow' || r.direction === 'outflow' ? r.direction : null,
-      description: typeof r.description === 'string' ? r.description.slice(0, 200) : null,
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userMsg }],
     })
+    const text = msg.content.find(b => b.type === 'text')?.text ?? ''
+    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+    const parsed = JSON.parse(cleaned) as Partial<ColumnMapping>
+    return {
+      date: typeof parsed.date === 'number' ? parsed.date : null,
+      effectiveDate: typeof parsed.effectiveDate === 'number' ? parsed.effectiveDate : null,
+      amount: typeof parsed.amount === 'number' ? parsed.amount : null,
+      direction: typeof parsed.direction === 'number' ? parsed.direction : null,
+      description: typeof parsed.description === 'number' ? parsed.description : null,
+      amountSignIndicatesDirection: parsed.amountSignIndicatesDirection === true,
+    }
+  } catch {
+    return null
+  }
+}
+
+function validateMapping(m: ColumnMapping, colCount: number): boolean {
+  const inRange = (v: number | null) => v === null || (Number.isInteger(v) && v >= 0 && v < colCount)
+  if (!inRange(m.date) || !inRange(m.effectiveDate) || !inRange(m.amount) || !inRange(m.direction) || !inRange(m.description)) {
+    return false
+  }
+  // Pelo menos date ou amount precisam estar presentes pra mapping ser útil
+  return m.date !== null || m.amount !== null
+}
+
+function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMapping {
+  const norm = (s: string) => s.toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ').trim()
+  const cols = header.map(norm)
+
+  const findFirst = (keywords: string[]): number | null => {
+    for (let i = 0; i < cols.length; i++) {
+      if (keywords.some(kw => cols[i].includes(kw))) return i
+    }
+    return null
   }
 
-  return { rows, warnings }
+  const date = findFirst(['data venda', 'data emiss', 'data nf', 'data lanc', 'vencimento', 'competencia', 'emissao', 'data'])
+  const effectiveDate = findFirst(['data pagamento', 'data credito', 'data debito', 'data liquid', 'data caixa'])
+  const amount = findFirst(['valor bruto', 'valor liquido', 'vlr bruto', 'vlr', 'valor', 'total', 'montante', 'preco', 'bruto', 'liquido'])
+  const direction = findFirst(['tipo movim', 'natureza', 'c/d', 'd/c', 'entrada saida', 'entrada/saida'])
+  const description = findFirst(['descricao', 'historico', 'lancamento', 'produto', 'nome produto', 'observa', 'obs'])
+
+  // Detecta se amount tem sinais negativos nas amostras
+  let amountSignIndicatesDirection = false
+  if (amount !== null) {
+    for (const row of sampleRows) {
+      const v = row[amount] ?? ''
+      if (v.includes('-') || v.startsWith('(')) {
+        amountSignIndicatesDirection = true
+        break
+      }
+    }
+  }
+
+  return { date, effectiveDate, amount, direction, description, amountSignIndicatesDirection }
 }
 
-function toStagingRows(llmRows: LlmRow[]): StagingRow[] {
-  return llmRows.map((r, i) => ({
-    rowIndex: i,
-    rawData: { llm: true, date: r.date, effectiveDate: r.effectiveDate, amount: r.amount, direction: r.direction, description: r.description },
-    date: r.date,
-    effectiveDate: r.effectiveDate,
-    amount: r.amount,
-    direction: r.direction,
-    description: r.description,
-  }))
+// ─────────────────────────────────────────────────────────────────────
+// 3) NORMALIZAÇÃO DETERMINÍSTICA de campos
+// ─────────────────────────────────────────────────────────────────────
+
+const MONTH_PT: Record<string, number> = {
+  jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6,
+  jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12,
 }
 
-async function extractRowsFromText(text: string): Promise<{ rows: LlmRow[]; warnings: string[] }> {
-  const message = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: text }],
-  })
+function normalizeDate(s: string | undefined | null): string | null {
+  if (!s) return null
+  const v = s.trim()
+  if (!v) return null
 
-  const responseText = message.content.find(b => b.type === 'text')?.text ?? ''
-  return parseLlmResponse(responseText)
+  // YYYY-MM-DD
+  let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+
+  // DD/MM/YYYY ou DD-MM-YYYY ou DD.MM.YYYY
+  m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/)
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+
+  // DD/MM/YY → assume 20YY
+  m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2})$/)
+  if (m) return `20${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+
+  // "02 jan." ou "31 jul" — usa ano atual
+  m = v.match(/^(\d{1,2})\s+([a-zç]+)\.?$/i)
+  if (m) {
+    const month = MONTH_PT[m[2].toLowerCase().slice(0, 3)]
+    if (month) {
+      const year = new Date().getFullYear()
+      return `${year}-${String(month).padStart(2, '0')}-${m[1].padStart(2, '0')}`
+    }
+  }
+
+  // Excel serial date (raw=false já deveria ter convertido, mas garante)
+  const num = Number(v)
+  if (!Number.isNaN(num) && num > 25569 && num < 60000) {
+    // Excel: dias desde 1900-01-01 (com bug do 1900 leap year)
+    const d = new Date(Date.UTC(1900, 0, 1) + (num - 2) * 86400000)
+    if (!Number.isNaN(d.getTime())) {
+      return d.toISOString().slice(0, 10)
+    }
+  }
+
+  return null
 }
+
+function normalizeAmount(s: string | undefined | null): number | null {
+  if (s === null || s === undefined) return null
+  let v = String(s).trim()
+  if (!v) return null
+
+  // Detecta sinal negativo via parênteses ou prefixo
+  let negative = false
+  if (v.startsWith('(') && v.endsWith(')')) {
+    negative = true
+    v = v.slice(1, -1).trim()
+  }
+  if (v.startsWith('-')) {
+    negative = true
+    v = v.slice(1).trim()
+  }
+
+  // Remove R$, espaços, +
+  v = v.replace(/R\$\s*/g, '').replace(/[+\s]/g, '')
+
+  // Formato BR (1.234,56) vs US (1,234.56)
+  // Se tem vírgula seguida por exatamente 2 dígitos no fim e ponto antes, é BR
+  // Se tem ponto seguido por exatamente 2 dígitos no fim e vírgula antes, é US
+  // Se só tem vírgula → BR (vírgula decimal)
+  // Se só tem ponto → ambíguo, assume decimal
+  const hasComma = v.includes(',')
+  const hasDot = v.includes('.')
+  if (hasComma && hasDot) {
+    if (v.lastIndexOf(',') > v.lastIndexOf('.')) {
+      // BR: 1.234,56
+      v = v.replace(/\./g, '').replace(',', '.')
+    } else {
+      // US: 1,234.56
+      v = v.replace(/,/g, '')
+    }
+  } else if (hasComma) {
+    // BR só com vírgula decimal
+    v = v.replace(',', '.')
+  }
+  // só ponto → assume decimal (não mexe)
+
+  const n = Number(v)
+  if (Number.isNaN(n)) return null
+  const abs = Math.abs(n)
+  return negative ? -abs : abs
+}
+
+function deriveDirection(
+  row: string[],
+  mapping: ColumnMapping,
+  amount: number | null,
+  fallback?: 'inflow' | 'outflow',
+): 'inflow' | 'outflow' | null {
+  if (mapping.direction !== null) {
+    const v = (row[mapping.direction] ?? '').toLowerCase().trim()
+    if (/^(c|credito|entrada|recebim|in|inflow|\+)/.test(v)) return 'inflow'
+    if (/^(d|debito|saida|pagamen|out|outflow|-)/.test(v)) return 'outflow'
+  }
+  if (mapping.amountSignIndicatesDirection && amount !== null) {
+    return amount < 0 ? 'outflow' : 'inflow'
+  }
+  return fallback ?? null
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 4) FUNÇÃO PRINCIPAL
+// ─────────────────────────────────────────────────────────────────────
 
 export async function parseExcelOrCsv(
   buffer: Buffer,
   mimeType?: string,
 ): Promise<{ rows: StagingRow[]; warnings: string[] }> {
-  const text = fileToText(buffer, mimeType)
-  if (!text.trim()) return { rows: [], warnings: ['Arquivo sem conteúdo legível'] }
+  const warnings: string[] = []
 
-  const lines = text.split('\n').filter(l => l.trim().length > 0)
-
-  // Arquivos pequenos vão num único call (mesma trajetória do código antigo)
-  if (lines.length <= CHUNK_SIZE) {
-    const { rows, warnings } = await extractRowsFromText(text)
-    return { rows: toStagingRows(rows), warnings }
+  let tabular: string[][]
+  try {
+    tabular = readTabular(buffer, mimeType)
+  } catch (err) {
+    return { rows: [], warnings: [`Falha ao ler arquivo: ${err instanceof Error ? err.message : String(err)}`] }
   }
 
-  // Arquivo grande: preserva a primeira linha como header e fatia o resto
-  const [header, ...dataLines] = lines
-  const allLlmRows: LlmRow[] = []
-  const allWarnings: string[] = []
-  const totalChunks = Math.ceil(dataLines.length / CHUNK_SIZE)
+  if (tabular.length === 0) {
+    return { rows: [], warnings: ['Arquivo sem linhas legíveis'] }
+  }
+  if (tabular.length === 1) {
+    return { rows: [], warnings: ['Arquivo só tem cabeçalho, sem linhas de dados'] }
+  }
 
-  for (let i = 0; i < dataLines.length; i += CHUNK_SIZE) {
-    const chunkNum = Math.floor(i / CHUNK_SIZE) + 1
-    const chunkLines = dataLines.slice(i, i + CHUNK_SIZE)
-    const chunkText = [header, ...chunkLines].join('\n')
-    try {
-      const { rows, warnings } = await extractRowsFromText(chunkText)
-      allLlmRows.push(...rows)
-      if (warnings.length > 0) {
-        allWarnings.push(...warnings.map(w => `chunk ${chunkNum}/${totalChunks}: ${w}`))
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      allWarnings.push(`chunk ${chunkNum}/${totalChunks} falhou: ${msg}`)
+  const header = tabular[0].map(c => String(c ?? ''))
+  const dataRows = tabular.slice(1).map(row => row.map(c => String(c ?? '')))
+
+  const sampleSize = Math.min(20, dataRows.length)
+  const mapping = await detectColumnMapping(header, dataRows.slice(0, sampleSize))
+
+  if (mapping.date === null && mapping.amount === null) {
+    warnings.push('Não conseguimos identificar colunas de data e valor. Verifique se o cabeçalho está na primeira linha e usa nomes reconhecíveis (Data, Valor, etc.).')
+    return { rows: [], warnings }
+  }
+
+  if (mapping.date === null) warnings.push('Coluna de data não detectada — linhas terão date=null')
+  if (mapping.amount === null) warnings.push('Coluna de valor não detectada — linhas terão amount=null')
+
+  const stagingRows: StagingRow[] = dataRows.map((row, i) => {
+    const rawData: Record<string, unknown> = {}
+    header.forEach((h, j) => {
+      rawData[h || `col_${j}`] = row[j] ?? ''
+    })
+
+    const date = mapping.date !== null ? normalizeDate(row[mapping.date]) : null
+    const effectiveDate = mapping.effectiveDate !== null ? normalizeDate(row[mapping.effectiveDate]) : null
+    const amount = mapping.amount !== null ? normalizeAmount(row[mapping.amount]) : null
+    const description = mapping.description !== null
+      ? (row[mapping.description] ?? '').slice(0, 200) || null
+      : null
+    const direction = deriveDirection(row, mapping, amount)
+
+    return {
+      rowIndex: i,
+      rawData,
+      date,
+      effectiveDate,
+      amount: amount !== null ? Math.abs(amount) : null,
+      direction,
+      description,
     }
-  }
+  })
 
-  return { rows: toStagingRows(allLlmRows), warnings: allWarnings }
+  return { rows: stagingRows, warnings }
 }
