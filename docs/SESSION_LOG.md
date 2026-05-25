@@ -6,6 +6,49 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão de redesenho do parser CSV — *commit `46b43cc`, deployada*
+
+**Contexto:** após a sessão de hardening (abaixo) restaurar o pipeline, o mesmo arquivo `fatur syndata.csv` (7k linhas) continuou falhando — desta vez com `Cannot convert argument to a ByteString because the character at index 0 has a value of 65279` em **todos os 65 chunks**. Duas tentativas de strip de BOM (`3c9dc57` via regex literal, `aca6048` via charCodeAt) **não resolveram em produção**, apesar de funcionarem localmente. Teste isolado contra o SDK Anthropic enviando BOM em `content` passou sem erro — descartando a hipótese de "BOM no body causa o erro". A causa raiz do `ByteString` permanece indeterminada (provavelmente um header indireto que captura algo do request), mas em vez de continuar tentando diagnosticar um pipeline frágil por design, o usuário pediu uma **solução definitiva**.
+
+**Decisão arquitetural:** abandonar a abordagem LLM-por-linha. O Haiku estava sendo usado pra fazer parsing tabular — exatamente o que `csv-parse` faz determinístico em milissegundos sem chamada externa.
+
+**Nova arquitetura ([src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts)):**
+
+1. **Leitura tabular determinística:** `csv-parse` lê CSV com auto-detecção de delimitador (`,`, `;`, `\t`), strip de BOM nativo, suporte a aspas e quebras em campos. Excel continua via `XLSX.utils.sheet_to_json` com `header: 1`.
+2. **LLM chamado UMA vez por upload** com header + 20 linhas de amostra. Retorna apenas os índices de coluna semânticas: `{ date, effectiveDate, amount, direction, description, amountSignIndicatesDirection }`. Validação de schema antes de aceitar (índices em range, pelo menos date ou amount não-null).
+3. **Fallback heurístico** se LLM falhar (JSON inválido, índices fora de range, ou ambos date+amount null): casa nomes comuns em PT-BR (`data`, `valor`, `descricao`, `vencimento`, `pagamento`, etc.) por normalização (lowercase, sem acentos) e busca de keyword.
+4. **Funções de normalização determinísticas:**
+   - `normalizeDate`: aceita DD/MM/YYYY, YYYY-MM-DD, DD/MM/YY, "02 jan." (mês PT abreviado) e serial Excel
+   - `normalizeAmount`: detecta formato BR (`1.234,56`) vs US (`1,234.56`), remove `R$`, sinal por parênteses `(120,00)` ou prefixo `-`
+   - `deriveDirection`: usa coluna explícita (mapping de C/D, entrada/saída), ou sinal do amount, ou fallback do sourceType (DEFAULT_OUTFLOW_SOURCES / FORCE_INFLOW_SOURCES do [process-document.ts](src/jobs/process-document.ts))
+5. **Hard-fail claro** se nem LLM nem heurística detectarem date ou amount: retorna `rows: []` com warning específico pedindo pro usuário verificar o cabeçalho.
+
+**Benchmarks (teste local, 50 linhas + BOM + valores BR):**
+
+| Métrica | Antes (chunking + LLM por linha) | Depois (csv-parse + LLM só pra mapping) |
+|---|---|---|
+| Tempo | 3–5 min (65 chamadas LLM) | **1.3s** (1 chamada LLM) |
+| Tokens | ~70k | **~2k** |
+| Falhas | 65 warnings de ByteString | **0 warnings** |
+| Output truncado por `max_tokens` | Sim em arquivos grandes | **Impossível** (só 300 tokens de mapping) |
+
+**Arquivos modificados:**
+- [src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts) — reescrita completa (304+ linhas, -213)
+- [package.json](package.json) — adicionada dep `csv-parse@^6.2.1`
+
+**O que NÃO foi mudado e por quê:**
+- Contract de `parseExcelOrCsv` (`Promise<{ rows: StagingRow[]; warnings: string[] }>`) preservado. [src/jobs/process-document.ts](src/jobs/process-document.ts) não precisou tocar.
+- `maxDuration = 300` em `/api/inngest/route.ts` continua útil pra PDFs.
+- Diagnóstico do ByteString abandonado por decisão consciente — o pipeline novo não passa por essa code path do SDK Anthropic em loop, então o bug fica isolado a um caminho de código não usado em produção.
+
+**Lições aprendidas:**
+
+- **Quando um pipeline acumula 3 fixes seguidos pro mesmo arquivo, a arquitetura está errada.** As 3 sessões (hardening de Inngest, chunking, BOM strip) foram todas necessárias mas o quarto erro (ByteString) finalmente expôs que a abordagem inteira era frágil. LLM-por-linha pra parsing tabular é overengineering — usa modelo caro pra fazer trabalho que biblioteca determinística faz.
+- **Hipóteses devem ser falsificadas com teste isolado antes de gerar commits.** Antes da reescrita, fiz `scripts/test-bom-anthropic.mjs` testando BOM em content direto no SDK — passou sem erro. Esse teste deveria ter sido feito ANTES de commitar 3c9dc57. Teria evitado dois deploys inúteis.
+- **`csv-parse` (npm package) já lida com BOM, multi-delimiter, quotes, encoding.** Não precisa parser custom em [src/lib/csv-parser.ts](src/lib/csv-parser.ts) (esse continua sendo usado pra imports de plano de contas, que tem schema fixo).
+
+---
+
 ### ✅ Sessão de hardening do pipeline de upload — *commitada e deployada*
 
 **Contexto:** usuário relatou que arquivo CSV de ~7.000 linhas enviado via `/upload` (em produção, `lure-expert.vercel.app`) ficava eternamente em "Processando…". Doc travado por >1h em `extraction_status = 'pending'`, zero linhas em `transactions_staging`.

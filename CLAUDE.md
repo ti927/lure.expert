@@ -180,6 +180,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 **Hardening intercalado (sessão de incidente, fora de fase):**
 - ✅ Pipeline de upload — chunking do parser Haiku (120 linhas/call), catch loud em `documents.ts` (falha de `inngest.send` agora deleta doc e retorna erro visível), watchdog cron `*/10 * * * *` que marca docs travados em `pending` >15min ou `processing` >30min como `failed`, `maxDuration=300` na rota `/api/inngest`. Commit `178c0f8`. Detalhes em `docs/SESSION_LOG.md`.
+- ✅ Parser CSV redesenhado — substitui chunking + LLM-por-linha por `csv-parse` determinístico. LLM agora chamado **uma vez** por upload, só pra detectar índice das colunas semânticas (date/amount/description/direction). Fallback heurístico por keyword em PT-BR se LLM falhar. Tempo: 1.3s vs 3-5min anteriores. Commit `46b43cc`. Detalhes em `docs/SESSION_LOG.md`.
 
 **Migrations aplicadas no Supabase Studio:**
 - ✅ `db/migrations/rls/0017_category_visibility_flags.sql` — `hide_in_dre` e `hide_in_cashflow` em `categories`
@@ -215,6 +216,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Hardening intercalado** | |
+| Parser CSV redesenho (`46b43cc`) | Substitui LLM-por-linha (65 chamadas Haiku) por `csv-parse` determinístico + LLM **uma vez** só pra mapping de colunas. Fallback heurístico por nome de coluna em PT-BR. Funções determinísticas: `normalizeDate` (DD/MM/YYYY, "02 jan.", serial Excel), `normalizeAmount` (BR vs US, R$, sinal por parênteses). Resultado: 1.3s vs 3-5min, 2k tokens vs 70k, sem warnings de ByteString |
 | Upload pipeline (`178c0f8`) | Chunking do parser Haiku (120 linhas/call) + catch loud em `documents.ts` (apaga doc e devolve erro) + watchdog cron `*/10 * * * *` (marca pending>15min e processing>30min como failed) + `maxDuration=300` na rota `/api/inngest`. Diagnóstico: doc CSV 7k linhas travado por dessincronia do app Inngest Cloud — resolvido via resync manual + 3 defeitos de código que mantinham o problema invisível |
 | **Fase 8 — Adquirentes (em andamento)** | |
 | 8.1 | `stone-client.ts` (OAuth2 client_credentials, token cache, `fetchSales` paginado) + `StoneProvider` implementado + job `sync-acquirer-item` (ensure-data-source, insert em transactions, trigger categorização) + cron `sync-all-acquirer-items` |
