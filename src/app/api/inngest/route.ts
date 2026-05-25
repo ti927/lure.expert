@@ -10,6 +10,11 @@ import { syncAllSefazItems } from '@/jobs/sync-all-sefaz-items'
 import { reconcileInvoices } from '@/jobs/reconcile-invoices'
 import { syncAcquirerItem } from '@/jobs/sync-acquirer-item'
 import { syncAllAcquirerItems } from '@/jobs/sync-all-acquirer-items'
+import { watchdogStuckDocuments } from '@/jobs/watchdog-stuck-documents'
+
+// Necessário para parsing de CSV/Excel grande: chunked Haiku calls podem
+// somar 2-4 min num único step. Vercel default (10s Hobby / 60s Pro) corta.
+export const maxDuration = 300
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -24,5 +29,6 @@ export const { GET, POST, PUT } = serve({
     reconcileInvoices,
     syncAcquirerItem,
     syncAllAcquirerItems,
+    watchdogStuckDocuments,
   ],
 })

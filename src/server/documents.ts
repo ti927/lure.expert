@@ -148,10 +148,14 @@ export async function createDocumentRecord(
       },
     })
   } catch (err) {
-    // Job não disparado (Inngest dev server offline ou chave inválida).
-    // O documento já foi gravado com status 'pending' — o processamento
-    // pode ser re-enfileirado depois.
-    console.warn('[documents] inngest.send falhou:', err)
+    // Fila offline ou signing key inválida — sem job, doc ficaria preso em pending.
+    // Apaga o registro pra cliente poder reenviar limpo e devolve erro visível.
+    console.error('[createDocumentRecord] inngest.send falhou:', err)
+    await db.delete(documents).where(eq(documents.id, doc.id))
+    const detail = err instanceof Error ? err.message : String(err)
+    return {
+      error: `Não conseguimos enfileirar o processamento (${detail}). Verifique a conexão do Inngest e tente novamente.`,
+    }
   }
 
   return { success: true, documentId: doc.id }

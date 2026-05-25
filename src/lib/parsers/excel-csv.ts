@@ -38,6 +38,11 @@ Regras:
 - Extraia APENAS movimentações individuais.
 - Se um campo não for determinável, use null.`
 
+// Output budget: max_tokens=8192. Cada objeto JSON ocupa ~40-60 tokens.
+// Com margem de segurança usamos 120 linhas por chunk — comporta header + ~120 rows
+// e ainda deixa folga para descrições longas sem truncar o JSON.
+const CHUNK_SIZE = 120
+
 function fileToText(buffer: Buffer, mimeType?: string): string {
   if (mimeType === 'text/plain' || mimeType === 'text/csv') {
     return buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
@@ -95,6 +100,18 @@ function toStagingRows(llmRows: LlmRow[]): StagingRow[] {
   }))
 }
 
+async function extractRowsFromText(text: string): Promise<{ rows: LlmRow[]; warnings: string[] }> {
+  const message = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 8192,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: text }],
+  })
+
+  const responseText = message.content.find(b => b.type === 'text')?.text ?? ''
+  return parseLlmResponse(responseText)
+}
+
 export async function parseExcelOrCsv(
   buffer: Buffer,
   mimeType?: string,
@@ -102,20 +119,35 @@ export async function parseExcelOrCsv(
   const text = fileToText(buffer, mimeType)
   if (!text.trim()) return { rows: [], warnings: ['Arquivo sem conteúdo legível'] }
 
-  const message = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: text,
-      },
-    ],
-  })
+  const lines = text.split('\n').filter(l => l.trim().length > 0)
 
-  const responseText = message.content.find(b => b.type === 'text')?.text ?? ''
-  const { rows: llmRows, warnings } = parseLlmResponse(responseText)
+  // Arquivos pequenos vão num único call (mesma trajetória do código antigo)
+  if (lines.length <= CHUNK_SIZE) {
+    const { rows, warnings } = await extractRowsFromText(text)
+    return { rows: toStagingRows(rows), warnings }
+  }
 
-  return { rows: toStagingRows(llmRows), warnings }
+  // Arquivo grande: preserva a primeira linha como header e fatia o resto
+  const [header, ...dataLines] = lines
+  const allLlmRows: LlmRow[] = []
+  const allWarnings: string[] = []
+  const totalChunks = Math.ceil(dataLines.length / CHUNK_SIZE)
+
+  for (let i = 0; i < dataLines.length; i += CHUNK_SIZE) {
+    const chunkNum = Math.floor(i / CHUNK_SIZE) + 1
+    const chunkLines = dataLines.slice(i, i + CHUNK_SIZE)
+    const chunkText = [header, ...chunkLines].join('\n')
+    try {
+      const { rows, warnings } = await extractRowsFromText(chunkText)
+      allLlmRows.push(...rows)
+      if (warnings.length > 0) {
+        allWarnings.push(...warnings.map(w => `chunk ${chunkNum}/${totalChunks}: ${w}`))
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      allWarnings.push(`chunk ${chunkNum}/${totalChunks} falhou: ${msg}`)
+    }
+  }
+
+  return { rows: toStagingRows(allLlmRows), warnings: allWarnings }
 }
