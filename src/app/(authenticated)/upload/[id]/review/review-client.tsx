@@ -8,7 +8,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { updateStagingRow, batchUpdateStaging, approveAndInsert } from '@/server/staging'
+import { updateStagingRow, batchUpdateStaging, approveAndInsert, setAllPendingDirection } from '@/server/staging'
 import type { TransactionStaging } from '@/db/schema/transactions-staging'
 import type { Document } from '@/db/schema/documents'
 
@@ -124,6 +124,7 @@ export default function ReviewClient({ documentId, initialData }: Props) {
   const approvedCount  = rows.filter(r => r.status === 'approved').length
   const rejectedCount  = rows.filter(r => r.status === 'rejected').length
   const toImportCount  = pendingCount + approvedCount
+  const noDirectionCount = rows.filter(r => r.status !== 'rejected' && !r.direction).length
   const sourceType     = (doc.metadata as Record<string, unknown>)?.source_type as string
 
   const totalInflow  = rows.filter(r => r.status !== 'rejected' && r.direction === 'inflow'  && r.amount).reduce((s, r) => s + Number(r.amount), 0)
@@ -201,6 +202,20 @@ export default function ReviewClient({ documentId, initialData }: Props) {
     }
     setSelected(new Set())
     startTransition(async () => { await batchUpdateStaging(documentId, ids, action) })
+  }
+
+  async function handleSetAllDirection(direction: 'inflow' | 'outflow') {
+    setRows(prev => prev.map(r =>
+      r.status !== 'rejected' && !r.direction ? { ...r, direction } : r,
+    ))
+    try {
+      const result = await setAllPendingDirection(documentId, direction)
+      const label = direction === 'inflow' ? 'entrada' : 'saída'
+      toast.success(`${result.updated} linha${result.updated === 1 ? '' : 's'} marcada${result.updated === 1 ? '' : 's'} como ${label}.`)
+    } catch {
+      toast.error('Erro ao atualizar direção das linhas.')
+      router.refresh()
+    }
   }
 
   async function handleImport() {
@@ -341,6 +356,23 @@ export default function ReviewClient({ documentId, initialData }: Props) {
           </button>
         )}
       </div>
+
+      {/* ── Zona 2.5: Aviso de direção pendente ─────────────────────────────── */}
+      {!isImported && noDirectionCount > 0 && (
+        <div className="shrink-0 mx-6 mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+          <span className="text-amber-800">
+            <span className="font-medium">{noDirectionCount}</span> linha{noDirectionCount === 1 ? '' : 's'} sem direção definida — não serão importadas.
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-100" onClick={() => handleSetAllDirection('inflow')}>
+              Marcar todas como Entrada
+            </Button>
+            <Button size="sm" variant="outline" className="border-rose-300 text-rose-700 hover:bg-rose-100" onClick={() => handleSetAllDirection('outflow')}>
+              Marcar todas como Saída
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* ── Zona 3: Toolbar de seleção em lote ──────────────────────────────── */}
       {!isImported && selected.size > 0 && (

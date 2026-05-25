@@ -286,6 +286,17 @@ function buildNfContextBlock(nf?: NfContext | null): string {
   return `\nContexto NF-e:\n${lines.join('\n')}`
 }
 
+function buildCategoryHintsBlock(hints?: Record<string, string> | null): string {
+  if (!hints) return ''
+  const entries = Object.entries(hints).filter(([, v]) => v && v.trim().length > 0)
+  if (entries.length === 0) return ''
+  // Sinais de hierarquia da planilha de origem (Grupo, Família, Categoria, etc.).
+  // O categorizador deve dar peso forte a estes na escolha da natureza, mas
+  // ainda assim mapear pra uma das categorias listadas no system prompt.
+  const lines = entries.map(([k, v]) => `- ${k}: ${v.trim()}`)
+  return `\nClassificação na planilha de origem (forte sinal pra escolher a natureza):\n${lines.join('\n')}`
+}
+
 async function classifyWithLLM(
   description: string,
   amount: string,
@@ -295,6 +306,7 @@ async function classifyWithLLM(
   pluggyCategory?: string | null,
   accountContext?: AccountContext,
   nfContext?: NfContext | null,
+  categoryHints?: Record<string, string> | null,
 ): Promise<LLMCallResult | null> {
   if (ctx.categories.length === 0) return null
 
@@ -302,7 +314,8 @@ async function classifyWithLLM(
   const categoryHint = pluggyCategory ? `\nCategoria do banco (Pluggy): ${pluggyCategory}` : ''
   const accountBlock = buildAccountContextBlock(accountContext)
   const nfBlock = buildNfContextBlock(nfContext)
-  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}${nfBlock}`
+  const hintsBlock = buildCategoryHintsBlock(categoryHints)
+  const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}${nfBlock}${hintsBlock}`
 
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -433,6 +446,9 @@ export async function categorizeTransaction(
   const meta = (tx.metadata ?? {}) as Record<string, unknown>
   const pluggyCategory = typeof meta.pluggyCategory === 'string' ? meta.pluggyCategory : null
   const merchantName = typeof meta.merchantName === 'string' ? meta.merchantName : null
+  const categoryHints = meta.categoryHints && typeof meta.categoryHints === 'object' && !Array.isArray(meta.categoryHints)
+    ? (meta.categoryHints as Record<string, string>)
+    : null
 
   const accountContext: AccountContext = {
     accountName: tx.accountName ?? null,
@@ -444,7 +460,7 @@ export async function categorizeTransaction(
   }
 
   const llm = await classifyWithLLM(
-    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory, accountContext, tx.nfContext,
+    tx.description, tx.amount, tx.direction, domainCtx, documentDomain, pluggyCategory, accountContext, tx.nfContext, categoryHints,
   )
   if (!llm) return { result: null }
 

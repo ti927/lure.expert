@@ -19,12 +19,16 @@ type ColumnMapping = {
   direction: number | null
   description: number | null
   amountSignIndicatesDirection: boolean
+  // Índices de colunas que descrevem hierarquia/categoria do lançamento
+  // (ex: Grupo, Família, Categoria, Conta Contábil, Departamento, Centro de Custo)
+  // — não viram campos estruturados, mas alimentam o prompt do categorizador.
+  categoryHints: number[]
 }
 
 const SYSTEM_PROMPT = `Você analisa cabeçalhos de planilhas/CSV financeiros em português e retorna o índice (0-based) de cada coluna semântica.
 
 Retorne APENAS um objeto JSON válido, sem markdown ou explicação:
-{"date": <int|null>, "effectiveDate": <int|null>, "amount": <int|null>, "direction": <int|null>, "description": <int|null>, "amountSignIndicatesDirection": <bool>}
+{"date": <int|null>, "effectiveDate": <int|null>, "amount": <int|null>, "direction": <int|null>, "description": <int|null>, "amountSignIndicatesDirection": <bool>, "categoryHints": <int[]>}
 
 Regras:
 - date: coluna de competência — quando o evento ocorreu (ex: "Data", "Data da NF", "Data da compra", "Vencimento", "Emissão", "Lançamento").
@@ -33,6 +37,7 @@ Regras:
 - direction: coluna que indica se é entrada/saída (ex: "Tipo", "Natureza", "C/D", "Entrada/Saída"). Se não houver coluna explícita, retorne null.
 - amountSignIndicatesDirection: true se os valores de amount podem vir negativos (= saída) ou positivos (= entrada). Olhe as amostras pra decidir.
 - description: coluna identificadora da transação (ex: "Descrição", "Histórico", "Produto", "Lançamento", "Obs"). Se houver várias candidatas (ex: produto + cliente), escolha a MAIS DESCRITIVA.
+- categoryHints: lista de índices de colunas que descrevem HIERARQUIA ou CATEGORIA do lançamento — sinais úteis pra um categorizador classificar a natureza contábil (ex: "Grupo", "Família", "Subgrupo", "Categoria", "Conta Contábil", "Departamento", "Centro de Custo", "Classe", "Plano de Contas"). NÃO inclua aqui description, date, amount nem direction. Se não houver nenhuma, retorne lista vazia [].
 - Se um campo não existir no arquivo, use null. Não invente.`
 
 // ─────────────────────────────────────────────────────────────────────
@@ -100,6 +105,7 @@ async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<
     const text = msg.content.find(b => b.type === 'text')?.text ?? ''
     const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
     const parsed = JSON.parse(cleaned) as Partial<ColumnMapping>
+    const rawHints = Array.isArray(parsed.categoryHints) ? parsed.categoryHints : []
     return {
       date: typeof parsed.date === 'number' ? parsed.date : null,
       effectiveDate: typeof parsed.effectiveDate === 'number' ? parsed.effectiveDate : null,
@@ -107,6 +113,7 @@ async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<
       direction: typeof parsed.direction === 'number' ? parsed.direction : null,
       description: typeof parsed.description === 'number' ? parsed.description : null,
       amountSignIndicatesDirection: parsed.amountSignIndicatesDirection === true,
+      categoryHints: rawHints.filter((n): n is number => typeof n === 'number'),
     }
   } catch {
     return null
@@ -118,6 +125,7 @@ function validateMapping(m: ColumnMapping, colCount: number): boolean {
   if (!inRange(m.date) || !inRange(m.effectiveDate) || !inRange(m.amount) || !inRange(m.direction) || !inRange(m.description)) {
     return false
   }
+  if (!m.categoryHints.every(n => Number.isInteger(n) && n >= 0 && n < colCount)) return false
   // Pelo menos date ou amount precisam estar presentes pra mapping ser útil
   return m.date !== null || m.amount !== null
 }
@@ -141,6 +149,20 @@ function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMappi
   const direction = findFirst(['tipo movim', 'natureza', 'c/d', 'd/c', 'entrada saida', 'entrada/saida'])
   const description = findFirst(['descricao', 'historico', 'lancamento', 'produto', 'nome produto', 'observa', 'obs'])
 
+  // Detecta colunas de hierarquia/categoria (Grupo, Família, Subgrupo, Departamento, etc.)
+  // Não pode reusar as colunas já mapeadas semanticamente.
+  const usedIdxs = new Set<number | null>([date, effectiveDate, amount, direction, description])
+  const hintKeywords = [
+    'grupo', 'familia', 'subgrupo', 'categoria', 'classe', 'departamento',
+    'centro custo', 'centro de custo', 'cc', 'plano de contas', 'conta contabil',
+    'rubrica', 'segmento', 'linha', 'natureza', 'natureza filho', 'natureza pai',
+  ]
+  const categoryHints: number[] = []
+  for (let i = 0; i < cols.length; i++) {
+    if (usedIdxs.has(i)) continue
+    if (hintKeywords.some(kw => cols[i].includes(kw))) categoryHints.push(i)
+  }
+
   // Detecta se amount tem sinais negativos nas amostras
   let amountSignIndicatesDirection = false
   if (amount !== null) {
@@ -153,7 +175,7 @@ function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMappi
     }
   }
 
-  return { date, effectiveDate, amount, direction, description, amountSignIndicatesDirection }
+  return { date, effectiveDate, amount, direction, description, amountSignIndicatesDirection, categoryHints }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -306,11 +328,30 @@ export async function parseExcelOrCsv(
   if (mapping.date === null) warnings.push('Coluna de data não detectada — linhas terão date=null')
   if (mapping.amount === null) warnings.push('Coluna de valor não detectada — linhas terão amount=null')
 
+  // Deduplica hints contra colunas semânticas (LLM/heurística podem coincidir)
+  const semanticIdxs = new Set<number>(
+    [mapping.date, mapping.effectiveDate, mapping.amount, mapping.direction, mapping.description]
+      .filter((v): v is number => v !== null),
+  )
+  const hintIdxs = Array.from(new Set(mapping.categoryHints))
+    .filter(i => Number.isInteger(i) && i >= 0 && i < header.length && !semanticIdxs.has(i))
+
   const stagingRows: StagingRow[] = dataRows.map((row, i) => {
     const rawData: Record<string, unknown> = {}
     header.forEach((h, j) => {
       rawData[h || `col_${j}`] = row[j] ?? ''
     })
+
+    // Bloco estável e fácil de propagar pra metadata.categoryHints na importação.
+    if (hintIdxs.length > 0) {
+      const hints: Record<string, string> = {}
+      for (const idx of hintIdxs) {
+        const key = (header[idx] || `col_${idx}`).trim()
+        const val = (row[idx] ?? '').trim()
+        if (val) hints[key] = val
+      }
+      if (Object.keys(hints).length > 0) rawData.__categoryHints = hints
+    }
 
     const date = mapping.date !== null ? normalizeDate(row[mapping.date]) : null
     const effectiveDate = mapping.effectiveDate !== null ? normalizeDate(row[mapping.effectiveDate]) : null

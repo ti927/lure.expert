@@ -11,7 +11,7 @@ import {
   transactions,
   dataSources,
 } from '@/db/schema'
-import { eq, and, isNotNull, inArray, sql } from 'drizzle-orm'
+import { eq, and, isNotNull, inArray, isNull, sql } from 'drizzle-orm'
 import { inngest } from '@/lib/inngest'
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -133,6 +133,28 @@ export async function batchUpdateStaging(
   return { success: true }
 }
 
+// ─── Bulk: define direção em TODAS as linhas sem direção do documento ────────
+// Usado quando o parser não conseguiu inferir direção (ex: ERP de vendas, onde
+// todas as linhas são entradas mas não há coluna explícita de tipo).
+export async function setAllPendingDirection(
+  documentId: string,
+  direction: 'inflow' | 'outflow',
+) {
+  const { organizationId } = await getAuthContext()
+
+  const result = await db
+    .update(transactionsStaging)
+    .set({ direction })
+    .where(and(
+      eq(transactionsStaging.documentId, documentId),
+      eq(transactionsStaging.organizationId, organizationId),
+      isNull(transactionsStaging.direction),
+    ))
+    .returning({ id: transactionsStaging.id })
+
+  return { updated: result.length }
+}
+
 // ─── Approve pending + insert approved rows into transactions ─────────────────
 export async function approveAndInsert(documentId: string) {
   const { organizationId } = await getAuthContext()
@@ -207,21 +229,30 @@ export async function approveAndInsert(documentId: string) {
   for (let i = 0; i < valid.length; i += BATCH) {
     const batch = valid.slice(i, i + BATCH)
     const rows = await db.insert(transactions).values(
-      batch.map(r => ({
-        organizationId,
-        dataSourceId: dataSource.id,
-        date: r.date!,
-        effectiveDate: r.effectiveDate ?? r.date,
-        amount: String(Math.abs(Number(r.amount))),
-        currency: 'BRL',
-        direction: r.direction!,
-        description: r.description ?? '',
-        documentId,
-        rawData: r.rawData ?? {},
-        metadata: { stagingId: r.id, sourceType },
-        needsReview: false,
-        status: 'confirmed',
-      })),
+      batch.map(r => {
+        const raw = (r.rawData ?? {}) as Record<string, unknown>
+        const hints = raw.__categoryHints && typeof raw.__categoryHints === 'object'
+          ? (raw.__categoryHints as Record<string, string>)
+          : null
+        const metadata: Record<string, unknown> = { stagingId: r.id, sourceType }
+        if (hints && Object.keys(hints).length > 0) metadata.categoryHints = hints
+
+        return {
+          organizationId,
+          dataSourceId: dataSource.id,
+          date: r.date!,
+          effectiveDate: r.effectiveDate ?? r.date,
+          amount: String(Math.abs(Number(r.amount))),
+          currency: 'BRL',
+          direction: r.direction!,
+          description: r.description ?? '',
+          documentId,
+          rawData: r.rawData ?? {},
+          metadata,
+          needsReview: false,
+          status: 'confirmed',
+        }
+      }),
     ).returning({ id: transactions.id })
     insertedIds.push(...rows.map(r => r.id))
   }
