@@ -261,7 +261,7 @@ export async function approveAndInsert(documentId: string) {
 
         const metadata: Record<string, unknown> = { stagingId: r.id, sourceType }
         if (hints && Object.keys(hints).length > 0) metadata.categoryHints = hints
-        if (mapping && (mapping.categoriaFilho || mapping.categoriaPai)) metadata.categoryMapping = mapping
+        if (mapping && (mapping.categoriaFilho || mapping.categoriaPai || mapping.tipoNatureza)) metadata.categoryMapping = mapping
 
         // Layer 0: tenta lookup determinístico pelo plano de contas
         const csvMatchId = findCategoryByCsvMapping(mapping, domainLeaves)

@@ -135,6 +135,43 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
 export interface CsvCategoryMapping {
   categoriaFilho?: string
   categoriaPai?: string
+  // Tipo do plano de contas como o usuário expressou na coluna do CSV
+  // (ex: "Receita", "CMV", "Despesa Operacional"). findCategoryByCsvMapping
+  // converte pra código interno via TIPO_ALIASES.
+  tipoNatureza?: string
+}
+
+// Aliases pra mapear o que o usuário escreve na coluna Tipo Natureza pra
+// código interno do plano de contas (definido em src/lib/dre-types.ts).
+// Ordem importa — códigos mais específicos vêm primeiro pra evitar match
+// prematuro (ex: "deducao" antes de "receita" pra "deducao de receita").
+const TIPO_ALIASES: Array<{ code: string; patterns: string[] }> = [
+  { code: 'deducoes_tributarias', patterns: ['deducao tributaria', 'deducoes tributarias', 'imposto', 'tributo', 'impostos sobre vendas'] },
+  { code: 'deducoes_operacionais', patterns: ['deducao operacional', 'deducoes operacionais', 'devolucao', 'desconto comercial', 'abatimento'] },
+  { code: 'receita_operacional', patterns: ['receita operacional', 'receita', 'venda', 'faturamento', 'vendas'] },
+  { code: 'cpv', patterns: ['cpv', 'cmv', 'custo dos produtos', 'custo dos servicos', 'custo dos produtos servicos vendidos', 'custo'] },
+  { code: 'sga', patterns: ['sga', 'sg a', 'despesa operacional', 'despesas operacionais', 'despesa administrativa', 'despesa comercial', 'despesa'] },
+  { code: 'resultado_financeiro', patterns: ['resultado financeiro', 'receita financeira', 'despesa financeira', 'juros'] },
+  { code: 'ir', patterns: ['ir csll', 'ir e csll', 'imposto de renda', 'csll', 'ir'] },
+  { code: 'emprestimos_amortizacoes', patterns: ['emprestimo', 'emprestimos', 'amortizacao', 'amortizacoes', 'financiamento'] },
+  { code: 'investimentos_retiradas', patterns: ['investimento', 'investimentos', 'retirada', 'retiradas', 'aporte', 'distribuicao de lucros'] },
+  { code: 'transfer', patterns: ['transferencia', 'transferencias', 'transfer'] },
+  { code: 'ativo_nao_circulante', patterns: ['ativo nao circulante'] },
+  { code: 'passivo_nao_circulante', patterns: ['passivo nao circulante'] },
+  { code: 'ativo_circulante', patterns: ['ativo circulante', 'ativo'] },
+  { code: 'passivo_circulante', patterns: ['passivo circulante', 'passivo'] },
+  { code: 'patrimonio_liquido', patterns: ['patrimonio liquido', 'patrimonio'] },
+]
+
+function inferTipoCode(userText: string): string | null {
+  const n = normalizeForMatch(userText)
+  if (!n) return null
+  for (const { code, patterns } of TIPO_ALIASES) {
+    for (const p of patterns) {
+      if (n === p || n.includes(p)) return code
+    }
+  }
+  return null
 }
 
 // Normaliza pra comparação robusta entre nome da folha do plano de contas e
@@ -160,21 +197,36 @@ export function findCategoryByCsvMapping(
   const targetFilho = normalizeForMatch(mapping.categoriaFilho)
   if (!targetFilho) return null
 
-  const candidates = leaves.filter(c => normalizeForMatch(c.name) === targetFilho)
+  let candidates = leaves.filter(c => normalizeForMatch(c.name) === targetFilho)
   if (candidates.length === 0) return null
   if (candidates.length === 1) return candidates[0].id
 
-  // Múltiplos matches: desempata pelo nome do pai se fornecido.
-  if (mapping.categoriaPai) {
+  // Múltiplos: aplica filtros adicionais cumulativos.
+  // 1) Tipo (Receita vs CMV etc) — desempata casos onde o mesmo nome de
+  //    natureza aparece em tipos diferentes do plano de contas.
+  if (mapping.tipoNatureza) {
+    const tipoCode = inferTipoCode(mapping.tipoNatureza)
+    if (tipoCode) {
+      const filteredByTipo = candidates.filter(c => c.type === tipoCode)
+      if (filteredByTipo.length === 1) return filteredByTipo[0].id
+      if (filteredByTipo.length > 0) candidates = filteredByTipo
+    }
+  }
+
+  // 2) Pai — desempata casos onde mesmo nome de filho aparece sob pais
+  //    diferentes dentro do mesmo tipo.
+  if (candidates.length > 1 && mapping.categoriaPai) {
     const targetPai = normalizeForMatch(mapping.categoriaPai)
     if (targetPai) {
       const filteredByPai = candidates.filter(c =>
         c.parentName && normalizeForMatch(c.parentName) === targetPai,
       )
       if (filteredByPai.length === 1) return filteredByPai[0].id
+      if (filteredByPai.length > 0) candidates = filteredByPai
     }
   }
-  return null  // ambíguo, deixa o LLM decidir
+
+  return candidates.length === 1 ? candidates[0].id : null
 }
 
 // ─── Camada 1: Regras explícitas ─────────────────────────────────────────────

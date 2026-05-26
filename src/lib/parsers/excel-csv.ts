@@ -28,6 +28,9 @@ type ColumnMapping = {
   // contas e tentamos um match determinístico antes de chamar o LLM.
   categoriaFilhoIdx: number | null
   categoriaPaiIdx: number | null
+  // Tipo Natureza: desempata quando filho+pai existem em tipos diferentes do
+  // plano (ex: "Porcelanato Acetinado" sob Receita Operacional E sob CPV).
+  tipoNaturezaIdx: number | null
 }
 
 const SYSTEM_PROMPT = `Você analisa cabeçalhos de planilhas/CSV financeiros em português e retorna o índice (0-based) de cada coluna semântica.
@@ -88,12 +91,14 @@ function readTabular(buffer: Buffer, mimeType?: string): string[][] {
 function detectAuthoritativeColumns(header: string[]): {
   categoriaFilhoIdx: number | null
   categoriaPaiIdx: number | null
+  tipoNaturezaIdx: number | null
 } {
   const norm = (s: string) =>
     s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
       .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
   let categoriaFilhoIdx: number | null = null
   let categoriaPaiIdx: number | null = null
+  let tipoNaturezaIdx: number | null = null
   for (let i = 0; i < header.length; i++) {
     const n = norm(header[i])
     if (categoriaFilhoIdx === null) {
@@ -101,8 +106,12 @@ function detectAuthoritativeColumns(header: string[]): {
       else if (/^(conta contabil|plano de contas|plano contas|plano de conta)$/.test(n)) categoriaFilhoIdx = i
     }
     if (categoriaPaiIdx === null && /^(categoria|natureza) pai$/.test(n)) categoriaPaiIdx = i
+    if (tipoNaturezaIdx === null) {
+      if (/^tipo (de )?natureza$/.test(n)) tipoNaturezaIdx = i
+      else if (/^grupo contabil$/.test(n)) tipoNaturezaIdx = i
+    }
   }
-  return { categoriaFilhoIdx, categoriaPaiIdx }
+  return { categoriaFilhoIdx, categoriaPaiIdx, tipoNaturezaIdx }
 }
 
 async function detectColumnMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping> {
@@ -146,6 +155,7 @@ async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<
       categoryHints: rawHints.filter((n): n is number => typeof n === 'number'),
       categoriaFilhoIdx: null,  // detectado separadamente em detectAuthoritativeColumns
       categoriaPaiIdx: null,
+      tipoNaturezaIdx: null,
     }
   } catch {
     return null
@@ -212,6 +222,7 @@ function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMappi
     amountSignIndicatesDirection, categoryHints,
     categoriaFilhoIdx: null,  // detectado separadamente em detectAuthoritativeColumns
     categoriaPaiIdx: null,
+    tipoNaturezaIdx: null,
   }
 }
 
@@ -372,7 +383,7 @@ export async function parseExcelOrCsv(
   const semanticIdxs = new Set<number>(
     [
       mapping.date, mapping.effectiveDate, mapping.amount, mapping.direction, mapping.description,
-      mapping.categoriaFilhoIdx, mapping.categoriaPaiIdx,
+      mapping.categoriaFilhoIdx, mapping.categoriaPaiIdx, mapping.tipoNaturezaIdx,
     ].filter((v): v is number => v !== null),
   )
   const hintIdxs = Array.from(new Set(mapping.categoryHints))
@@ -404,10 +415,14 @@ export async function parseExcelOrCsv(
     const categoriaPai = mapping.categoriaPaiIdx !== null
       ? (row[mapping.categoriaPaiIdx] ?? '').trim()
       : ''
-    if (categoriaFilho || categoriaPai) {
+    const tipoNatureza = mapping.tipoNaturezaIdx !== null
+      ? (row[mapping.tipoNaturezaIdx] ?? '').trim()
+      : ''
+    if (categoriaFilho || categoriaPai || tipoNatureza) {
       const map: Record<string, string> = {}
       if (categoriaFilho) map.categoriaFilho = categoriaFilho
       if (categoriaPai) map.categoriaPai = categoriaPai
+      if (tipoNatureza) map.tipoNatureza = tipoNatureza
       rawData.__categoryMapping = map
     }
 
