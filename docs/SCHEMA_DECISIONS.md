@@ -287,3 +287,72 @@ memberships de outros usuários da org devem usar a conexão service_role (que b
 o que já é o caso em todas as server actions via Drizzle.
 
 **Arquivo:** `db/migrations/rls/` (aplicado diretamente no Supabase Studio na sessão 1.8)
+
+---
+
+## Decisão 12 — Camada 0 de categorização: match determinístico do CSV antes do LLM
+
+**Contexto original (Fase 3):** a categorização foi desenhada como pipeline em camadas
+1→2→3→4 (regra explícita → recorrência → embedding → Haiku LLM), assumindo que toda
+transação chega sem nenhuma classificação prévia (caso bancário/Pluggy) e que sinais
+de planilha (`Grupo`, `Família`, `Departamento`) são **advisory** — alimentam o prompt
+do LLM mas não casam 1:1 com folhas do plano de contas.
+
+**Problema descoberto na prática:** CSVs gerados pelo próprio ERP do cliente
+frequentemente trazem **colunas explícitas** com nomes idênticos aos do plano de contas
+do sistema (`Natureza pai`, `Natureza filho`). Pagar chamada Haiku pra fazer um lookup
+que poderia ser direto no DB é desperdício de custo, latência e introduz risco de
+hallucination do LLM.
+
+**Decisão (commits `d587644` / `d72ec37` / `35400e6`):** adicionar **Camada 0** antes
+das regras. Quando o parser detecta colunas autoritativas no CSV, o valor da célula é
+tratado como nome canônico da folha do plano de contas e usado pra lookup determinístico.
+
+**Headers reconhecidos como autoritativos:**
+- `Categoria Filho` / `Natureza Filho` / `Conta Contábil` / `Plano de Contas`
+- `Categoria Pai` / `Natureza Pai`
+- `Tipo Natureza` / `Tipo de Natureza` / `Grupo Contábil`
+
+Detecção 100% por nome (regex em header normalizado), **sem LLM** — pra garantir
+determinismo. LLM continua sendo usado pra detectar `categoryHints` advisory.
+
+**Pipeline de match em [src/lib/categorizer.ts:findCategoryByCsvMapping](src/lib/categorizer.ts):**
+1. Normaliza nome da folha (lowercase, sem acento, colapsa dash/barra/parênteses em espaço)
+2. Filtra folhas com `name` normalizado igual ao `categoriaFilho` do CSV
+3. Se múltiplas, filtra por `tipoNatureza` mapeado pra código interno
+   (`Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc — ver `TIPO_ALIASES` no arquivo)
+4. Se ainda múltiplas, filtra por `categoriaPai` (nome normalizado do pai)
+5. Se exatamente 1 candidato → `categoryId`, `method='csv_match'`, `confidence=1.0`
+6. Caso contrário → cai pra Camada 1 (regra) → 4 (LLM)
+
+**Onde acontece o lookup:**
+- [src/server/staging.ts](src/server/staging.ts) — no `approveAndInsert`, carrega
+  contexto da org uma vez por import e tenta match por linha antes do INSERT.
+  Linhas casadas entram no DB já com `categoryId` preenchido e **não** entram no
+  evento Inngest pra categorização LLM.
+- [src/lib/categorizer.ts](src/lib/categorizer.ts) — Camada 0 dentro de
+  `categorizeTransaction` cobre re-categorização posterior ("Categorizar agora")
+  caso o usuário adicione folhas novas ao plano após o import.
+
+**Resultado prático (caso ceramic-tile ERP, 7762 linhas):** importação vai já
+classificada, 0 chamadas Haiku, latência de segundos em vez de minutos. Linhas
+sem match exato continuam caindo pro LLM normalmente.
+
+**Por que `'csv_match'` foi adicionado ao tipo `CategorizationResult.method`:**
+auditoria — diferenciar no DB (`categorization_method`) quais linhas vieram do
+lookup determinístico vs. as classificadas por regra/LLM. Aparece na UI de revisão.
+
+**O que NÃO faz parte desta decisão:**
+- Detecção do **tipo** (Receita/CMV) por sinal de `direction` da transação foi
+  descartada em favor da coluna explícita `Tipo Natureza`. Discussão em
+  [docs/SESSION_LOG.md](docs/SESSION_LOG.md) — usuário preferiu controle fino
+  por coluna em vez de heurística automática por direção.
+- Layer 0 só dispara quando há `categoriaFilho` no mapping. `categoriaPai` ou
+  `tipoNatureza` sozinhos NÃO classificam — são apenas desempatadores.
+
+**Arquivos:**
+- `src/lib/parsers/excel-csv.ts` — `detectAuthoritativeColumns()`, gravação em
+  `rawData.__categoryMapping`
+- `src/lib/categorizer.ts` — `findCategoryByCsvMapping()`, `inferTipoCode()`,
+  `TIPO_ALIASES`, Layer 0 em `categorizeTransaction`
+- `src/server/staging.ts` — pre-classificação no `approveAndInsert`

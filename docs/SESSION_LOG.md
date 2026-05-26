@@ -6,6 +6,130 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão de Layer 0 — categorização determinística via CSV — *commits `d587644` / `d72ec37` / `35400e6`, deployada*
+
+**Contexto:** após a sessão de hardening do pipeline (ver entrada abaixo) o usuário levantou questão fundamental — se o CSV traz colunas explícitas `Natureza pai` / `Natureza filho` com nomes idênticos aos do plano de contas da org, **por que paga LLM pra fazer um lookup que poderia ser direto no DB?** Hints da planilha eram tratados como advisory (alimentavam o prompt do Haiku) em vez de autoritativos. Sem Layer 0, o LLM podia errar (especialmente quando o mesmo nome de filho aparece sob tipos diferentes, ex: `Porcelanato Acetinado` sob Receita Operacional E sob CPV — o usuário usa esse pattern pra calcular margem direta da categoria).
+
+**Decisão arquitetural:** adicionar **Camada 0** antes das regras. Quando o parser detecta colunas autoritativas, valor da célula vira nome canônico de folha e é usado pra lookup determinístico contra o plano de contas da org. Detalhes em [docs/SCHEMA_DECISIONS.md](docs/SCHEMA_DECISIONS.md) Decisão 12.
+
+**Implementação em 3 commits incrementais:**
+
+1. **`d587644` — Layer 0 base + match por Categoria Filho/Pai**
+   - Parser ganha `detectAuthoritativeColumns()` em [src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts) que reconhece por regex no header normalizado: `^(categoria|natureza) (pai|filho)$`, `^(conta contabil|plano de contas|plano contas|plano de conta)$`. Determinístico, sem LLM.
+   - Cada row com valores nessas colunas grava `rawData.__categoryMapping = {categoriaFilho, categoriaPai}`.
+   - `loadOrgContext` em [src/lib/categorizer.ts](src/lib/categorizer.ts) expõe agora `parentName` em cada folha (pra desambiguar match de nomes repetidos sob pais diferentes).
+   - Novo helper exportado `findCategoryByCsvMapping(mapping, leaves)`: normaliza `categoriaFilho`, busca folhas com mesmo nome normalizado. Se 1 → retorna. Se múltiplas → desempata por `categoriaPai`.
+   - `categorizeTransaction` ganha **Layer 0** antes das regras: lê `meta.categoryMapping`, tenta lookup, casa → retorna `method: 'csv_match', confidence: 1.0`.
+   - `approveAndInsert` em [src/server/staging.ts](src/server/staging.ts) carrega contexto da org **uma vez** por import (folhas filtradas por domínio DRE vs BP via `domainFromReportType`). Pra cada row, tenta lookup. Casou → INSERT com `categoryId` + `categorizationMethod='csv_match'` + `categorizationConfidence='1.0'` já preenchidos. IDs casados **não** entram no evento Inngest — só os não-casados disparam o pipeline LLM.
+   - Toast extra na review page: "X linhas foram classificadas automaticamente pelo Categoria Pai/Filho do CSV".
+   - Tipo `CategorizationResult.method` aceita `'csv_match'`.
+
+2. **`d72ec37` — robustez do normalizador (dash/slash/parênteses)**
+   - CSV do usuário tinha leaf names tipo `AC3 – Porcelanato / Flex` (en-dash + barra + espaços). Plano de contas podia ter sido cadastrado com hyphen comum em vez de en-dash.
+   - `normalizeForMatch` originalmente só baixava caixa + tirava acento + colapsava whitespace. Qualquer diferença de pontuação bloqueava o match.
+   - Agora colapsa qualquer caractere não-alfanumérico (incluindo dash de qualquer tipo, barra, parênteses) em espaço, depois colapsa whitespace múltiplo. Resultado: `AC3 – Porcelanato / Flex` e `AC3 - Porcelanato / Flex` viram ambos `ac3 porcelanato flex`.
+
+3. **`35400e6` — coluna `Tipo Natureza` desempata Receita vs CMV**
+   - Usuário usa o mesmo nome de folha sob Receita Operacional E sob CPV/CMV (ex: `Porcelanato Acetinado`) pra calcular margem direta. Sem desempatador, Layer 0 retornava null e caía pro Haiku que podia errar.
+   - Parser detecta nova coluna autoritativa: `^tipo (de )?natureza$` ou `^grupo contabil$`. Valor vai pra `rawData.__categoryMapping.tipoNatureza`.
+   - `CsvCategoryMapping` ganha `tipoNatureza?: string`.
+   - Novo `TIPO_ALIASES` em [src/lib/categorizer.ts](src/lib/categorizer.ts) — mapa de alias humano → código interno (de [src/lib/dre-types.ts](src/lib/dre-types.ts)): `Receita` → `receita_operacional`, `CMV`/`CPV`/`Custo` → `cpv`, `SGA`/`Despesa` → `sga`, etc. Ordem importa: códigos específicos vêm primeiro pra evitar match prematuro (ex: `deducao tributaria` antes de `tributo`).
+   - `findCategoryByCsvMapping` ganha filtro adicional **antes** do pai: depois de match por nome, se múltiplos candidatos e `tipoNatureza` foi fornecido, filtra por `c.type === inferTipoCode(tipoNatureza)`. Filtragem cumulativa.
+   - Pipeline novo de match: nome → tipo → pai. Cada etapa reduz candidatos. Sai cedo se chegar a 1.
+
+**Fluxo final pro usuário (caso ceramic-tile ERP):**
+- CSV de vendas: `Natureza pai = "PISOS", Natureza filho = "Piso Cerâmico", Tipo Natureza = "Receita"` → match com folha `1.6.02 Piso Cerâmico` sob Receita Operacional → INSERT já classificado, zero Haiku
+- CSV de CMV: mesma `Natureza filho = "Piso Cerâmico"` mas `Tipo Natureza = "CMV"` → match com folha homônima sob CPV → INSERT já classificado, zero Haiku
+
+**Arquivos modificados (todos os 3 commits combinados):**
+- [src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts) — detecção autoritativa, gravação em `__categoryMapping`
+- [src/lib/categorizer.ts](src/lib/categorizer.ts) — `findCategoryByCsvMapping`, `inferTipoCode`, `TIPO_ALIASES`, Layer 0, `LeafCategory.parentName`, tipo `'csv_match'`
+- [src/server/staging.ts](src/server/staging.ts) — pre-classificação no `approveAndInsert`, propagação de `metadata.categoryMapping`
+- [src/app/(authenticated)/upload/[id]/review/review-client.tsx](src/app/(authenticated)/upload/[id]/review/review-client.tsx) — toast de split CSV-match × LLM
+
+---
+
+### ✅ Sessão de hardening do pipeline de categorização — *commits `b040a23` / `37026ef` / `cec830a` / `2bd4cf1`, deployada*
+
+**Contexto:** após resolver upload + bulk-set de direção (sessão anterior — commit `895dd83`), o usuário fez upload de CSV de 7762 linhas, marcou todas como Entrada, clicou Importar. Toast verde "7762 importadas" apareceu, mas `/transacoes` mostrava tudo com categoria em branco. No dashboard da Inngest, **nenhum evento `transaction/batch-inserted` apareceu na aba Events** — o catch silencioso engoliu a falha do `inngest.send`.
+
+**4 problemas em cascata, cada commit resolve um:**
+
+1. **`b040a23` — catch loud + chunking interno + transparência de hints**
+   - `approveAndInsert` em [src/server/staging.ts](src/server/staging.ts) trocou `try/catch {}` por `try/catch (err) { console.error; categorizationDispatched=false }`. Devolve flag pro frontend.
+   - Toast persistente (15s) em [review-client.tsx](src/app/(authenticated)/upload/[id]/review/review-client.tsx) quando `categorizationDispatched === false`: "X transações importadas, mas a categorização não foi iniciada. Vá em /transações e clique em Categorizar agora."
+   - Refator do `categorize-transactions` em [src/jobs/categorize-transaction.ts](src/jobs/categorize-transaction.ts): antes era loop inteiro dentro de UMA `step.run`, com ~1s por chamada Haiku × 7762 = ~130min wall time → Vercel matava em 5min (`maxDuration=300`) e nada completava. Agora chunkado: `CHUNK_SIZE=50`, cada chunk vira uma `step.run('chunk-N', ...)` independente. Inngest persiste estado entre steps; retry automático por step. `processChunk()` extraído como função pura.
+   - Parser ganha `detectedHints` no retorno — lista de headers identificados como hint. `process-document.ts` grava em `documents.extractedData.detectedCategoryHints` pra debug futuro ("o parser pegou Grupo e Família, mas não Departamento — vou ajustar heurística").
+
+2. **`37026ef` — diagnóstico: logar erro real do inngest.send**
+   - `triggerCategorization` em [src/server/transactions.ts](src/server/transactions.ts) tinha catch genérico devolvendo mensagem amigável sem nenhum detalhe técnico. Trocado por `console.error('[triggerCategorization] inngest.send falhou:', err)` + propaga `err.message` no retorno pra toast em `/transacoes` mostrar exatamente o que o SDK reclamou. Pré-condição pra diagnosticar o erro 400 da próxima etapa.
+
+3. **`cec830a` — chunkar evento batch-inserted (limite 256KB do Inngest)**
+   - Erro real revelado pelo logging do `37026ef`: `Inngest API Error: 400 Event is over the max size: Max 262144 bytes / Size 302874 bytes`. Limite real do Inngest é **256KB por evento**, não 512KB como eu tinha calculado. 7762 UUIDs JSON-encoded batem ~296KB.
+   - Solução: novo helper `sendCategorizationEvents(transactionIds, organizationId, forceRun?)` em [src/lib/inngest.ts](src/lib/inngest.ts) fatia IDs em batches de 3000 (~117KB cada) e dispara um evento por chunk. A função `categorize-transactions` tem `concurrency: { limit: 1, key: 'event.data.organizationId' }`, então os eventos são processados em fila — não disputam recursos.
+   - `approveAndInsert` e `triggerCategorization` passam a usar o helper em vez de `inngest.send` direto.
+
+4. **`2bd4cf1` — strip BOM/zero-width das chaves de env**
+   - Após `cec830a` deploy, evento finalmente chegou no Inngest e função foi invocada. Mas `chunk-0` falhou com `TypeError: Cannot convert argument to a ByteString because the character at index 0 has a value of 65279` (U+FEFF / BOM). Stack: `fZ.apiKeyAuth → _Headers.append → webidl.converters.ByteString`. Esse é o caminho do SDK Anthropic construindo o header `x-api-key`.
+   - Causa raiz: `ANTHROPIC_API_KEY` na Vercel veio com BOM no início do valor (copy/paste de editor Windows). Toda chamada Haiku falhava — mas o parser CSV tinha **fallback heurístico** silencioso (`tryLlmMapping` retorna null em erro → cai pra `heuristicMapping`), mascarando o problema durante `document/uploaded`. O categorizer não tem fallback, então o erro virou visível em escala.
+   - Fix defensivo em [src/lib/anthropic.ts](src/lib/anthropic.ts) e [src/lib/inngest.ts](src/lib/inngest.ts): `sanitizeKey()` strippa BOM (U+FEFF), zero-width space (U+200B), control chars e whitespace nos dois extremos das envs sensíveis no startup. Sobrevive a env contaminada sem precisar o usuário re-colar a chave na Vercel.
+
+**Lição arquitetural (anotada em SCHEMA_DECISIONS Decisão 12 implicitamente):** quando um pipeline tem fallback silencioso, falhas se acumulam invisíveis. O parser caía pra heurística silenciosa há quem sabe quantos uploads antes do problema virar visível. Fallback é bom UX, mas precisa logar a falha original — sem isso a degradação fica imperceptível até quebrar algo sem fallback.
+
+---
+
+### ✅ Sessão de UX /transacoes — page-size selector + delete limit — *commits `000ebc3` / `8948106` / `37b5c30`, deployada*
+
+**Contexto:** com a categorização não funcionando (sessão acima, ainda não diagnosticada na época), usuário precisava limpar 7762 transações lixo do DB pra começar do zero. Tabela `/transacoes` tinha `PAGE_SIZE=100` hard-coded e "Apagar selecionados" só agia sobre a página corrente. Limpeza demandaria ~58 ciclos de seleção+delete. UX bloqueador.
+
+**Implementação em 3 commits:**
+
+1. **`000ebc3` — seletor 100/500/1000 no rodapé (DEPLOY FALHOU)**
+   - Exportei `ALLOWED_PAGE_SIZES` de [src/server/transactions.ts](src/server/transactions.ts) (que tem `'use server'`) — Next.js proíbe arquivos `'use server'` de exportar constantes (só funções async). Build quebrou na Vercel com error 45s.
+
+2. **`8948106` — fix do build (constante em arquivo neutro)**
+   - Criado [src/lib/transactions-page-size.ts](src/lib/transactions-page-size.ts) sem diretiva, exportando `ALLOWED_PAGE_SIZES`, `AllowedPageSize`, `DEFAULT_PAGE_SIZE`, `sanitizePageSize`. Server e client importam de lá. Build passou.
+   - URL ganha `?pageSize=500` etc, persistido em `localStorage` via `FILTER_KEYS` — preferência sobrevive a navegação e a aplicação de filtros. Rodapé exibe o `<select>` sempre que houver mais de 100 transações, mesmo sem paginação ativa (`data.total > 100 || data.pages > 1`).
+   - `getTransactions` aceita `pageSize?: number`, sanitiza contra `ALLOWED_PAGE_SIZES` (default 100), aplica em `limit()` e `Math.ceil(total / size)`.
+
+3. **`37b5c30` — aumentar limite de delete em lote de 500 pra 1000**
+   - Após teste com `pageSize=1000`, usuário tentou "Apagar selecionados" e bateu no limite hard-coded `if (ids.length > 500) return { error: 'Máximo de 500 transações por operação.' }`. Limite era arbitrário — Postgres aguenta `IN (...)` com milhares de IDs sem problema. Subi pra 1000 pra acompanhar o novo `pageSize` máximo.
+
+**Resultado:** limpeza de 5762 transações virou 6 ciclos em vez de 58.
+
+**Arquivos modificados:**
+- [src/lib/transactions-page-size.ts](src/lib/transactions-page-size.ts) — novo (10 linhas)
+- [src/server/transactions.ts](src/server/transactions.ts) — `getTransactions` parametrizado, delete limit 1000
+- [src/app/(authenticated)/transacoes/page.tsx](src/app/(authenticated)/transacoes/page.tsx) — parser de `?pageSize`
+- [src/app/(authenticated)/transacoes/transacoes-client.tsx](src/app/(authenticated)/transacoes/transacoes-client.tsx) — `<select>` no rodapé, `pageSize` em `FILTER_KEYS`
+
+---
+
+### ✅ Sessão de UX upload review — bulk-set direção + hints da planilha — *commit `895dd83`, deployada*
+
+**Contexto:** após o parser CSV redesenhado (`46b43cc`) o usuário subiu o `fatur syndata.csv` mas o parser não conseguiu inferir direção das 7762 linhas (não havia coluna explícita de tipo, era CSV de vendas só com valores positivos). Importar com `direction=null` era inviável — `approveAndInsert` filtrava por `r.date && r.amount && r.direction`, todas as linhas seriam descartadas.
+
+**Entregue neste commit:**
+
+1. **Bulk-set de direção em massa (review page)**
+   - Nova server action `setAllPendingDirection(documentId, direction)` em [src/server/staging.ts](src/server/staging.ts) — UPDATE em todas as rows do documento com `direction IS NULL`, sem filtro de status. Retorna count atualizado.
+   - Banner âmbar em [review-client.tsx](src/app/(authenticated)/upload/[id]/review/review-client.tsx) aparece quando `rows.some(r => !r.direction && r.status !== 'rejected')`. Mostra contagem + dois botões: "Marcar todas como Entrada" e "Marcar todas como Saída". Click dispara a server action + atualiza state local + toast de confirmação.
+   - Não bloqueia o fluxo — usuário pode setar individualmente por linha também via click no badge da direção (já existia).
+
+2. **Hints de categoria do CSV propagados pro categorizer (Camada 4 LLM)**
+   - Parser ganha `categoryHints: number[]` no `ColumnMapping`, retornado pelo LLM E pela heurística. Heurística lista keywords PT-BR (`grupo`, `familia`, `subgrupo`, `categoria`, `classe`, `departamento`, `centro custo`, `plano de contas`, `rubrica`, `segmento`, `linha`, `natureza`).
+   - Cada `StagingRow.rawData` ganha chave especial `__categoryHints = {<header>: <valor>}` quando há colunas hint detectadas (deduplicadas contra colunas semânticas que o LLM já mapeou).
+   - `approveAndInsert` propaga `__categoryHints` pra `transaction.metadata.categoryHints` (somente se houver pelo menos 1 chave).
+   - `classifyWithLLM` em [src/lib/categorizer.ts](src/lib/categorizer.ts) lê `tx.metadata.categoryHints` e adiciona bloco "Classificação na planilha de origem (forte sinal pra escolher a natureza)" na user message do Haiku. Pluggy continuava recebendo hint de `pluggyCategory` separadamente.
+
+**Arquivos modificados:**
+- [src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts) — `categoryHints` no mapping, regex e LLM prompt, gravação em `rawData.__categoryHints`
+- [src/server/staging.ts](src/server/staging.ts) — `setAllPendingDirection`, propagação de `categoryHints` em `metadata`
+- [src/lib/categorizer.ts](src/lib/categorizer.ts) — `buildCategoryHintsBlock`, parâmetro `categoryHints` em `classifyWithLLM`
+- [src/app/(authenticated)/upload/[id]/review/review-client.tsx](src/app/(authenticated)/upload/[id]/review/review-client.tsx) — banner âmbar com botões de bulk-set
+
+---
+
 ### ✅ Sessão de redesenho do parser CSV — *commit `46b43cc`, deployada*
 
 **Contexto:** após a sessão de hardening (abaixo) restaurar o pipeline, o mesmo arquivo `fatur syndata.csv` (7k linhas) continuou falhando — desta vez com `Cannot convert argument to a ByteString because the character at index 0 has a value of 65279` em **todos os 65 chunks**. Duas tentativas de strip de BOM (`3c9dc57` via regex literal, `aca6048` via charCodeAt) **não resolveram em produção**, apesar de funcionarem localmente. Teste isolado contra o SDK Anthropic enviando BOM em `content` passou sem erro — descartando a hipótese de "BOM no body causa o erro". A causa raiz do `ByteString` permanece indeterminada (provavelmente um header indireto que captura algo do request), mas em vez de continuar tentando diagnosticar um pipeline frágil por design, o usuário pediu uma **solução definitiva**.
