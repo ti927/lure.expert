@@ -226,6 +226,12 @@ export default function ReviewClient({ documentId, initialData }: Props) {
       if (result.inserted > 0) setIsImported(true)
       if (result.inserted > 0) {
         toast.success(`${result.inserted} transaç${result.inserted === 1 ? 'ão importada' : 'ões importadas'} com sucesso`)
+        if (result.csvMatched && result.csvMatched > 0) {
+          toast.info(
+            `${result.csvMatched} ${result.csvMatched === 1 ? 'linha foi classificada' : 'linhas foram classificadas'} automaticamente pelo Categoria Pai/Filho do CSV.`,
+            { duration: 8000 },
+          )
+        }
       } else if (result.total === 0) {
         toast.info('Todas as linhas já foram rejeitadas — nenhuma transação a importar.')
       } else {

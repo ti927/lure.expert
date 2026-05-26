@@ -30,8 +30,16 @@ export interface CategorizationResult {
   businessUnitId: string | null
   legalEntityId: string | null
   confidence: number
-  method: 'rule' | 'recurrence' | 'embedding' | 'llm'
+  method: 'csv_match' | 'rule' | 'recurrence' | 'embedding' | 'llm'
   needsReview: boolean
+}
+
+export interface LeafCategory {
+  id: string
+  code: string | null
+  name: string
+  type: string
+  parentName: string | null
 }
 
 export interface OrgContext {
@@ -44,7 +52,7 @@ export interface OrgContext {
     targetBusinessUnitId: string | null
     targetLegalEntityId: string | null
   }>
-  categories: Array<{ id: string; code: string | null; name: string; type: string }>
+  categories: LeafCategory[]
   costCenters: Array<{ id: string; name: string; code: string | null }>
   businessUnits: Array<{ id: string; name: string; code: string | null }>
   legalEntities: Array<{ id: string; name: string; cnpj: string | null }>
@@ -97,9 +105,16 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
   // Nós folha = categorias cujo id não aparece como parentId de nenhuma outra categoria.
   // Isso inclui: todos os Filhos (parentId != null) + Pais sem filhos (caso de uso BP).
   const parentIdSet = new Set(allCats.map(c => c.parentId).filter((p): p is string => p !== null))
-  const leafCats = allCats
+  const nameById = new Map(allCats.map(c => [c.id, c.name]))
+  const leafCats: LeafCategory[] = allCats
     .filter(c => !parentIdSet.has(c.id))
-    .map(c => ({ id: c.id, code: c.code, name: c.name, type: c.type }))
+    .map(c => ({
+      id: c.id,
+      code: c.code,
+      name: c.name,
+      type: c.type,
+      parentName: c.parentId ? (nameById.get(c.parentId) ?? null) : null,
+    }))
 
   return {
     organizationId,
@@ -109,6 +124,47 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
     businessUnits: bus,
     legalEntities: les,
   }
+}
+
+// ─── Camada 0: Match autoritativo do CSV ─────────────────────────────────────
+// Quando o CSV tem colunas literais "Categoria Filho" / "Natureza Filho" /
+// "Conta Contábil" / etc, o valor é tratado como nome canônico da folha do
+// plano de contas. Tenta lookup exato normalizado; se houver ambiguidade,
+// desempata pelo nome do pai. Sem match → cai pra Layer 1+ (regra → LLM).
+
+export interface CsvCategoryMapping {
+  categoriaFilho?: string
+  categoriaPai?: string
+}
+
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim()
+}
+
+export function findCategoryByCsvMapping(
+  mapping: CsvCategoryMapping | null | undefined,
+  leaves: LeafCategory[],
+): string | null {
+  if (!mapping?.categoriaFilho) return null
+  const targetFilho = normalizeForMatch(mapping.categoriaFilho)
+  if (!targetFilho) return null
+
+  const candidates = leaves.filter(c => normalizeForMatch(c.name) === targetFilho)
+  if (candidates.length === 0) return null
+  if (candidates.length === 1) return candidates[0].id
+
+  // Múltiplos matches: desempata pelo nome do pai se fornecido.
+  if (mapping.categoriaPai) {
+    const targetPai = normalizeForMatch(mapping.categoriaPai)
+    if (targetPai) {
+      const filteredByPai = candidates.filter(c =>
+        c.parentName && normalizeForMatch(c.parentName) === targetPai,
+      )
+      if (filteredByPai.length === 1) return filteredByPai[0].id
+    }
+  }
+  return null  // ambíguo, deixa o LLM decidir
 }
 
 // ─── Camada 1: Regras explícitas ─────────────────────────────────────────────
@@ -430,6 +486,28 @@ export async function categorizeTransaction(
   const domainCategoryIds = new Set(domainCats.map(c => c.id))
   const domainCtx: OrgContext = { ...ctx, categories: domainCats }
 
+  const meta = (tx.metadata ?? {}) as Record<string, unknown>
+
+  // Camada 0: Match autoritativo do CSV (Categoria Pai/Filho do arquivo).
+  // Lookup determinístico contra o plano de contas — quando casa, pula LLM.
+  const csvMapping = meta.categoryMapping && typeof meta.categoryMapping === 'object' && !Array.isArray(meta.categoryMapping)
+    ? (meta.categoryMapping as CsvCategoryMapping)
+    : null
+  const csvMatchId = findCategoryByCsvMapping(csvMapping, domainCats)
+  if (csvMatchId) {
+    return {
+      result: {
+        categoryId: csvMatchId,
+        costCenterId: null,
+        businessUnitId: null,
+        legalEntityId: null,
+        confidence: 1.0,
+        method: 'csv_match',
+        needsReview: false,
+      },
+    }
+  }
+
   // Camada 1: Regras (domain-aware)
   const ruleResult = applyRules(tx.description, tx.accountId ?? null, ctx.rules, domainCategoryIds)
   if (ruleResult) return { result: ruleResult }
@@ -443,7 +521,6 @@ export async function categorizeTransaction(
   // Camada 3: Embeddings — não implementado
 
   // Camada 4: Claude Haiku — só oferece categorias do domínio correto
-  const meta = (tx.metadata ?? {}) as Record<string, unknown>
   const pluggyCategory = typeof meta.pluggyCategory === 'string' ? meta.pluggyCategory : null
   const merchantName = typeof meta.merchantName === 'string' ? meta.merchantName : null
   const categoryHints = meta.categoryHints && typeof meta.categoryHints === 'object' && !Array.isArray(meta.categoryHints)

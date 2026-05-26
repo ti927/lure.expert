@@ -13,6 +13,13 @@ import {
 } from '@/db/schema'
 import { eq, and, isNotNull, inArray, isNull, sql } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
+import {
+  loadOrgContext,
+  findCategoryByCsvMapping,
+  domainFromReportType,
+  type CsvCategoryMapping,
+} from '@/lib/categorizer'
+import { BP_TYPES } from '@/lib/bp-types'
 
 const SOURCE_LABELS: Record<string, string> = {
   bank: 'Extrato bancário',
@@ -220,11 +227,25 @@ export async function approveAndInsert(documentId: string) {
   const valid = approved.filter(r => r.date && r.amount && r.direction)
   const skipped = approved.length - valid.length
 
-  if (valid.length === 0) return { inserted: 0, skipped, total: approved.length }
+  if (valid.length === 0) return { inserted: 0, skipped, total: approved.length, csvMatched: 0, categorizationDispatched: true }
 
-  // Insert in batches of 100 and collect IDs for categorization
+  // Carrega contexto da org UMA vez (folhas com parentName) pra tentar match
+  // determinístico contra Categoria/Natureza Pai/Filho que vieram do CSV.
+  // Determina o domínio (DRE vs BP) pelo report_type do documento, igual
+  // o categorizer faz.
+  const orgCtx = await loadOrgContext(organizationId)
+  const documentDomain = domainFromReportType(doc.reportType)
+  const bpTypeSet = new Set<string>(BP_TYPES)
+  const domainLeaves = orgCtx.categories.filter(c =>
+    documentDomain === 'bp' ? bpTypeSet.has(c.type) : !bpTypeSet.has(c.type),
+  )
+
+  // Insert in batches of 100 and collect IDs for categorization.
+  // csvMatchedIds NÃO entra no batch-inserted event (já classificado, não
+  // precisa passar pelo categorizer LLM).
   const BATCH = 100
   const insertedIds: string[] = []
+  const csvMatchedIds: string[] = []
 
   for (let i = 0; i < valid.length; i += BATCH) {
     const batch = valid.slice(i, i + BATCH)
@@ -234,8 +255,16 @@ export async function approveAndInsert(documentId: string) {
         const hints = raw.__categoryHints && typeof raw.__categoryHints === 'object'
           ? (raw.__categoryHints as Record<string, string>)
           : null
+        const mapping = raw.__categoryMapping && typeof raw.__categoryMapping === 'object'
+          ? (raw.__categoryMapping as CsvCategoryMapping)
+          : null
+
         const metadata: Record<string, unknown> = { stagingId: r.id, sourceType }
         if (hints && Object.keys(hints).length > 0) metadata.categoryHints = hints
+        if (mapping && (mapping.categoriaFilho || mapping.categoriaPai)) metadata.categoryMapping = mapping
+
+        // Layer 0: tenta lookup determinístico pelo plano de contas
+        const csvMatchId = findCategoryByCsvMapping(mapping, domainLeaves)
 
         return {
           organizationId,
@@ -249,19 +278,24 @@ export async function approveAndInsert(documentId: string) {
           documentId,
           rawData: r.rawData ?? {},
           metadata,
+          categoryId: csvMatchId,
+          categorizationMethod: csvMatchId ? 'csv_match' : null,
+          categorizationConfidence: csvMatchId ? '1.0' : null,
           needsReview: false,
-          status: 'confirmed',
+          status: 'confirmed' as const,
         }
       }),
-    ).returning({ id: transactions.id })
-    insertedIds.push(...rows.map(r => r.id))
+    ).returning({ id: transactions.id, categoryId: transactions.categoryId })
+
+    for (const row of rows) {
+      if (row.categoryId) csvMatchedIds.push(row.id)
+      else insertedIds.push(row.id)
+    }
   }
 
-  // Dispara categorização assíncrona via Inngest. As transactions já estão
-  // gravadas; se o send falhar, NÃO desfazemos os inserts. Mas sinalizamos
-  // visivelmente pro frontend pra usuário poder rodar "Categorizar agora"
-  // depois — em vez de silenciar e deixar a tabela cheia de categorias em
-  // branco sem nenhuma pista do motivo.
+  // Dispara categorização assíncrona via Inngest SÓ pros que não casaram via
+  // CSV. Se o send falhar, NÃO desfazemos os inserts — sinalizamos pro
+  // frontend pra usuário poder rodar "Categorizar agora" depois.
   let categorizationDispatched = true
   if (insertedIds.length > 0) {
     try {
@@ -273,5 +307,11 @@ export async function approveAndInsert(documentId: string) {
   }
 
   revalidatePath(`/upload/${documentId}/review`)
-  return { inserted: valid.length, skipped, total: approved.length, categorizationDispatched }
+  return {
+    inserted: valid.length,
+    skipped,
+    total: approved.length,
+    csvMatched: csvMatchedIds.length,
+    categorizationDispatched,
+  }
 }

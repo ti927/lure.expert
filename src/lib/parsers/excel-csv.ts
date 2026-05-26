@@ -20,9 +20,14 @@ type ColumnMapping = {
   description: number | null
   amountSignIndicatesDirection: boolean
   // Índices de colunas que descrevem hierarquia/categoria do lançamento
-  // (ex: Grupo, Família, Categoria, Conta Contábil, Departamento, Centro de Custo)
-  // — não viram campos estruturados, mas alimentam o prompt do categorizador.
+  // (ex: Grupo, Família, Subgrupo, Departamento) — sinais ADVISORY pra o
+  // categorizador LLM. Não casam 1:1 com folhas do plano de contas.
   categoryHints: number[]
+  // Colunas AUTORITATIVAS: quando o CSV contém literalmente "Categoria Filho"
+  // ou "Natureza Filho/Pai", o valor é tratado como nome canônico do plano de
+  // contas e tentamos um match determinístico antes de chamar o LLM.
+  categoriaFilhoIdx: number | null
+  categoriaPaiIdx: number | null
 }
 
 const SYSTEM_PROMPT = `Você analisa cabeçalhos de planilhas/CSV financeiros em português e retorna o índice (0-based) de cada coluna semântica.
@@ -34,10 +39,10 @@ Regras:
 - date: coluna de competência — quando o evento ocorreu (ex: "Data", "Data da NF", "Data da compra", "Vencimento", "Emissão", "Lançamento").
 - effectiveDate: coluna de caixa — quando o dinheiro se moveu (ex: "Data Pagamento", "Crédito", "Débito", "Liquidação"). Se não existir, retorne null (NÃO repita date).
 - amount: coluna de valor monetário (ex: "Valor", "Total", "Bruto", "Líquido", "Montante", "VLR").
-- direction: coluna que indica se é entrada/saída (ex: "Tipo", "Natureza", "C/D", "Entrada/Saída"). Se não houver coluna explícita, retorne null.
+- direction: coluna que indica se é entrada/saída (ex: "Tipo", "C/D", "Entrada/Saída"). Se não houver coluna explícita, retorne null. NÃO use colunas chamadas "Natureza" sozinhas — essas geralmente são natureza CONTÁBIL, não direção de fluxo.
 - amountSignIndicatesDirection: true se os valores de amount podem vir negativos (= saída) ou positivos (= entrada). Olhe as amostras pra decidir.
 - description: coluna identificadora da transação (ex: "Descrição", "Histórico", "Produto", "Lançamento", "Obs"). Se houver várias candidatas (ex: produto + cliente), escolha a MAIS DESCRITIVA.
-- categoryHints: lista de índices de colunas que descrevem HIERARQUIA ou CATEGORIA do lançamento — sinais úteis pra um categorizador classificar a natureza contábil (ex: "Grupo", "Família", "Subgrupo", "Categoria", "Conta Contábil", "Departamento", "Centro de Custo", "Classe", "Plano de Contas"). NÃO inclua aqui description, date, amount nem direction. Se não houver nenhuma, retorne lista vazia [].
+- categoryHints: lista de índices de colunas que descrevem HIERARQUIA ou CATEGORIA aproximada do lançamento — sinais ADVISORY ("Grupo", "Família", "Subgrupo", "Departamento", "Classe", "Segmento"). NÃO inclua colunas chamadas literalmente "Categoria Pai", "Categoria Filho", "Natureza Pai" ou "Natureza Filho" — essas são detectadas separadamente como mapeamento autoritativo. NÃO inclua description, date, amount nem direction.
 - Se um campo não existir no arquivo, use null. Não invente.`
 
 // ─────────────────────────────────────────────────────────────────────
@@ -76,14 +81,39 @@ function readTabular(buffer: Buffer, mimeType?: string): string[][] {
 // 2) DETECÇÃO DE COLUNAS — LLM primeiro, heurística como fallback
 // ─────────────────────────────────────────────────────────────────────
 
+// Detecta colunas autoritativas SEMPRE por nome — não delegamos pro LLM, pra
+// garantir determinismo. Header normalizado deve casar exato com "categoria/
+// natureza pai/filho". Outros nomes (Conta Contábil, Plano de Contas, etc)
+// também são tratados como folha autoritativa.
+function detectAuthoritativeColumns(header: string[]): {
+  categoriaFilhoIdx: number | null
+  categoriaPaiIdx: number | null
+} {
+  const norm = (s: string) =>
+    s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+  let categoriaFilhoIdx: number | null = null
+  let categoriaPaiIdx: number | null = null
+  for (let i = 0; i < header.length; i++) {
+    const n = norm(header[i])
+    if (categoriaFilhoIdx === null) {
+      if (/^(categoria|natureza) filho$/.test(n)) categoriaFilhoIdx = i
+      else if (/^(conta contabil|plano de contas|plano contas|plano de conta)$/.test(n)) categoriaFilhoIdx = i
+    }
+    if (categoriaPaiIdx === null && /^(categoria|natureza) pai$/.test(n)) categoriaPaiIdx = i
+  }
+  return { categoriaFilhoIdx, categoriaPaiIdx }
+}
+
 async function detectColumnMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping> {
-  // Tenta LLM primeiro
+  const authoritative = detectAuthoritativeColumns(header)
+  // Tenta LLM primeiro pra advisory hints + colunas semânticas
   const llmMapping = await tryLlmMapping(header, sampleRows)
   if (llmMapping && validateMapping(llmMapping, header.length)) {
-    return llmMapping
+    return { ...llmMapping, ...authoritative }
   }
   // Fallback heurístico
-  return heuristicMapping(header, sampleRows)
+  return { ...heuristicMapping(header, sampleRows), ...authoritative }
 }
 
 async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping | null> {
@@ -114,6 +144,8 @@ async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<
       description: typeof parsed.description === 'number' ? parsed.description : null,
       amountSignIndicatesDirection: parsed.amountSignIndicatesDirection === true,
       categoryHints: rawHints.filter((n): n is number => typeof n === 'number'),
+      categoriaFilhoIdx: null,  // detectado separadamente em detectAuthoritativeColumns
+      categoriaPaiIdx: null,
     }
   } catch {
     return null
@@ -175,7 +207,12 @@ function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMappi
     }
   }
 
-  return { date, effectiveDate, amount, direction, description, amountSignIndicatesDirection, categoryHints }
+  return {
+    date, effectiveDate, amount, direction, description,
+    amountSignIndicatesDirection, categoryHints,
+    categoriaFilhoIdx: null,  // detectado separadamente em detectAuthoritativeColumns
+    categoriaPaiIdx: null,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -328,10 +365,15 @@ export async function parseExcelOrCsv(
   if (mapping.date === null) warnings.push('Coluna de data não detectada — linhas terão date=null')
   if (mapping.amount === null) warnings.push('Coluna de valor não detectada — linhas terão amount=null')
 
-  // Deduplica hints contra colunas semânticas (LLM/heurística podem coincidir)
+  // Deduplica hints contra colunas semânticas e autoritativas (LLM/heurística
+  // podem coincidir, ou o LLM pode incluir uma coluna que já tratamos como
+  // autoritativa). Hints autoritativas (Categoria/Natureza Filho/Pai) NÃO
+  // entram em `__categoryHints` — viram `__categoryMapping`.
   const semanticIdxs = new Set<number>(
-    [mapping.date, mapping.effectiveDate, mapping.amount, mapping.direction, mapping.description]
-      .filter((v): v is number => v !== null),
+    [
+      mapping.date, mapping.effectiveDate, mapping.amount, mapping.direction, mapping.description,
+      mapping.categoriaFilhoIdx, mapping.categoriaPaiIdx,
+    ].filter((v): v is number => v !== null),
   )
   const hintIdxs = Array.from(new Set(mapping.categoryHints))
     .filter(i => Number.isInteger(i) && i >= 0 && i < header.length && !semanticIdxs.has(i))
@@ -351,6 +393,22 @@ export async function parseExcelOrCsv(
         if (val) hints[key] = val
       }
       if (Object.keys(hints).length > 0) rawData.__categoryHints = hints
+    }
+
+    // Bloco AUTORITATIVO: usado em approveAndInsert/categorizer Layer 0 pra
+    // match exato contra o plano de contas da org. Quando preenchido, tenta
+    // skip do LLM e classifica direto.
+    const categoriaFilho = mapping.categoriaFilhoIdx !== null
+      ? (row[mapping.categoriaFilhoIdx] ?? '').trim()
+      : ''
+    const categoriaPai = mapping.categoriaPaiIdx !== null
+      ? (row[mapping.categoriaPaiIdx] ?? '').trim()
+      : ''
+    if (categoriaFilho || categoriaPai) {
+      const map: Record<string, string> = {}
+      if (categoriaFilho) map.categoriaFilho = categoriaFilho
+      if (categoriaPai) map.categoriaPai = categoriaPai
+      rawData.__categoryMapping = map
     }
 
     const date = mapping.date !== null ? normalizeDate(row[mapping.date]) : null
