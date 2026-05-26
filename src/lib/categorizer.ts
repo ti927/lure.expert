@@ -137,9 +137,19 @@ export interface CsvCategoryMapping {
   categoriaPai?: string
 }
 
+// Normaliza pra comparação robusta entre nome da folha do plano de contas e
+// valor da célula do CSV: lowercase + tira acentos + colapsa qualquer
+// caractere não-alfanumérico em espaço (en-dash, em-dash, barra, parênteses)
+// + colapsa whitespace múltiplo. Assim "AC3 – Porcelanato / Flex" do CSV
+// casa com "AC3 - Porcelanato / Flex" do plano (mesmo com hyphen comum).
+// Usa ̀-ͯ (combining diacritical marks) em escape explícito —
+// SWC/Next.js já strippou range literal antes em produção.
 function normalizeForMatch(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/\s+/g, ' ').trim()
+  return s.toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 export function findCategoryByCsvMapping(
