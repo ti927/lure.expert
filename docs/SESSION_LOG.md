@@ -6,6 +6,28 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão de fix do connect Pluggy — credenciais contaminadas por caractere invisível — *commit `602a6cd`, deployada*
+
+**Contexto:** usuário reportou que em produção (Vercel) clicar em "Conectar conta" no Pluggy falhava com toast "Não foi possível iniciar a conexão. Verifique as configurações do Pluggy." Console do browser mostrava `POST /contas 500`. Local funcionava.
+
+**Diagnóstico (via Vercel CLI):**
+- `vercel env ls production` confirmou que `PLUGGY_CLIENT_ID`/`SECRET`/`ENVIRONMENT` **estão setadas** — não era variável faltando.
+- `vercel env pull` retorna vazio pra vars marcadas como "Sensitive" (Anthropic, DB, Supabase URL também vieram vazias mas funcionam) — inconclusivo pra ler valor.
+- `vercel logs <deployment>` capturou o erro real de runtime: `et [HTTPError]: Response code 400 (Bad Request)`, `code: 'ERR_NON_2XX_3XX_RESPONSE'` (erro do `got`, lib HTTP do `pluggy-sdk`) no `POST /contas`. **Não era BOM/ByteString** (que seria erro de header) — era um **400 da própria API da Pluggy**.
+- Reprodução 1:1 com as credenciais **locais** (que são válidas) contra `https://api.pluggy.ai/auth`:
+  - credencial limpa → **HTTP 200** `{apiKey:...}`
+  - `clientId + "\n"` → **HTTP 400** `{"message":"clientId must be a UUID","code":400}`
+  - `clientId + BOM` → **HTTP 400** idem
+- **Causa raiz:** o `PLUGGY_CLIENT_ID` (e/ou `SECRET`) na Vercel tem um caractere invisível (newline/BOM/zero-width) colado junto. A Pluggy valida que o `clientId` é UUID e rejeita com 400 → `got` lança `HTTPError` → server action `generateConnectToken` propaga → 500. Mesma classe do incidente de BOM na `ANTHROPIC_API_KEY` (`2bd4cf1`), mas manifesta como 400 da API em vez de `TypeError: ByteString` porque a credencial vai no corpo JSON, não em header.
+
+**Fix (`602a6cd`):**
+- [src/lib/pluggy.ts](src/lib/pluggy.ts) — novo `sanitizeSecret()` apara das pontas: controle/whitespace (≤0x20), NBSP (0xA0), BOM (0xFEFF) e zero-width (0x200B–0x200D). Implementado com **code points** (sem caracteres invisíveis no fonte — tentativas anteriores com char class literal injetavam invisíveis no próprio regex). `getPluggyClient()` passa `PLUGGY_CLIENT_ID`/`SECRET` por ele antes de instanciar o `PluggyClient`. Mesmo padrão de `anthropic.ts` e `inngest.ts`, agora cobrindo o último consumidor de credencial que faltava.
+- Testado contra 6 casos de contaminação (newline, BOM, ZWSP, espaços, tab+CR) — todos normalizam pro UUID limpo. ESLint limpo. Fonte verificado sem BOM/zero-width.
+
+**Decisão de não mexer na env da Vercel:** o fix em código torna o app resiliente independente de como a env foi colada, então não foi necessário re-gravar `PLUGGY_CLIENT_ID`/`SECRET` na Vercel. Se reaparecer, vale limpar a origem também.
+
+---
+
 ### ✅ Sessão de Layer 0 — categorização determinística via CSV — *commits `d587644` / `d72ec37` / `35400e6`, deployada*
 
 **Contexto:** após a sessão de hardening do pipeline (ver entrada abaixo) o usuário levantou questão fundamental — se o CSV traz colunas explícitas `Natureza pai` / `Natureza filho` com nomes idênticos aos do plano de contas da org, **por que paga LLM pra fazer um lookup que poderia ser direto no DB?** Hints da planilha eram tratados como advisory (alimentavam o prompt do Haiku) em vez de autoritativos. Sem Layer 0, o LLM podia errar (especialmente quando o mesmo nome de filho aparece sob tipos diferentes, ex: `Porcelanato Acetinado` sob Receita Operacional E sob CPV — o usuário usa esse pattern pra calcular margem direta da categoria).
