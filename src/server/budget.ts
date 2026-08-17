@@ -47,7 +47,15 @@ import {
   type BudgetEntryListItem,
   type AdjustableField,
   type AmountMode,
+  type BudgetRegime,
+  type BudgetVsActualFilters,
+  type BudgetVsActualRow,
+  type BudgetVsActualData,
+  type BudgetDrillDownEntry,
 } from '@/lib/budget-types'
+import { BP_TYPES, type DreType } from '@/lib/dre-types'
+import { generateMonthRange } from '@/lib/dre-calc'
+import { dimensionFilters } from '@/lib/sql-dimensions'
 import { expandSeries, fitsInFiscalYear, type RecurrenceInput } from '@/lib/budget-recurrence'
 import { monthLabel } from '@/lib/format'
 
@@ -819,6 +827,272 @@ export async function updateBudgetEntry(entryId: string, patch: BudgetEntryUpdat
 
   revalidatePath('/orcamento')
   return { success: true as const, adjustedFields }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ORÇADO × REALIZADO
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const BP_LIST = sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))
+
+/**
+ * A matriz de comparação.
+ *
+ * CHAVE: `categoryId:month`, em UNIÃO dos dois lados — categoria orçada sem
+ * realizado ("não gastei") e realizada sem orçado ("gasto não previsto") são as
+ * duas descobertas mais valiosas da tela, e a interseção esconderia as duas.
+ *
+ * O realizado reproduz exatamente as regras da `getDreData` (competência) ou da
+ * `getFluxoMensalData` (caixa) — mesmo INNER JOIN em categories, mesma exclusão
+ * de BP_TYPES, `status NOT IN ('pending','duplicate')` e a coluna de
+ * visibilidade correspondente ao regime. Não dá para reusar `getFluxoMensalData`
+ * porque ela não devolve `categoryType`, exigido pela cascata de subtotais.
+ *
+ * Os filtros de dimensão são aplicados de forma SIMÉTRICA nos dois lados;
+ * filtrar só o orçado infla a variação.
+ */
+export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise<BudgetVsActualData> {
+  const { organizationId } = await getAuthContext()
+  const { versionId, regime, from, to } = filters
+
+  const budgetDate = regime === 'caixa' ? sql`e.cash_date` : sql`e.competence_date`
+  const txDate     = regime === 'caixa' ? sql`COALESCE(t.effective_date, t.date)` : sql`t.date`
+  const hideCol    = regime === 'caixa' ? sql`c.hide_in_cashflow` : sql`c.hide_in_dre`
+
+  const budgetDims = dimensionFilters('e', filters)
+  const txDims     = dimensionFilters('t', filters)
+
+  type AggRow = {
+    category_id:   string
+    category_name: string
+    category_code: string
+    category_type: string
+    parent_id:     string
+    parent_name:   string
+    parent_code:   string
+    month:         string
+    value:         string
+  }
+
+  const [orcadoRows, realizadoRows, semCat, cov, fora] = await Promise.all([
+    // ── Orçado ──
+    db.execute<AggRow>(sql`
+      SELECT
+        c.id::text        AS category_id,
+        c.name            AS category_name,
+        c.code            AS category_code,
+        c.type            AS category_type,
+        c.parent_id::text AS parent_id,
+        p.name            AS parent_name,
+        p.code            AS parent_code,
+        TO_CHAR(DATE_TRUNC('month', ${budgetDate}::date), 'YYYY-MM') AS month,
+        COALESCE(SUM(
+          CASE WHEN e.direction = 'inflow'
+               THEN  e.amount::numeric
+               ELSE -e.amount::numeric END
+        ), 0) AS value
+      FROM budget_entries e
+      JOIN categories c ON e.category_id = c.id
+      JOIN categories p ON c.parent_id   = p.id
+      WHERE e.organization_id = ${organizationId}::uuid
+        AND e.version_id      = ${versionId}::uuid
+        AND ${budgetDate}::date >= ${from}::date
+        AND ${budgetDate}::date <= ${to}::date
+        AND c.type NOT IN (${BP_LIST})
+        AND ${hideCol} = false
+        ${budgetDims}
+      GROUP BY c.id, c.name, c.code, c.type, c.parent_id, p.name, p.code,
+               DATE_TRUNC('month', ${budgetDate}::date)
+    `),
+
+    // ── Realizado ──
+    db.execute<AggRow>(sql`
+      SELECT
+        c.id::text        AS category_id,
+        c.name            AS category_name,
+        c.code            AS category_code,
+        c.type            AS category_type,
+        c.parent_id::text AS parent_id,
+        p.name            AS parent_name,
+        p.code            AS parent_code,
+        TO_CHAR(DATE_TRUNC('month', ${txDate}::date), 'YYYY-MM') AS month,
+        COALESCE(SUM(
+          CASE WHEN t.direction = 'inflow'
+               THEN  t.amount::numeric
+               ELSE -t.amount::numeric END
+        ), 0) AS value
+      FROM transactions t
+      JOIN categories c ON t.category_id = c.id
+      JOIN categories p ON c.parent_id   = p.id
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+        AND ${txDate}::date >= ${from}::date
+        AND ${txDate}::date <= ${to}::date
+        AND c.type NOT IN (${BP_LIST})
+        AND ${hideCol} = false
+        ${txDims}
+      GROUP BY c.id, c.name, c.code, c.type, c.parent_id, p.name, p.code,
+               DATE_TRUNC('month', ${txDate}::date)
+    `),
+
+    // ── Realizado sem categoria (invisível na matriz por causa do INNER JOIN) ──
+    db.execute<{ inflow: string; outflow: string; count: number }>(sql`
+      SELECT
+        COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0) AS inflow,
+        COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0) AS outflow,
+        COUNT(*)::int AS count
+      FROM transactions t
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+        AND t.category_id IS NULL
+        AND ${txDate}::date >= ${from}::date
+        AND ${txDate}::date <= ${to}::date
+        ${txDims}
+    `),
+
+    // ── Cobertura das dimensões ──
+    // SEM os filtros de dimensão de propósito: com eles a cobertura daria 100%
+    // por construção, que é exatamente a ilusão que este número existe para furar.
+    db.execute<{ total: number; cc: number; bu: number; le: number }>(sql`
+      SELECT
+        COUNT(*)::int                     AS total,
+        COUNT(t.cost_center_id)::int      AS cc,
+        COUNT(t.business_unit_id)::int    AS bu,
+        COUNT(t.legal_entity_id)::int     AS le
+      FROM transactions t
+      WHERE t.organization_id = ${organizationId}::uuid
+        AND t.status NOT IN ('pending', 'duplicate')
+        AND ${txDate}::date >= ${from}::date
+        AND ${txDate}::date <= ${to}::date
+    `),
+
+    // ── Orçado fora do período (cauda de caixa) ──
+    db.execute<{ total: string; count: number }>(sql`
+      SELECT
+        COALESCE(SUM(e.amount::numeric), 0) AS total,
+        COUNT(*)::int                       AS count
+      FROM budget_entries e
+      WHERE e.organization_id = ${organizationId}::uuid
+        AND e.version_id      = ${versionId}::uuid
+        AND (${budgetDate}::date < ${from}::date OR ${budgetDate}::date > ${to}::date)
+        ${budgetDims}
+    `),
+  ])
+
+  // União por (categoria, mês)
+  const merged = new Map<string, BudgetVsActualRow>()
+
+  const put = (r: AggRow, field: 'orcado' | 'realizado') => {
+    const key = `${r.category_id}:${r.month}`
+    let row = merged.get(key)
+    if (!row) {
+      row = {
+        categoryId:   r.category_id,
+        categoryName: r.category_name,
+        categoryCode: r.category_code,
+        categoryType: r.category_type as DreType,
+        parentId:     r.parent_id,
+        parentName:   r.parent_name,
+        parentCode:   r.parent_code,
+        month:        r.month,
+        orcado:       0,
+        realizado:    0,
+      }
+      merged.set(key, row)
+    }
+    row[field] = Number(r.value)
+  }
+
+  orcadoRows.forEach(r => put(r, 'orcado'))
+  realizadoRows.forEach(r => put(r, 'realizado'))
+
+  const inflow  = Number(semCat[0]?.inflow ?? 0)
+  const outflow = Number(semCat[0]?.outflow ?? 0)
+
+  return {
+    months: generateMonthRange(from, to),
+    rows: Array.from(merged.values()),
+    semCategoria: { inflow, outflow, net: inflow - outflow, count: Number(semCat[0]?.count ?? 0) },
+    coverage: {
+      total:        Number(cov[0]?.total ?? 0),
+      costCenter:   Number(cov[0]?.cc ?? 0),
+      businessUnit: Number(cov[0]?.bu ?? 0),
+      legalEntity:  Number(cov[0]?.le ?? 0),
+    },
+    foraDoHorizonte: { total: Number(fora[0]?.total ?? 0), count: Number(fora[0]?.count ?? 0) },
+  }
+}
+
+/** As ocorrências orçadas por trás de uma célula da matriz. */
+export async function getBudgetDrillDown(
+  versionId: string,
+  categoryId: string,
+  regime: BudgetRegime,
+  range: { from: string; to: string },
+  filters: Pick<BudgetVsActualFilters, 'costCenterIds' | 'businessUnitIds' | 'legalEntityIds'>,
+): Promise<BudgetDrillDownEntry[]> {
+  const { organizationId } = await getAuthContext()
+
+  const budgetDate = regime === 'caixa' ? sql`e.cash_date` : sql`e.competence_date`
+  const dims = dimensionFilters('e', filters)
+
+  type Row = {
+    id: string
+    series_id: string
+    description: string
+    direction: string
+    amount: string
+    competence_date: string
+    cash_date: string
+    cost_center_name: string | null
+    business_unit_name: string | null
+    legal_entity_name: string | null
+    contact_name: string | null
+    adjusted: boolean
+  }
+
+  const rows = await db.execute<Row>(sql`
+    SELECT
+      e.id::text              AS id,
+      e.series_id::text       AS series_id,
+      e.description           AS description,
+      e.direction             AS direction,
+      e.amount::text          AS amount,
+      e.competence_date::text AS competence_date,
+      e.cash_date::text       AS cash_date,
+      cc.name                 AS cost_center_name,
+      bu.name                 AS business_unit_name,
+      le.name                 AS legal_entity_name,
+      ct.name                 AS contact_name,
+      (cardinality(e.adjusted_fields) > 0) AS adjusted
+    FROM budget_entries e
+    LEFT JOIN cost_centers cc   ON e.cost_center_id   = cc.id
+    LEFT JOIN business_units bu ON e.business_unit_id = bu.id
+    LEFT JOIN legal_entities le ON e.legal_entity_id  = le.id
+    LEFT JOIN contacts ct       ON e.contact_id       = ct.id
+    WHERE e.organization_id = ${organizationId}::uuid
+      AND e.version_id      = ${versionId}::uuid
+      AND e.category_id     = ${categoryId}::uuid
+      AND ${budgetDate}::date >= ${range.from}::date
+      AND ${budgetDate}::date <= ${range.to}::date
+      ${dims}
+    ORDER BY ${budgetDate}, e.description
+  `)
+
+  return rows.map(r => ({
+    id: r.id,
+    seriesId: r.series_id,
+    description: r.description,
+    direction: r.direction as 'inflow' | 'outflow',
+    amount: Number(r.amount),
+    competenceDate: r.competence_date,
+    cashDate: r.cash_date,
+    costCenterName: r.cost_center_name,
+    businessUnitName: r.business_unit_name,
+    legalEntityName: r.legal_entity_name,
+    contactName: r.contact_name,
+    adjusted: r.adjusted,
+  }))
 }
 
 /**

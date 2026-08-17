@@ -7,11 +7,16 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { EmptyState } from '@/components/states/empty-state'
 import { CellCombobox } from '@/components/transacoes-shared/cell-combobox'
-import type { CategoryItem, SimpleDimensionItem } from '@/components/transacoes-shared/types'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import { listBudgetSeries, listBudgetVersions } from '@/server/budget'
 import type { BudgetSeriesListItem, BudgetVersionListItem } from '@/lib/budget-types'
 import { BUDGET_STATUS_LABELS } from '@/lib/budget-types'
+import type { LeafCategory } from '@/lib/dre-types'
+import type { CostCenter } from '@/db/schema/cost-centers'
+import type { BusinessUnit } from '@/db/schema/business-units'
+import type { LegalEntity } from '@/db/schema/legal-entities'
 import { PlanejamentoTab } from './planejamento-tab'
+import { ComparacaoTab } from './comparacao-tab'
 import { VersoesTab } from './versoes-tab'
 import { SeriesDialog } from './series-dialog'
 
@@ -23,10 +28,10 @@ interface Props {
   initialVersions: BudgetVersionListItem[]
   initialSelectedId: string | null
   initialSeries: BudgetSeriesListItem[]
-  costCenters: SimpleDimensionItem[]
-  businessUnits: SimpleDimensionItem[]
-  legalEntities: SimpleDimensionItem[]
-  leafCategories: CategoryItem[]
+  costCenters: CostCenter[]
+  businessUnits: BusinessUnit[]
+  legalEntities: LegalEntity[]
+  leafCategories: LeafCategory[]
   contactOptions: SimpleDimensionItem[]
 }
 
@@ -194,14 +199,25 @@ export function OrcamentoClient({
         )}
 
         {tab === 'comparacao' && (
-          <div className="h-full flex items-center justify-center px-6">
-            <EmptyState
-              icon={<Target className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
-              title="Orçado × Realizado chega na próxima sessão"
-              description="A matriz de 12 meses com variação e projeção do ano é a sessão 9.2. Por ora, monte o orçamento na aba Planejamento."
-              action={{ label: 'Ir para Planejamento', onClick: () => changeTab('planejamento') }}
+          selectedVersion ? (
+            <ComparacaoTab
+              key={`${selectedVersion.id}`}
+              version={selectedVersion}
+              costCenters={costCenters}
+              businessUnits={businessUnits}
+              legalEntities={legalEntities}
+              leafCategories={leafCategories}
             />
-          </div>
+          ) : (
+            <div className="h-full flex items-center justify-center px-6">
+              <EmptyState
+                icon={<Target className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
+                title="Nenhuma versão de orçamento"
+                description="Crie a versão do exercício para comparar o orçado com o realizado."
+                action={{ label: 'Criar versão', onClick: () => changeTab('versoes') }}
+              />
+            </div>
+          )
         )}
 
         {tab === 'versoes' && (

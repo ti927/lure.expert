@@ -1,8 +1,8 @@
 // Formatação PT-BR compartilhada por server e client. Sem 'use server'.
 
-export const PT_MONTHS_SHORT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+export const PT_MONTHS_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
-/** 'YYYY-MM' → 'mar/27'. Aceita também 'YYYY-MM-DD'. */
+/** 'YYYY-MM' → 'Mar/27'. Aceita também 'YYYY-MM-DD'. */
 export function monthLabel(month: string): string {
   const [y, m] = month.slice(0, 7).split('-').map(Number)
   return `${PT_MONTHS_SHORT[m - 1]}/${String(y).slice(2)}`

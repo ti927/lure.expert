@@ -132,10 +132,15 @@ export async function getDreDrillDown(
   month: string,   // YYYY-MM; ignorado quando dateRange é fornecido
   filters: Pick<DreFilters, 'costCenterIds' | 'businessUnitIds' | 'legalEntityIds'>,
   dateRange?: { from: string; to: string },
+  // 'competencia' (padrão) filtra por t.date, como a DRE.
+  // 'caixa' filtra por COALESCE(effective_date, date), como o Fluxo — necessário
+  // para o drill-down da tela de Orçado × Realizado em regime de caixa.
+  regime: 'competencia' | 'caixa' = 'competencia',
 ): Promise<{ transactions: DrillDownTransaction[]; total: number }> {
   const { organizationId } = await getAuthContext()
 
   const dimFilters = dimensionFilters('t', filters)
+  const txDate = regime === 'caixa' ? sql`COALESCE(t.effective_date, t.date)` : sql`t.date`
 
   let monthFrom: string
   let monthTo: string
@@ -209,10 +214,10 @@ export async function getDreDrillDown(
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.category_id     = ${categoryId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')
-      AND t.date::date >= ${monthFrom}::date
-      AND t.date::date <= ${monthTo}::date
+      AND ${txDate}::date >= ${monthFrom}::date
+      AND ${txDate}::date <= ${monthTo}::date
       ${dimFilters}
-    ORDER BY t.date DESC, t.created_at DESC
+    ORDER BY ${txDate} DESC, t.created_at DESC
   `)
 
   // Gera signed URLs para customLogoPath em batch (uma chamada por data_source único)

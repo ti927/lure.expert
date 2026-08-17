@@ -2,55 +2,28 @@
 
 import { useState, useTransition, useMemo, useEffect } from 'react'
 import {
-  Check, ChevronsUpDown, X, Loader2, BarChart3,
+  X, Loader2, BarChart3,
   ChevronRight, ChevronDown, ChevronsDown, ChevronsUp,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
-} from '@/components/ui/command'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
 import { getDreData, getDreDrillDown } from '@/server/dre'
 import type {
-  DreData, DreMonthSubtotals, DreCategoryRow, DreType, DrillDownTransaction, LeafCategory,
+  DreData, DreMonthSubtotals, DreCategoryRow, DrillDownTransaction, LeafCategory,
 } from '@/lib/dre-types'
 import { DRE_TYPE_LABELS } from '@/lib/dre-types'
+import type { LayoutSection, ParentNode, SectionBlock } from '@/lib/dre-layout'
+import { LAYOUT, BELOW_LAYOUT, buildBlocks } from '@/lib/dre-layout'
+import { fmtNum, monthLabel } from '@/lib/format'
+import { Num } from '@/components/financial/num-cell'
+import { DimFilter } from '@/components/transacoes-shared/dim-filter'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type SubtotalNumericKey = Exclude<keyof DreMonthSubtotals, 'month'>
-
-type LayoutSection = {
-  types: DreType[]
-  subtotalKey: SubtotalNumericKey
-  subtotalLabel: string
-  keyMetric?: boolean
-}
-
-type ChildNode = {
-  categoryId: string
-  categoryName: string
-  categoryCode: string
-  byMonth: Record<string, number>
-}
-
-type ParentNode = {
-  parentId: string
-  parentName: string
-  parentCode: string
-  children: ChildNode[]
-}
-
-type SectionBlock = {
-  type: DreType
-  parents: ParentNode[]
-}
 
 type DrillDownState = {
   categoryId: string
@@ -59,183 +32,9 @@ type DrillDownState = {
   dateRange?: { from: string; to: string }
 }
 
-// ─── Layout ───────────────────────────────────────────────────────────────────
-
-const LAYOUT: LayoutSection[] = [
-  { types: ['receita_operacional'], subtotalKey: 'receitaBruta', subtotalLabel: 'Receita Bruta' },
-  { types: ['deducoes_tributarias', 'deducoes_operacionais'], subtotalKey: 'receitaLiquida', subtotalLabel: 'Receita Líquida' },
-  { types: ['cpv'], subtotalKey: 'lucroBruto', subtotalLabel: 'Lucro Bruto' },
-  { types: ['sga'], subtotalKey: 'ebitda', subtotalLabel: 'EBITDA' },
-  { types: ['resultado_financeiro'], subtotalKey: 'lair', subtotalLabel: 'LAIR' },
-  { types: ['ir'], subtotalKey: 'lucroLiquido', subtotalLabel: 'Lucro Líquido', keyMetric: true },
-]
-
-const BELOW_LAYOUT: LayoutSection = {
-  types: ['emprestimos_amortizacoes', 'investimentos_retiradas', 'transfer'],
-  subtotalKey: 'variacaoCaixa',
-  subtotalLabel: 'Variação de Caixa',
-}
-
-const PT_MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const COL_W = 96
 const TOTAL_COL_W = 106
 const LABEL_W = 260
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function monthLabel(ym: string): string {
-  const [y, m] = ym.split('-').map(Number)
-  return `${PT_MONTHS[m - 1]}/${String(y).slice(2)}`
-}
-
-function fmtNum(v: number): string {
-  return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v)
-}
-
-function buildBlocks(rows: DreCategoryRow[], types: DreType[]): SectionBlock[] {
-  return types.map(type => {
-    const parentMap = new Map<string, { parent: ParentNode; childMap: Map<string, ChildNode> }>()
-
-    rows.filter(r => r.categoryType === type).forEach(row => {
-      if (!parentMap.has(row.parentId)) {
-        parentMap.set(row.parentId, {
-          parent: { parentId: row.parentId, parentName: row.parentName, parentCode: row.parentCode, children: [] },
-          childMap: new Map(),
-        })
-      }
-      const entry = parentMap.get(row.parentId)!
-      if (!entry.childMap.has(row.categoryId)) {
-        entry.childMap.set(row.categoryId, {
-          categoryId: row.categoryId,
-          categoryName: row.categoryName,
-          categoryCode: row.categoryCode,
-          byMonth: {},
-        })
-      }
-      entry.childMap.get(row.categoryId)!.byMonth[row.month] = row.netAmount
-    })
-
-    const parents = Array.from(parentMap.values())
-      .sort((a, b) => a.parent.parentCode.localeCompare(b.parent.parentCode))
-      .map(({ parent, childMap }) => ({
-        ...parent,
-        children: Array.from(childMap.values())
-          .sort((a, b) => a.categoryCode.localeCompare(b.categoryCode)),
-      }))
-
-    return { type, parents }
-  }).filter(b => b.parents.length > 0)
-}
-
-// ─── DimFilter ────────────────────────────────────────────────────────────────
-
-type DimOption = { id: string; name: string; code?: string | null }
-
-function DimFilter({
-  label, options, selected, onChange,
-}: {
-  label: string
-  options: DimOption[]
-  selected: string[]
-  onChange: (ids: string[]) => void
-}) {
-  const [open, setOpen] = useState(false)
-  if (options.length === 0) return null
-
-  const displayText = selected.length === 0
-    ? label
-    : selected.length === 1
-    ? (options.find(o => o.id === selected[0])?.name ?? label)
-    : `${label}: ${selected.length}`
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className={cn('h-8 gap-1.5 text-xs font-normal', selected.length > 0 && 'border-primary/30 bg-primary/5')}
-        >
-          <span className="truncate max-w-[140px]">{displayText}</span>
-          {selected.length > 0 ? (
-            <X
-              className="h-3 w-3 shrink-0 opacity-50 hover:opacity-100"
-              onClick={e => { e.stopPropagation(); onChange([]) }}
-            />
-          ) : (
-            <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-40" />
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[220px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Buscar..." className="h-8 text-xs" />
-          <CommandList>
-            <CommandEmpty className="py-4 text-center text-xs text-muted-foreground">
-              Nenhum resultado.
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map(opt => {
-                const checked = selected.includes(opt.id)
-                return (
-                  <CommandItem
-                    key={opt.id}
-                    value={`${opt.code ?? ''} ${opt.name}`}
-                    onSelect={() => onChange(checked ? selected.filter(s => s !== opt.id) : [...selected, opt.id])}
-                    className="text-xs"
-                  >
-                    <Check className={cn('mr-2 h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
-                    {opt.code && <span className="text-muted-foreground mr-1 font-mono text-[10px] shrink-0">{opt.code}</span>}
-                    <span className="truncate">{opt.name}</span>
-                  </CommandItem>
-                )
-              })}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-// ─── Amount cell ──────────────────────────────────────────────────────────────
-
-function Num({
-  value, bold, light, inverted, onClick,
-}: {
-  value: number
-  bold?: boolean
-  light?: boolean
-  inverted?: boolean
-  onClick?: () => void
-}) {
-  const isZero = value === 0
-  const clickable = !isZero && !!onClick
-
-  let colorClass: string
-  if (isZero) {
-    colorClass = light ? 'text-muted-foreground/25' : 'text-muted-foreground/40'
-  } else if (inverted) {
-    colorClass = value > 0 ? 'text-emerald-300' : 'text-rose-300'
-  } else {
-    colorClass = value > 0 ? 'text-emerald-700' : 'text-rose-600'
-  }
-
-  return (
-    <td
-      className={cn(
-        'px-3 py-[3px] text-right tabular-nums text-xs',
-        bold && 'font-semibold',
-        colorClass,
-        clickable && 'cursor-pointer hover:underline underline-offset-2',
-      )}
-      onClick={clickable ? onClick : undefined}
-    >
-      {isZero ? '—' : fmtNum(value)}
-    </td>
-  )
-}
-
 
 // ─── DreClient ────────────────────────────────────────────────────────────────
 
@@ -590,7 +389,7 @@ interface BlockProps {
 }
 
 function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: BlockProps) {
-  const blocks = useMemo(() => buildBlocks(rows, section.types), [rows, section.types])
+  const blocks = useMemo(() => buildBlocks(rows, section.types, r => r.netAmount), [rows, section.types])
 
   const subtotalTotal = months.reduce((s, m) => {
     const sub = subtotalsByMonth.get(m)
@@ -637,7 +436,7 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents
 // ─── TypeBlock ────────────────────────────────────────────────────────────────
 
 interface TypeBlockProps {
-  block: SectionBlock
+  block: SectionBlock<number>
   months: string[]
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
@@ -673,7 +472,7 @@ function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDow
 // ─── ParentBlock ──────────────────────────────────────────────────────────────
 
 interface ParentBlockProps {
-  parent: ParentNode
+  parent: ParentNode<number>
   months: string[]
   isCollapsed: boolean
   onToggle: () => void

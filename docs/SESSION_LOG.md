@@ -6,6 +6,35 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.2 — Aba Orçado × Realizado (primeiro uso real do módulo)
+
+**Entregue:**
+- [src/server/budget.ts](src/server/budget.ts) — `getBudgetVsActual` (5 queries em `Promise.all`) e `getBudgetDrillDown`.
+- [src/server/dre.ts](src/server/dre.ts) — `getDreDrillDown` ganhou 5º parâmetro opcional `regime` (aditivo, retrocompatível): sem ele filtra por `t.date` como sempre; com `'caixa'` filtra por `COALESCE(effective_date, date)`, necessário para o drill-down da comparação em regime de caixa.
+- [comparacao-tab.tsx](src/app/(authenticated)/orcamento/comparacao-tab.tsx) — matriz 12 meses Tipo→Pai→Filho no molde da DRE, toggle Competência/Caixa, seletor de modo de célula (Orçado / Realizado / Variação R$ / Variação %), colunas fixas Orçado ano · Realizado YTD · Projeção ano · Var. proj., e drill-down duplo.
+
+**Extrações (movidas, não duplicadas), com `/dre` e `/fluxo` migrados no mesmo commit:**
+- [src/lib/dre-layout.ts](src/lib/dre-layout.ts) — `LAYOUT`, `BELOW_LAYOUT` e `buildBlocks` agora **genérico no valor da célula**: a DRE passa `r => r.netAmount`, a comparação passa `r => ({ orcado, realizado })`. Sem isso a árvore teria que ser reimplementada.
+- [src/components/financial/num-cell.tsx](src/components/financial/num-cell.tsx) — o `Num` estava duplicado com uma diferença sutil: a DRE apaga o zero em `/25` ou `/40` (prop `light`), o fluxo usa `/30` fixo. O componente compartilhado ganhou `zeroClassName`, e o `/fluxo` mantém um wrapper local de 3 linhas que fixa o tom — assim nenhuma das duas telas mudou de aparência.
+- [src/components/transacoes-shared/dim-filter.tsx](src/components/transacoes-shared/dim-filter.tsx) — com a opção nova `allowNone` (sentinela `__null__`), usada só na comparação.
+
+**Decisões de implementação:**
+- **União, não interseção.** A matriz é a união das chaves dos dois lados. Categoria orçada sem realizado ("não gastei") e realizada sem orçado ("gasto não previsto") são as duas descobertas mais valiosas da tela; a interseção esconderia exatamente as duas.
+- **Sinal.** Com `netAmount`, `realizado − orcado` já é "favorável quando positivo" para receita **e** para despesa — gastar 8 mil de um orçamento de 10 mil dá `(−8000) − (−10000) = +2000`. Documentado no topo de `budget.ts` e do tab, porque o erro clássico é inverter o sinal por tipo de conta.
+- **Variação % nunca é `Infinity`.** Com `orcado = 0` a célula mostra travessão.
+- **Corte da projeção.** "Mês fechado" = mês estritamente anterior à data de corte, exposta como `<input type="month">` "Fechado até" (default: mês anterior ao corrente). Não é "mês com dado" — um lançamento retardatário em novembro marcaria novembro como fechado e truncaria a projeção. O mês corrente nunca é dividido: está inteiro de um lado ou do outro, que é a única forma de eliminar dupla contagem. A projeção é calculada **no cliente**, então arrastar o corte recalcula sem refetch.
+- **Subtotais rodam `computeSubtotals` três vezes** — sobre projeções orçado, realizado e mista — o que mantém a cascata (EBITDA, LAIR, Lucro Líquido) consistente com as linhas de detalhe por construção.
+- **Três avisos de honestidade.** (1) O INNER JOIN em `categories` é mantido para o número bater com a `/dre`, e o realizado sem categoria vem numa query escalar à parte, exibido em banner. (2) A cobertura de dimensão é medida **sem** os filtros de dimensão — com eles daria 100% por construção, que é justamente a ilusão que o número existe para furar; abaixo de 90% aparece `PartialDataBanner`. (3) O orçado cuja data cai fora do exercício (cauda de caixa) vira o escalar `foraDoHorizonte` no rodapé.
+- **Drill-down duplo.** A célula abre o drill-down daquilo que está exibindo: modo Orçado abre as ocorrências orçadas; os demais abrem o `DrillDownDialog` de transações com o regime correto.
+
+**Verificação:**
+- `tsc` limpo; `npm run build` verde (30 rotas, `/orcamento` em 37,8 kB).
+- **Conciliação contra os dados reais dos 3 clientes do banco** (somente leitura). Primeira tentativa foi descartada por ser tautológica — eu havia escrito o mesmo texto SQL dos dois lados. Refeita com o texto **verbatim de arquivos diferentes**: `getDreData` vs o lado realizado de `getBudgetVsActual` (competência), e `getFluxoMensalData` vs o mesmo em caixa. Os textos diferem em SELECT, GROUP BY e colunas, então a igualdade é verificação de verdade. Resultado: soma igual, **quantidade de células igual** e **cada célula batendo uma a uma** (440, 235 e 74 células), nos dois regimes, mais a checagem de que SG&A sai negativo.
+- Observação sobre os dados: em "Vieira Pisos" o regime de caixa devolve 1 célula contra 440 de competência — quase todo o plano de contas dessa org está com `hide_in_cashflow = true`. É configuração pré-existente e o `/fluxo` já se comportava assim; não veio desta sessão.
+- **Não verificado automaticamente:** o comportamento de clique da UI (exige sessão autenticada).
+
+---
+
 ### ✅ Sessão 9.1 — CRUD de versão e série + aba Planejamento
 
 **Entregue:**

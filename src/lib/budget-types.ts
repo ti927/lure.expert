@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { z } from 'zod'
+import type { DreType } from './dre-types'
 
 // ─── Status da versão ─────────────────────────────────────────────────────────
 
@@ -283,4 +284,87 @@ export interface EntryDraft {
   competenceDate: string   // 'YYYY-MM-DD'
   cashDate:       string   // 'YYYY-MM-DD'
   amount:         number   // sempre positivo
+}
+
+// ─── Orçado × Realizado ───────────────────────────────────────────────────────
+
+/** Competência → compara com a DRE. Caixa → compara com o Fluxo. */
+export const BUDGET_REGIMES = ['competencia', 'caixa'] as const
+export type BudgetRegime = (typeof BUDGET_REGIMES)[number]
+
+export const BUDGET_REGIME_LABELS: Record<BudgetRegime, string> = {
+  competencia: 'Competência',
+  caixa:       'Caixa',
+}
+
+/** O que cada célula da matriz exibe. */
+export const CELL_MODES = ['orcado', 'realizado', 'variacao', 'variacaoPct'] as const
+export type CellMode = (typeof CELL_MODES)[number]
+
+export const CELL_MODE_LABELS: Record<CellMode, string> = {
+  orcado:      'Orçado',
+  realizado:   'Realizado',
+  variacao:    'Variação R$',
+  variacaoPct: 'Variação %',
+}
+
+export interface BudgetVsActualFilters {
+  versionId:        string
+  regime:           BudgetRegime
+  from:             string   // YYYY-MM-DD
+  to:               string   // YYYY-MM-DD
+  costCenterIds?:   string[]
+  businessUnitIds?: string[]
+  legalEntityIds?:  string[]
+}
+
+/**
+ * Uma célula da matriz. Os dois valores seguem a convenção `netAmount`
+ * (receita positiva, custo negativo), o que faz `realizado − orcado` ser
+ * "favorável quando positivo" dos dois lados da DRE.
+ */
+export interface BudgetVsActualRow {
+  categoryId:   string
+  categoryName: string
+  categoryCode: string
+  categoryType: DreType
+  parentId:     string
+  parentName:   string
+  parentCode:   string
+  month:        string   // YYYY-MM
+  orcado:       number
+  realizado:    number
+}
+
+/** Quantas transações do período têm cada dimensão preenchida. */
+export interface DimensionCoverage {
+  total:        number
+  costCenter:   number
+  businessUnit: number
+  legalEntity:  number
+}
+
+export interface BudgetVsActualData {
+  months: string[]
+  rows:   BudgetVsActualRow[]
+  /** Realizado sem categoria — invisível na matriz (INNER JOIN), exposto aqui para não mentir no total. */
+  semCategoria:    { inflow: number; outflow: number; net: number; count: number }
+  coverage:        DimensionCoverage
+  /** Orçado cuja data, no regime escolhido, cai fora do período — a cauda de caixa. */
+  foraDoHorizonte: { total: number; count: number }
+}
+
+export interface BudgetDrillDownEntry {
+  id:               string
+  seriesId:         string
+  description:      string
+  direction:        'inflow' | 'outflow'
+  amount:           number
+  competenceDate:   string
+  cashDate:         string
+  costCenterName:   string | null
+  businessUnitName: string | null
+  legalEntityName:  string | null
+  contactName:      string | null
+  adjusted:         boolean
 }

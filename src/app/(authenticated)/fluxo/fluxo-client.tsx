@@ -2,19 +2,18 @@
 
 import { useState, useTransition, useMemo, useEffect, Fragment } from 'react'
 import {
-  Check, ChevronsUpDown, X, Loader2, TrendingUp, BarChart3,
-  ChevronRight, ChevronDown,
+  X, Loader2, TrendingUp, BarChart3,
+  ChevronRight, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
-} from '@/components/ui/command'
 import { KPICard } from '@/components/financial/kpi-card'
+import { Num as NumCell } from '@/components/financial/num-cell'
 import { EmptyState } from '@/components/states/empty-state'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
+import { DimFilter } from '@/components/transacoes-shared/dim-filter'
 import { cn } from '@/lib/utils'
+import { monthLabel } from '@/lib/format'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -57,25 +56,13 @@ type DrillDownState = {
   dateRange?:   { from: string; to: string }
 }
 
-type DimOption = { id: string; name: string; code?: string | null }
-
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
-const PT_MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const COL_W       = 96
 const TOTAL_COL_W = 106
 const LABEL_W     = 280
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function monthLabel(ym: string): string {
-  const [y, m] = ym.split('-').map(Number)
-  return `${PT_MONTHS[m - 1]}/${String(y).slice(2)}`
-}
-
-function fmtNum(v: number): string {
-  return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v)
-}
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
 
@@ -86,110 +73,12 @@ function yFormatter(value: number): string {
   return `R$ ${value.toFixed(0)}`
 }
 
-// ─── DimFilter ────────────────────────────────────────────────────────────────
-
-function DimFilter({
-  label, options, selected, onChange,
-}: {
-  label:    string
-  options:  DimOption[]
-  selected: string[]
-  onChange: (ids: string[]) => void
-}) {
-  const [open, setOpen] = useState(false)
-  if (options.length === 0) return null
-
-  const displayText = selected.length === 0
-    ? label
-    : selected.length === 1
-    ? (options.find(o => o.id === selected[0])?.name ?? label)
-    : `${label}: ${selected.length}`
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className={cn('h-8 gap-1.5 text-xs font-normal', selected.length > 0 && 'border-primary/30 bg-primary/5')}
-        >
-          <span className="truncate max-w-[140px]">{displayText}</span>
-          {selected.length > 0 ? (
-            <X
-              className="h-3 w-3 shrink-0 opacity-50 hover:opacity-100"
-              onClick={e => { e.stopPropagation(); onChange([]) }}
-            />
-          ) : (
-            <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-40" />
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[220px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Buscar..." className="h-8 text-xs" />
-          <CommandList>
-            <CommandEmpty className="py-4 text-center text-xs text-muted-foreground">
-              Nenhum resultado.
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map(opt => {
-                const checked = selected.includes(opt.id)
-                return (
-                  <CommandItem
-                    key={opt.id}
-                    value={`${opt.code ?? ''} ${opt.name}`}
-                    onSelect={() => onChange(checked ? selected.filter(s => s !== opt.id) : [...selected, opt.id])}
-                    className="text-xs"
-                  >
-                    <Check className={cn('mr-2 h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
-                    {opt.code && <span className="text-muted-foreground mr-1 font-mono text-[10px] shrink-0">{opt.code}</span>}
-                    <span className="truncate">{opt.name}</span>
-                  </CommandItem>
-                )
-              })}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 // ─── Num (célula de valor) ────────────────────────────────────────────────────
+// O componente compartilhado vive em @/components/financial/num-cell. Aqui só
+// fixamos o tom do zero, que nesta tela é um pouco mais forte que o da DRE.
 
-function Num({
-  value, bold, inverted, onClick,
-}: {
-  value:     number
-  bold?:     boolean
-  inverted?: boolean
-  onClick?:  () => void
-}) {
-  const isZero    = value === 0
-  const clickable = !isZero && !!onClick
-
-  let colorClass: string
-  if (isZero) {
-    colorClass = 'text-muted-foreground/30'
-  } else if (inverted) {
-    colorClass = value > 0 ? 'text-emerald-300' : 'text-rose-300'
-  } else {
-    colorClass = value > 0 ? 'text-emerald-700' : 'text-rose-600'
-  }
-
-  return (
-    <td
-      className={cn(
-        'px-3 py-[3px] text-right tabular-nums text-xs',
-        bold && 'font-semibold',
-        colorClass,
-        clickable && 'cursor-pointer hover:underline underline-offset-2',
-      )}
-      onClick={clickable ? onClick : undefined}
-    >
-      {isZero ? '—' : fmtNum(value)}
-    </td>
-  )
+function Num(props: Omit<React.ComponentProps<typeof NumCell>, 'zeroClassName'>) {
+  return <NumCell {...props} zeroClassName="text-muted-foreground/30" />
 }
 
 // ─── FluxoCaixaCategoria ──────────────────────────────────────────────────────
