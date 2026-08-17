@@ -168,9 +168,27 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 8 — Connectors de Cartão e Adquirentes **em andamento** (8.0 ✅, 8.1 ✅). Fases 0–7 **100% concluídas**.
+**Status:** Fase 9 — Orçamento e Previsão **em andamento** (9.0 ✅). Fases 0–7 **100% concluídas**.
+Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
 
-**Sessões Fase 8:**
+**Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
+9 (Agente Proativo) e 10 (Onboarding/Billing) passam a **10** e **11**.
+
+**Sessões Fase 9 — Orçamento:**
+- ✅ 9.0: Schema (`budget_versions`, `budget_series`, `budget_entries`), migration 0024, `budget-types.ts`, `budget-recurrence.ts` (expansão pura), extrações `dre-calc.ts` / `sql-dimensions.ts` / `auth-context.ts`
+- 🔲 9.1: CRUD de versão e série + aba Planejamento em `/orcamento`
+- 🔲 9.2: Aba Orçado × Realizado ← primeiro uso real do módulo
+- 🔲 9.3: Escopos de edição/exclusão de série (esta / daqui / todas)
+- 🔲 9.4: Copiar do realizado + duplicar versão
+- 🔲 9.5: Importar CSV + aceitar recorrências detectadas
+
+**Decisões estruturais do orçamento** (ver `docs/SCHEMA_DECISIONS.md` Decisão 13): orçado em
+tabelas separadas de `transactions`; ocorrências materializadas em `budget_entries` (fonte da
+verdade) geradas por `budget_series` (regra); `adjusted_fields text[]` protege edições manuais
+de alterações em lote; exercício = ano civil validado só na competência (caixa pode vazar);
+duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → Fluxo Projetado).
+
+**Sessões Fase 8 (pausada):**
 - ✅ 8.0: Schema `acquirer_connections`, migration 0023, `acquirer-provider.ts` (Abstract + Stone/Cielo/Rede stubs), server actions CRUD, aba Adquirentes em `/contas`
 - ✅ 8.1: Stone connector real (`stone-client.ts` OAuth2, `StoneProvider` implementado, job `sync-acquirer-item`, cron `sync-all-acquirer-items`)
 - 🔲 8.2: Upload de extratos de adquirentes (CSV/PDF fallback)
@@ -195,6 +213,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 - ✅ `db/migrations/rls/0021_staging_effective_date.sql` — `effective_date text` em `transactions_staging`
 - ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
+- 🔲 `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at` — **pendente de aplicação no Studio**
 
 **Convenção crítica — date vs effective_date em `transactions`:**
 - `date` (competência) → alimenta **DRE** e **BP** (quando o fato econômico ocorreu)
@@ -220,6 +239,8 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Fase 9 — Orçamento (em andamento)** | |
+| 9.0 | Migration 0024 (3 tabelas + 12 policies + 3 triggers `updated_at` — corrige a lacuna das 0022/0023), schema Drizzle `budget-versions`/`budget-series`/`budget-entries`, `lib/budget-types.ts` (constantes + Zod), `lib/budget-recurrence.ts` (`expandSeries` pura: fixo/reajuste/sazonal/parcelado, clamp de dia, cauda de caixa, validação de exercício — 20/20 casos verificados). Extrações movidas, não duplicadas: `lib/dre-calc.ts` (`computeSubtotals`, `generateMonthRange`), `lib/sql-dimensions.ts` (`dimensionFilters`, SQL conferido idêntico ao anterior), `lib/auth-context.ts`. `/dre` e `/fluxo` migrados no mesmo commit |
 | **Hardening intercalado** | |
 | Fix connect Pluggy (`602a6cd`) | Conectar conta dava 500 em produção. Erro real via `vercel logs`: `HTTPError 400` da API Pluggy (`clientId must be a UUID`) — credencial com caractere invisível (newline/BOM/zero-width) na Vercel. Reproduzido 1:1 contra `api.pluggy.ai/auth`. Fix: `sanitizeSecret()` (code points) em `getPluggyClient()`, último consumidor de credencial sem sanitização. Mesma classe do incidente Anthropic |
 | Layer 0 categorização (`d587644`+`d72ec37`+`35400e6`) | Match determinístico do CSV antes do LLM. Parser detecta colunas autoritativas (`Categoria/Natureza Pai/Filho`, `Conta Contábil`, `Plano de Contas`, `Tipo Natureza`) por regex no header normalizado. `findCategoryByCsvMapping` em `categorizer.ts` faz lookup normalizado (sem acento, colapsa dash/barra/parênteses em espaço) com desempate cumulativo nome→tipo→pai. `TIPO_ALIASES` mapeia humano→código (`Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc). `approveAndInsert` pré-classifica no INSERT, IDs casados não entram no evento Inngest. CSVs de ERP com plano alinhado importam zero-Haiku. Decisão 12 em SCHEMA_DECISIONS |

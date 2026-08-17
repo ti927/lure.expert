@@ -13,6 +13,8 @@ import type {
   DrillDownTransaction,
 } from '@/lib/dre-types'
 import { BP_TYPES } from '@/lib/dre-types'
+import { generateMonthRange, computeSubtotals } from '@/lib/dre-calc'
+import { dimensionFilters } from '@/lib/sql-dimensions'
 
 // Re-exporta tipos para uso em server e client components
 export type {
@@ -44,19 +46,9 @@ async function getAuthContext() {
 
 export async function getDreData(filters: DreFilters): Promise<DreData> {
   const { organizationId } = await getAuthContext()
-  const { from, to, costCenterIds, businessUnitIds, legalEntityIds } = filters
+  const { from, to } = filters
 
-  const ccFilter = costCenterIds?.length
-    ? sql`AND t.cost_center_id IN (${sql.join(costCenterIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
-
-  const buFilter = businessUnitIds?.length
-    ? sql`AND t.business_unit_id IN (${sql.join(businessUnitIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
-
-  const leFilter = legalEntityIds?.length
-    ? sql`AND t.legal_entity_id IN (${sql.join(legalEntityIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
+  const dimFilters = dimensionFilters('t', filters)
 
   type AggRow = {
     category_id:       string
@@ -100,9 +92,7 @@ export async function getDreData(filters: DreFilters): Promise<DreData> {
       AND t.date::date <= ${to}::date
       AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
       AND c.hide_in_dre = false
-      ${ccFilter}
-      ${buFilter}
-      ${leFilter}
+      ${dimFilters}
     GROUP BY
       c.id, c.name, c.code, c.type,
       c.parent_id, p.name, p.code,
@@ -144,19 +134,8 @@ export async function getDreDrillDown(
   dateRange?: { from: string; to: string },
 ): Promise<{ transactions: DrillDownTransaction[]; total: number }> {
   const { organizationId } = await getAuthContext()
-  const { costCenterIds, businessUnitIds, legalEntityIds } = filters
 
-  const ccFilter = costCenterIds?.length
-    ? sql`AND t.cost_center_id IN (${sql.join(costCenterIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
-
-  const buFilter = businessUnitIds?.length
-    ? sql`AND t.business_unit_id IN (${sql.join(businessUnitIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
-
-  const leFilter = legalEntityIds?.length
-    ? sql`AND t.legal_entity_id IN (${sql.join(legalEntityIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
+  const dimFilters = dimensionFilters('t', filters)
 
   let monthFrom: string
   let monthTo: string
@@ -232,9 +211,7 @@ export async function getDreDrillDown(
       AND t.status NOT IN ('pending', 'duplicate')
       AND t.date::date >= ${monthFrom}::date
       AND t.date::date <= ${monthTo}::date
-      ${ccFilter}
-      ${buFilter}
-      ${leFilter}
+      ${dimFilters}
     ORDER BY t.date DESC, t.created_at DESC
   `)
 
@@ -295,62 +272,4 @@ export async function getDreDrillDown(
   })
 
   return { transactions, total: transactions.length }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function generateMonthRange(from: string, to: string): string[] {
-  const months: string[] = []
-  let [y, m] = from.slice(0, 7).split('-').map(Number)
-  const [toY, toM] = to.slice(0, 7).split('-').map(Number)
-  while (y < toY || (y === toY && m <= toM)) {
-    months.push(`${y}-${String(m).padStart(2, '0')}`)
-    m++
-    if (m > 12) { m = 1; y++ }
-  }
-  return months
-}
-
-function sumByTypes(month: string, rows: DreCategoryRow[], types: DreCategoryRow['categoryType'][]): number {
-  return rows
-    .filter(r => r.month === month && types.includes(r.categoryType))
-    .reduce((acc, r) => acc + r.netAmount, 0)
-}
-
-function computeSubtotals(month: string, rows: DreCategoryRow[]): DreMonthSubtotals {
-  const receitaBruta        = sumByTypes(month, rows, ['receita_operacional'])
-  const deducoes            = sumByTypes(month, rows, ['deducoes_tributarias', 'deducoes_operacionais'])
-  const receitaLiquida      = receitaBruta + deducoes
-  const cpv                 = sumByTypes(month, rows, ['cpv'])
-  const lucroBruto          = receitaLiquida + cpv
-  const sga                 = sumByTypes(month, rows, ['sga'])
-  const ebitda              = lucroBruto + sga
-  const resultadoFinanceiro = sumByTypes(month, rows, ['resultado_financeiro'])
-  const lair                = ebitda + resultadoFinanceiro
-  const ir                  = sumByTypes(month, rows, ['ir'])
-  const lucroLiquido        = lair + ir
-
-  const emprestimosAmortizacoes = sumByTypes(month, rows, ['emprestimos_amortizacoes'])
-  const investimentosRetiradas  = sumByTypes(month, rows, ['investimentos_retiradas'])
-  const transferencias          = sumByTypes(month, rows, ['transfer'])
-  const variacaoCaixa           = lucroLiquido + emprestimosAmortizacoes + investimentosRetiradas + transferencias
-
-  return {
-    month,
-    receitaBruta,
-    deducoes,
-    receitaLiquida,
-    cpv,
-    lucroBruto,
-    sga,
-    ebitda,
-    resultadoFinanceiro,
-    lair,
-    ir,
-    lucroLiquido,
-    emprestimosAmortizacoes,
-    investimentosRetiradas,
-    transferencias,
-    variacaoCaixa,
-  }
 }

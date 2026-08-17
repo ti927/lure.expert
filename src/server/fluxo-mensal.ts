@@ -7,6 +7,8 @@ import { memberships } from '@/db/schema'
 import { eq, and, isNotNull, sql } from 'drizzle-orm'
 import type { DreFilters } from '@/lib/dre-types'
 import { BP_TYPES } from '@/lib/dre-types'
+import { generateMonthRange } from '@/lib/dre-calc'
+import { dimensionFilters } from '@/lib/sql-dimensions'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -48,19 +50,9 @@ async function getAuthContext() {
 
 export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMensalData> {
   const { organizationId } = await getAuthContext()
-  const { from, to, costCenterIds, businessUnitIds, legalEntityIds } = filters
+  const { from, to } = filters
 
-  const ccFilter = costCenterIds?.length
-    ? sql`AND t.cost_center_id IN (${sql.join(costCenterIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
-
-  const buFilter = businessUnitIds?.length
-    ? sql`AND t.business_unit_id IN (${sql.join(businessUnitIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
-
-  const leFilter = legalEntityIds?.length
-    ? sql`AND t.legal_entity_id IN (${sql.join(legalEntityIds.map(id => sql`${id}::uuid`), sql`, `)})`
-    : sql``
+  const dimFilters = dimensionFilters('t', filters)
 
   type AggRow = {
     category_id:        string
@@ -98,9 +90,7 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
       AND COALESCE(t.effective_date, t.date)::date <= ${to}::date
       AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
       AND c.hide_in_cashflow = false
-      ${ccFilter}
-      ${buFilter}
-      ${leFilter}
+      ${dimFilters}
     GROUP BY
       c.id, c.name, c.code,
       c.parent_id, p.name, p.code, p.opex_capex,
@@ -125,18 +115,4 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
 
   const months = generateMonthRange(from, to)
   return { months, rows }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function generateMonthRange(from: string, to: string): string[] {
-  const months: string[] = []
-  let [y, m] = from.slice(0, 7).split('-').map(Number)
-  const [toY, toM] = to.slice(0, 7).split('-').map(Number)
-  while (y < toY || (y === toY && m <= toM)) {
-    months.push(`${y}-${String(m).padStart(2, '0')}`)
-    m++
-    if (m > 12) { m = 1; y++ }
-  }
-  return months
 }

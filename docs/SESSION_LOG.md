@@ -6,6 +6,36 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.0 — Fundação do módulo de Orçamento (schema + expansão de recorrência + extrações)
+
+**Contexto:** o produto só olhava para trás. DRE, Balanço e Fluxo consolidam o que aconteceu; não havia como declarar o que deveria acontecer, logo não havia variação nem resposta para "vamos fechar o ano dentro do previsto". A projeção do `/fluxo` era puramente estatística (recorrências detectadas em 180 dias), sem intenção humana. A Fase 8 (adquirentes) foi pausada em 8.1 para abrir esta.
+
+**Desenho fechado com o usuário antes de codar** (4 rodadas de perguntas + revisão adversarial do desenho): duas datas por lançamento (competência + caixa); unidade = lançamento com recorrência (não célula de planilha); versões nomeadas com uma vigente por exercício, duplicação servindo revisão e cenário; tabelas separadas de `transactions`; tudo é previsão (sem título firme — contas a pagar/receber fica para módulo futuro); horizonte = ano civil; 4 modos de valor e 4 formas de popular; rota `/orcamento` com abas, DRE e Fluxo intactos; 3 escopos de edição; coluna "Projeção do ano". Plano completo em `.claude/plans/`.
+
+**Cinco correções estruturais adotadas na revisão do desenho inicial:**
+- `interval_months int` no lugar de um enum de frequência (matava um valor "único" redundante com `occurrences = 1` e um mapa enum→meses).
+- `adjusted_fields text[]` no lugar de `is_adjusted boolean` — granularidade por campo; sem isso, uma ocorrência ajustada só no valor bloquearia alteração em lote de centro de custo.
+- `total_amount` separado de `base_amount` — depois de expandir, não haveria como saber se 1.200 era a parcela ou o total.
+- `start_month date` no lugar de texto `'YYYY-MM'` — duplicação de versão e copiar-do-realizado fazem aritmética SQL de data.
+- Ordem das sessões trocada: a tela de comparação (9.2) passou à frente dos escopos de edição, para não digitar orçamento por 3 sessões antes de validar o schema contra uma tela que consome.
+
+**Entregue:**
+- [db/migrations/rls/0024_budget.sql](db/migrations/rls/0024_budget.sql) — `budget_versions`, `budget_series`, `budget_entries`; índices (incluindo `UNIQUE (series_id, sequence)` como rede contra duplo clique, único parcial de versão vigente por exercício, e índice parcial das ocorrências ajustadas); CHECKs de coerência entre `amount_mode` e os campos que ele exige; 12 policies RLS no padrão nomeado; **3 triggers `update_updated_at()`** — corrigindo a lacuna que as migrations 0022 e 0023 deixaram.
+- [db/schema/budget-versions.ts](db/schema/budget-versions.ts), [db/schema/budget-series.ts](db/schema/budget-series.ts), [db/schema/budget-entries.ts](db/schema/budget-entries.ts) + barrel.
+- [src/lib/budget-types.ts](src/lib/budget-types.ts) — constantes com rótulos PT-BR, schemas Zod (com `superRefine` espelhando os CHECKs do banco), tipos de leitura.
+- [src/lib/budget-recurrence.ts](src/lib/budget-recurrence.ts) — `expandSeries` **pura** (fora de `'use server'` de propósito: é o que permite o preview ao vivo das ocorrências dentro do dialog, sem o qual os 4 modos de valor são incompreensíveis no formulário).
+
+**Extrações — movidas, não duplicadas** (o módulo seria a 4ª cópia): `computeSubtotals`/`sumByTypes`/`generateMonthRange` → [src/lib/dre-calc.ts](src/lib/dre-calc.ts); trio de filtros de dimensão → [src/lib/sql-dimensions.ts](src/lib/sql-dimensions.ts); `getAuthContext` → [src/lib/auth-context.ts](src/lib/auth-context.ts) (usado só por `budget.ts` — migrar as 8 cópias antigas seria refactor horizontal de risco). `dre.ts` e `fluxo-mensal.ts` migrados no mesmo commit. `computeSubtotals` ganhou o tipo mínimo `SubtotalRow` para que a 9.2 passe projeções (orçado/realizado/misto) sem fabricar campos que não usa.
+
+**Verificação:**
+- `npx tsc --noEmit` limpo; `npm run build` verde (29 rotas).
+- 20/20 casos de `expandSeries` conferidos: os 4 modos; `1000/3` = `[333.33, 333.33, 333.34]` somando exatamente 1000,00; reajuste de 5% a cada 3 ocorrências gerando 4 patamares sempre a partir do valor base (não iterativo, evita drift); dia 31 clampado por mês (jan 31 / fev 28 / mar 31 / abr 30) e 29 em fevereiro bissexto; trimestral jan/abr/jul/out; lag de 30 dias atravessando o ano (competência 20/dez/27 → caixa 19/jan/28) sem invalidar a série.
+- SQL de `dimensionFilters` renderizado via `PgDialect` e conferido idêntico ao inline anterior: `AND t.cost_center_id IN ($n::uuid, ...)`, ids parametrizados, array vazio equivalente a ausente, troca de alias `t`→`e` funcionando.
+
+**Pendente do usuário:** aplicar `0024_budget.sql` no Supabase Studio e rodar o teste de isolamento cruzado entre duas orgs nas 3 tabelas novas (padrão de `db/migrations/rls/test_rls_isolation.sql`). Sem isso a 9.1 não roda.
+
+---
+
 ### ✅ Sessão de fix do connect Pluggy — credenciais contaminadas por caractere invisível — *commit `602a6cd`, deployada*
 
 **Contexto:** usuário reportou que em produção (Vercel) clicar em "Conectar conta" no Pluggy falhava com toast "Não foi possível iniciar a conexão. Verifique as configurações do Pluggy." Console do browser mostrava `POST /contas 500`. Local funcionava.

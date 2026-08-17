@@ -804,7 +804,30 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 9 — Agente Proativo e Notificações (Semanas 22-23)
+### FASE 9 — Orçamento e Previsão
+
+**Objetivo:** o cliente declara o que deveria acontecer, e o sistema mostra a variação contra o que aconteceu. É a camada que faltava para o produto responder "vamos fechar o ano dentro do previsto?".
+
+**Inserida fora da ordem original** (a pedido do cliente, com a Fase 8 pausada em 8.1). As fases antes numeradas 9 e 10 passaram a **10** e **11**.
+
+**Deliverables:**
+- Três tabelas separadas de `transactions`: `budget_versions` (exercício + versão nomeada), `budget_series` (a regra de repetição), `budget_entries` (as ocorrências materializadas)
+- Lançamento com recorrência: N ocorrências a cada M meses, em 4 modos de valor (fixo, reajuste % periódico, sazonal, parcelamento de um total)
+- Duas datas por lançamento — competência (alimenta a DRE Orçada) e caixa (alimenta o Fluxo Projetado)
+- Edição e exclusão em lote com 3 escopos (somente este mês / este e os próximos / toda a série), preservando ocorrências ajustadas à mão
+- Rota `/orcamento` com abas Planejamento, Orçado × Realizado e Versões
+- Coluna "Projeção do ano" = realizado dos meses fechados + orçado dos meses restantes
+- Aceleradores: copiar do realizado com %, duplicar versão, importar CSV, aceitar recorrências detectadas pelo `/fluxo`
+
+**Sessões:** 9.0 fundação · 9.1 CRUD + Planejamento · 9.2 Orçado × Realizado (primeiro uso real) · 9.3 escopos de edição · 9.4 copiar/duplicar · 9.5 CSV + recorrências.
+
+**Decisões estruturais:** `docs/SCHEMA_DECISIONS.md` Decisão 13.
+
+**Tempo:** ~2 semanas
+
+---
+
+### FASE 10 — Agente Proativo e Notificações (ex-Fase 9)
 
 **Objetivo:** o sistema não espera o cliente perguntar — proativamente envia alertas, insights e o fechamento mensal narrado.
 
@@ -821,7 +844,7 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 10 — Onboarding, Billing e Lançamento (Semanas 24-26)
+### FASE 11 — Onboarding, Billing e Lançamento (ex-Fase 10)
 
 **Objetivo:** produto vendável, cliente novo se cadastra e configura sozinho.
 

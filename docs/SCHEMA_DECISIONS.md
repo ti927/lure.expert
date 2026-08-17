@@ -350,6 +350,116 @@ lookup determinístico vs. as classificadas por regra/LLM. Aparece na UI de revi
 - Layer 0 só dispara quando há `categoriaFilho` no mapping. `categoriaPai` ou
   `tipoNatureza` sozinhos NÃO classificam — são apenas desempatadores.
 
+---
+
+## Decisão 13 — Modelo de dados do Orçamento (Sessão 9.0)
+
+Três tabelas novas na migration `0024_budget.sql`: `budget_versions`, `budget_series`,
+`budget_entries`. As decisões abaixo não são óbvias a partir do schema.
+
+### 13.1 — Orçado em tabelas separadas, nunca uma flag em `transactions`
+
+Orçado e realizado nunca compartilham tabela. Uma coluna `is_budget` em `transactions`
+obrigaria **toda** query existente (DRE, BP, FC, dashboard, categorização, reconciliação,
+drill-down) a ganhar um filtro — e uma única esquecida faria previsão virar resultado
+sem nenhum sinal visível. A separação física é o que garante que isso não aconteça.
+
+### 13.2 — Ocorrências materializadas, não regra expandida na leitura
+
+`budget_series` guarda a regra ("12 meses a partir de jan/27, +5% ao ano"), mas quem
+guarda os números é `budget_entries` — uma linha por ocorrência, gravada na criação.
+
+O motivo não é performance (12 meses × 500 séries = 6 mil linhas; irrelevante dos dois
+lados). É que o produto exige **editar uma ocorrência isolada**. Expandir na leitura
+levaria ao modelo "regra + tabela de exceções", que é estritamente mais complexo que
+materializar tudo, e destruiria a query de comparação: o `GROUP BY (category_id, mês)`
+teria que virar `LATERAL generate_series` ou expansão em TS, reimplementando fora do SQL
+a agregação que a DRE já faz.
+
+**Invariante, escrita no topo de `db/schema/budget-entries.ts`:** `budget_entries` é a
+única fonte de verdade para qualquer número exibido; `budget_series` é gerador + defaults.
+Nenhuma leitura consolidada recomputa a série.
+
+**Consequência aceita:** depois de "excluir somente este mês", `series.occurrences` passa
+a significar "o que a regra geraria", não "o que existe". A UI exibe sempre o count real
+de entries. `budget_entries.sequence` nunca é renumerada — buracos são válidos.
+
+### 13.3 — `adjusted_fields text[]` em vez de `is_adjusted boolean`
+
+Uma ocorrência editada à mão não pode ser sobrescrita por alteração em lote sem
+confirmação. Com um booleano, uma ocorrência cujo único ajuste foi de **valor** ficaria
+protegida também contra uma alteração em lote de **centro de custo** — forçando um dialog
+de confirmação que o usuário não deveria ver. Com o array, a alteração em lote do campo F
+pula apenas quem tem F no array.
+
+**Auto-cura:** se o valor editado volta a coincidir com o que a série geraria, o campo sai
+do array. Sem isso, linhas ficariam travadas para sempre por um ajuste que não existe mais.
+
+### 13.4 — "Este e os próximos" não faz split da série
+
+O padrão de agenda (Google Calendar) trunca a série original e cria uma nova a partir da
+ocorrência âncora. Aqui não: a série é preservada e apenas as entries de `sequence >= N`
+são alteradas, com os campos marcados em `adjusted_fields`.
+
+Split fragmentaria a identidade — a aba Planejamento mostraria duas linhas onde o usuário
+criou uma. **Preço aceito:** uma edição posterior de "toda a série" precisa de
+`overwriteAdjusted` para retomar aquelas ocorrências. Aceitável num horizonte anual com
+poucas revisões. **Exceção:** quando a âncora é a sequência 1, "daqui" equivale a "todas" —
+a série também é atualizada e nada é marcado como ajustado.
+
+### 13.5 — `cash_date` é NOT NULL e pode vazar do exercício
+
+Ao contrário de `transactions.effective_date` (nullable só por retrocompatibilidade com
+dados históricos), aqui a data de caixa é obrigatória — logo nenhuma query de regime caixa
+do orçado precisa de `COALESCE`.
+
+O exercício é o ano civil e valida apenas a **competência**. Competência de dez/27 com
+prazo de 30 dias tem caixa em jan/28, e isso é a realidade, não um erro: o orçado que vaza
+não aparece na matriz do exercício, e a tela de comparação informa o total vazado no rodapé
+(`foraDoHorizonte`). A alternativa — proibir o lag na borda ou inventar orçamento plurianual —
+seria mentira ou escopo desnecessário.
+
+### 13.6 — Colunas que evitam armadilha, e por quê
+
+- **`interval_months int`, não um enum de frequência.** O enum precisaria de um valor
+  "único" redundante com `occurrences = 1` e de um mapa enum→meses em algum lugar do código.
+- **`start_month date`, não texto `'YYYY-MM'`.** Duplicação de versão e copiar-do-realizado
+  fazem aritmética SQL de data (`make_interval`), que texto quebraria — e é `make_interval`
+  que faz o clamp correto de 29/02 → 28/02.
+- **`total_amount` separado de `base_amount`.** Só o modo `parcelado` usa o total; sem coluna
+  própria, depois de expandir não haveria como saber se 1.200 era a parcela ou o total.
+- **`adjustment_rate` é fração decimal** (`0.05` = 5%) e **`adjustment_every` conta
+  ocorrências**, não meses (com `interval_months` variável, meses seria ambíguo).
+- **`seasonal_amounts`** é array em ordem de **sequência**, não indexado por mês do
+  calendário — com `interval_months > 1` não existem 12 slots. Validado por CHECK contra
+  `occurrences`.
+- **`category_id NOT NULL ON DELETE RESTRICT`** nas duas tabelas: a comparação faz INNER JOIN
+  em `categories` (igual à DRE), então orçado sem categoria sumiria em silêncio; e apagar uma
+  categoria com orçado deve falhar de forma visível.
+- **`source`** entrou já na 0024, embora só seja usado nas sessões 9.4/9.5 — custo zero agora,
+  evita uma migration só para isso depois.
+
+### 13.7 — Aritmética de valor
+
+- **Reajuste** é sempre `base × (1+rate)^floor((i−1)/every)`, calculado a partir do valor
+  inicial — nunca iterativamente sobre o valor arredondado anterior, que acumularia drift.
+- **Parcelamento** divide em centavos e joga a sobra na **última** parcela, para a soma bater
+  exatamente com o total. Se depois uma parcela do meio for ajustada à mão, a soma diverge de
+  `total_amount` — e tudo bem: o total do ano exibido vem sempre das entries.
+
+### 13.8 — Extrações que acompanharam a fase
+
+O módulo seria a 4ª cópia de código já duplicado, então a 9.0 moveu (não duplicou):
+`computeSubtotals`/`sumByTypes`/`generateMonthRange` → `src/lib/dre-calc.ts`; o trio de
+filtros de dimensão → `src/lib/sql-dimensions.ts` (`dimensionFilters(alias, filtros)`, com
+`alias` como union literal fechado — é o único trecho que entra via `sql.raw`);
+`getAuthContext` → `src/lib/auth-context.ts`.
+
+Os três vivem em `src/lib/` e **não** têm `'use server'`: essa diretiva só permite exportar
+funções async, e a coluna "Projeção do ano" da tela de comparação roda `computeSubtotals` no
+cliente. `getAuthContext` segue copiado nos 8+ arquivos antigos de `src/server/` — migração
+incremental, não refactor horizontal de uma vez.
+
 **Arquivos:**
 - `src/lib/parsers/excel-csv.ts` — `detectAuthoritativeColumns()`, gravação em
   `rawData.__categoryMapping`
