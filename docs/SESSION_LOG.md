@@ -6,6 +6,30 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.1 — CRUD de versão e série + aba Planejamento
+
+**Entregue:**
+- [src/server/budget.ts](src/server/budget.ts) — 13 server actions. Versões: `listBudgetVersions` (com contagens e totais por subquery), `createBudgetVersion`, `setActiveBudgetVersion`, `updateBudgetVersionStatus`, `deleteBudgetVersion`. Séries: `listBudgetSeries`, `getBudgetSeriesEntries`, `createBudgetSeries`, `updateBudgetSeries`, `deleteBudgetSeries`. Ocorrências: `updateBudgetEntry`, `deleteBudgetEntry`.
+- [src/server/dimensions.ts](src/server/dimensions.ts) — `getContactOptions()` (não existia nenhuma listagem de contatos no projeto).
+- Rota `/orcamento`: [page.tsx](src/app/(authenticated)/orcamento/page.tsx), [orcamento-client.tsx](src/app/(authenticated)/orcamento/orcamento-client.tsx) (shell de abas + seletor de versão), [planejamento-tab.tsx](src/app/(authenticated)/orcamento/planejamento-tab.tsx), [series-dialog.tsx](src/app/(authenticated)/orcamento/series-dialog.tsx), [versoes-tab.tsx](src/app/(authenticated)/orcamento/versoes-tab.tsx). Item `Orçamento` (ícone `Target`) no `NAV` da sidebar, depois de Fluxo de Caixa.
+- [src/lib/format.ts](src/lib/format.ts) — antecipado da 9.2 porque `budget-recurrence.ts` já precisava de `monthLabel` e criar uma segunda cópia contrariaria o objetivo da extração. `budget-recurrence` passou a importar de lá.
+
+**Decisões de implementação:**
+- **Preview ao vivo no dialog.** `expandSeries` roda no cliente a cada tecla e renderiza a tabela de ocorrências (competência, caixa, valor) com o total do ano ao lado do formulário. É o que torna os 4 modos compreensíveis: o usuário vê os 4 patamares do reajuste e os centavos da última parcela antes de salvar, em vez de descobrir depois.
+- **Direção deduzida da categoria.** Escolher uma folha de `receita_operacional` marca Entrada; qualquer outra marca Saída. Só até o usuário tocar no seletor — a partir daí a escolha dele manda.
+- **Cauda de caixa visível.** Datas de caixa que caem fora do exercício aparecem em âmbar no preview e na lista de ocorrências, com uma linha explicando que é esperado quando há prazo. Sem isso, pareceria bug.
+- **`entryCount` vs `occurrences`.** A tabela mostra sempre o count real de entries; quando diverge da regra (após exclusão pontual), aparece um `≠12` discreto com tooltip. É a materialização da divergência aceita na Decisão 13.2.
+- **`updateBudgetSeries` regenera tudo** — apaga as ocorrências e recria. Limitação temporária documentada no próprio arquivo; o dialog avisa quantos ajustes manuais serão perdidos. A 9.3 substitui pelos três escopos.
+- **Versão arquivada é somente-leitura** na action (`loadEditableVersion`) e na UI (botões desabilitados + aviso na zona 2).
+- **Chave de storage.** O shell usa `lure:orcamento:filters` (versão + aba) e a tabela usa `lure:orcamento:planejamento:filters` (filtros de coluna), para um não sobrescrever o outro.
+
+**Verificação:**
+- `npx tsc --noEmit` limpo; `npm run build` verde (30 rotas, `/orcamento` em 31,4 kB).
+- **Teste de integração contra o banco real** (transação revertida no final): semeia org, plano de contas, versão e 3 séries (fixo 12×, reajuste 5% a cada 6 de 12×, parcelado 1000/3), ajusta uma ocorrência à mão e roda as 3 queries cruas verbatim. 20/20. Confirmou o que o type-check não vê: nenhum erro de coluna/join, `annual_total` = 145.500 (com o ajuste manual, não os 144.000 da regra — a invariante "entries são a verdade" vale de fato), parcelado somando exatamente 1000, lag de 30 dias levando dez/27 para 04/01/2028, e `adjusted_fields` voltando como array.
+- **Não verificado automaticamente:** o fluxo de clique na UI, que exige sessão autenticada no browser. Roteiro manual entregue ao usuário.
+
+---
+
 ### ✅ Sessão 9.0 — Fundação do módulo de Orçamento (schema + expansão de recorrência + extrações)
 
 **Contexto:** o produto só olhava para trás. DRE, Balanço e Fluxo consolidam o que aconteceu; não havia como declarar o que deveria acontecer, logo não havia variação nem resposta para "vamos fechar o ano dentro do previsto". A projeção do `/fluxo` era puramente estatística (recorrências detectadas em 180 dias), sem intenção humana. A Fase 8 (adquirentes) foi pausada em 8.1 para abrir esta.

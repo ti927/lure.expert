@@ -17,6 +17,7 @@ import {
   X,
   LogOut,
   FileText,
+  Target,
 } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -37,6 +38,7 @@ const NAV = [
   { href: '/dre', icon: BarChart3, label: 'DRE' },
   { href: '/balanco', icon: Scale, label: 'Balanço' },
   { href: '/fluxo', icon: TrendingUp, label: 'Fluxo de Caixa' },
+  { href: '/orcamento', icon: Target, label: 'Orçamento' },
   { href: '/contas', icon: Landmark, label: 'Contas' },
   { href: '/upload', icon: UploadCloud, label: 'Enviar arquivo' },
 ]

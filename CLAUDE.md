@@ -168,7 +168,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 9 — Orçamento e Previsão **em andamento** (9.0 ✅). Fases 0–7 **100% concluídas**.
+**Status:** Fase 9 — Orçamento e Previsão **em andamento** (9.0 ✅, 9.1 ✅). Fases 0–7 **100% concluídas**.
 Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
 
 **Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
@@ -176,7 +176,7 @@ Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
 
 **Sessões Fase 9 — Orçamento:**
 - ✅ 9.0: Schema (`budget_versions`, `budget_series`, `budget_entries`), migration 0024, `budget-types.ts`, `budget-recurrence.ts` (expansão pura), extrações `dre-calc.ts` / `sql-dimensions.ts` / `auth-context.ts`
-- 🔲 9.1: CRUD de versão e série + aba Planejamento em `/orcamento`
+- ✅ 9.1: `src/server/budget.ts` (13 server actions), rota `/orcamento` com 3 abas, `series-dialog.tsx` com os 4 modos e preview ao vivo, tabela de séries com ocorrências expansíveis e edição inline, aba Versões, item na sidebar
 - 🔲 9.2: Aba Orçado × Realizado ← primeiro uso real do módulo
 - 🔲 9.3: Escopos de edição/exclusão de série (esta / daqui / todas)
 - 🔲 9.4: Copiar do realizado + duplicar versão
@@ -244,6 +244,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Fase 9 — Orçamento (em andamento)** | |
+| 9.1 | `src/server/budget.ts` com 13 actions (versões, séries, ocorrências) + `getContactOptions` em `dimensions.ts`. Rota `/orcamento` com abas Planejamento / Orçado×Realizado (placeholder) / Versões. `series-dialog.tsx`: 4 modos de valor com **preview ao vivo** das ocorrências via `expandSeries`, direção deduzida do tipo da categoria, aviso de cauda de caixa em âmbar. Tabela de séries no DATA_TABLE_PATTERN com expansão sob demanda das ocorrências e edição inline de valor que popula `adjusted_fields` (com auto-cura). `updateBudgetSeries` regenera tudo — limitação temporária até a 9.3. Antecipado `src/lib/format.ts` da 9.2 para não duplicar `monthLabel` |
 | 9.0 | Migration 0024 (3 tabelas + 12 policies + 3 triggers `updated_at` — corrige a lacuna das 0022/0023), schema Drizzle `budget-versions`/`budget-series`/`budget-entries`, `lib/budget-types.ts` (constantes + Zod), `lib/budget-recurrence.ts` (`expandSeries` pura: fixo/reajuste/sazonal/parcelado, clamp de dia, cauda de caixa, validação de exercício — 20/20 casos verificados). Extrações movidas, não duplicadas: `lib/dre-calc.ts` (`computeSubtotals`, `generateMonthRange`), `lib/sql-dimensions.ts` (`dimensionFilters`, SQL conferido idêntico ao anterior), `lib/auth-context.ts`. `/dre` e `/fluxo` migrados no mesmo commit |
 | **Hardening intercalado** | |
 | Fix connect Pluggy (`602a6cd`) | Conectar conta dava 500 em produção. Erro real via `vercel logs`: `HTTPError 400` da API Pluggy (`clientId must be a UUID`) — credencial com caractere invisível (newline/BOM/zero-width) na Vercel. Reproduzido 1:1 contra `api.pluggy.ai/auth`. Fix: `sanitizeSecret()` (code points) em `getPluggyClient()`, último consumidor de credencial sem sanitização. Mesma classe do incidente Anthropic |

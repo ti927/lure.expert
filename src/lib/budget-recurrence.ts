@@ -9,6 +9,7 @@
 // deslocamento de mês neste projeto (ver generateMonthRange, UTC-3).
 
 import type { AmountMode, EntryDraft } from './budget-types'
+import { monthLabel } from './format'
 
 export interface RecurrenceInput {
   startMonth:      string   // 'YYYY-MM'
@@ -158,18 +159,8 @@ export function fitsInFiscalYear(
   if (Number(last.slice(0, 4)) !== fiscalYear) {
     return {
       ok: false,
-      message: `A última ocorrência cai em ${formatMonthLabel(last)}, fora do exercício de ${fiscalYear}. Reduza a quantidade ou a periodicidade.`,
+      message: `A última ocorrência cai em ${monthLabel(last)}, fora do exercício de ${fiscalYear}. Reduza a quantidade ou a periodicidade.`,
     }
   }
   return { ok: true }
-}
-
-// ─── Rótulo ───────────────────────────────────────────────────────────────────
-
-const PT_MONTHS_SHORT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
-
-/** 'YYYY-MM' → 'mar/27'. Aceita também 'YYYY-MM-DD'. */
-export function formatMonthLabel(month: string): string {
-  const [y, m] = month.slice(0, 7).split('-').map(Number)
-  return `${PT_MONTHS_SHORT[m - 1]}/${String(y).slice(2)}`
 }

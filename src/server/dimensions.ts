@@ -13,6 +13,7 @@ import {
   transactions,
   categories,
   categorizationRules,
+  contacts,
 } from '@/db/schema'
 import { eq, and, isNotNull, count, asc } from 'drizzle-orm'
 
@@ -238,6 +239,18 @@ export async function getLegalEntityLinkedCount(id: string) {
       .where(and(eq(categorizationRules.targetLegalEntityId, id), eq(categorizationRules.organizationId, organizationId))),
   ])
   return txCount + ruleCount
+}
+
+// ─── CONTATOS ────────────────────────────────────────────────────────────────
+
+// Lista enxuta para selects (o orçamento associa um contato ao lançamento).
+export async function getContactOptions() {
+  const { organizationId } = await getAuthContext()
+  return db
+    .select({ id: contacts.id, name: contacts.name, code: contacts.document })
+    .from(contacts)
+    .where(eq(contacts.organizationId, organizationId))
+    .orderBy(asc(contacts.name))
 }
 
 // ─── CATEGORIAS FOLHA ────────────────────────────────────────────────────────
