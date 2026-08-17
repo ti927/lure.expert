@@ -213,7 +213,11 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0021_staging_effective_date.sql` — `effective_date text` em `transactions_staging`
 - ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
-- 🔲 `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at` — **pendente de aplicação no Studio**
+- ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
+
+**Scripts de teste RLS (`db/migrations/rls/`):**
+- `test_rls_budget.sql` — migration 0024: estrutura, CHECKs, triggers e isolamento das 3 tabelas de orçamento
+- `test_rls_isolation.sql` — as 14 tabelas gerais. Era 18; a migration 0015 dropou `fixed_assets`, `loans`, `equity_movements` e `inventory_snapshots`, e o script ficou quebrado desde então (`relation "fixed_assets" does not exist`) até ser corrigido na sessão 9.0
 
 **Convenção crítica — date vs effective_date em `transactions`:**
 - `date` (competência) → alimenta **DRE** e **BP** (quando o fato econômico ocorreu)

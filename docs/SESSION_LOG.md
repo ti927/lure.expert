@@ -32,7 +32,13 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 - 20/20 casos de `expandSeries` conferidos: os 4 modos; `1000/3` = `[333.33, 333.33, 333.34]` somando exatamente 1000,00; reajuste de 5% a cada 3 ocorrências gerando 4 patamares sempre a partir do valor base (não iterativo, evita drift); dia 31 clampado por mês (jan 31 / fev 28 / mar 31 / abr 30) e 29 em fevereiro bissexto; trimestral jan/abr/jul/out; lag de 30 dias atravessando o ano (competência 20/dez/27 → caixa 19/jan/28) sem invalidar a série.
 - SQL de `dimensionFilters` renderizado via `PgDialect` e conferido idêntico ao inline anterior: `AND t.cost_center_id IN ($n::uuid, ...)`, ids parametrizados, array vazio equivalente a ausente, troca de alias `t`→`e` funcionando.
 
-**Pendente do usuário:** aplicar `0024_budget.sql` no Supabase Studio e rodar o teste de isolamento cruzado entre duas orgs nas 3 tabelas novas (padrão de `db/migrations/rls/test_rls_isolation.sql`). Sem isso a 9.1 não roda.
+**Migration aplicada no Studio sem erro.**
+
+**Descoberta ao validar:** rodar `test_rls_isolation.sql` (o harness da Fase 1.8) falhava com `relation "fixed_assets" does not exist` — nada a ver com a 0024. O script testa 18 tabelas, das quais 4 (`fixed_assets`, `loans`, `equity_movements`, `inventory_snapshots`) foram dropadas pela migration 0015 no redesign do BP. Ou seja, o único harness de regressão de RLS do projeto estava morto desde a 0015 e ninguém tinha notado. Também carregava valores de enum antigos: `categories.type = 'expense'` e `transactions.direction = 'out'`, ambos inválidos hoje.
+
+**Corrigido nesta sessão:**
+- [db/migrations/rls/test_rls_budget.sql](db/migrations/rls/test_rls_budget.sql) — novo, dedicado à 0024. Vai além do isolamento: confere as 3 tabelas com RLS habilitada, as 12 policies e os 3 triggers `updated_at`; prova que o trigger dispara (antedatando `updated_at`, já que `now()` é fixo dentro da transação); e testa que os CHECKs rejeitam o que devem — 2ª versão vigente no mesmo exercício, nome duplicado ignorando caixa/espaços, versão arquivada marcada como vigente, `start_month` fora do dia 1, sazonal com array de tamanho diferente de `occurrences`, parcelado sem `total_amount`, reajuste sem `adjustment_rate`, `amount` negativo, `sequence` duplicada na mesma série, e delete de categoria com orçado (RESTRICT). Testa também o caso que **deve passar**: `cash_date` fora do exercício (a cauda de caixa). Fecha com isolamento de leitura e de escrita cruzada.
+- [db/migrations/rls/test_rls_isolation.sql](db/migrations/rls/test_rls_isolation.sql) — removidos os 4 blocos de tabelas inexistentes (18 → 14 tabelas) e corrigidos os dois valores de enum. Voltou a rodar.
 
 ---
 

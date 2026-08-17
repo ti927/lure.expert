@@ -1,6 +1,17 @@
 -- =====================================================
--- SCRIPT DE TESTE: Isolamento RLS em 18 tabelas
+-- SCRIPT DE TESTE: Isolamento RLS em 14 tabelas
 -- =====================================================
+-- Histórico: escrito na Fase 1.8 cobrindo 18 tabelas. A migration 0015 dropou
+-- fixed_assets, loans, equity_movements e inventory_snapshots (redesign do BP —
+-- os dados passaram a entrar como transactions com categorias de tipo BP), então
+-- os quatro blocos correspondentes saíram daqui. Valores de enum também foram
+-- atualizados: categories.type 'expense' → 'sga' e transactions.direction
+-- 'out' → 'outflow'.
+--
+-- As tabelas de orçamento (budget_versions/series/entries, migration 0024) têm
+-- script próprio: `test_rls_budget.sql`, que além do isolamento testa os CHECKs
+-- e os triggers de updated_at.
+--
 -- Como usar:
 --   1. Abrir Supabase Studio > SQL Editor
 --   2. Colar e rodar este script inteiro de uma vez
@@ -43,25 +54,13 @@ BEGIN
   VALUES (ds_a, org_a, 'bank', 'manual', '_teste_banco');
 
   INSERT INTO categories(id, organization_id, code, name, type)
-  VALUES (cat_a, org_a, '_TESTE-001', '_Categoria Teste', 'expense');
+  VALUES (cat_a, org_a, '_TESTE-001', '_Categoria Teste', 'sga');
 
   INSERT INTO contacts(organization_id, type, name)
   VALUES (org_a, 'supplier', '_Fornecedor Teste');
 
   INSERT INTO categorization_rules(organization_id, name, conditions, target_category_id)
   VALUES (org_a, '_Regra Teste', '{}', cat_a);
-
-  INSERT INTO fixed_assets(organization_id, name, acquisition_date, acquisition_value, current_value)
-  VALUES (org_a, '_Ativo Teste', '2024-01-01', 100000, 90000);
-
-  INSERT INTO loans(organization_id, name, lender, type, original_amount, current_balance, start_date)
-  VALUES (org_a, '_Emprestimo Teste', 'Banco', 'term', 50000, 45000, '2024-01-01');
-
-  INSERT INTO equity_movements(organization_id, type, amount, direction, date, description)
-  VALUES (org_a, 'capital', 100000, 'in', '2024-01-01', '_Aporte Teste');
-
-  INSERT INTO inventory_snapshots(organization_id, snapshot_date, total_value)
-  VALUES (org_a, '2024-01-31', 30000);
 
   INSERT INTO credit_card_invoices(organization_id, data_source_id, reference_month, total_amount)
   VALUES (org_a, ds_a, '2099-01', 5000);
@@ -70,7 +69,7 @@ BEGIN
   VALUES (org_a, 'bank_statement', '_extrato.pdf', '_teste/extrato.pdf', 'application/pdf', 102400);
 
   INSERT INTO transactions(organization_id, data_source_id, date, amount, direction, description)
-  VALUES (org_a, ds_a, '2024-01-15', 1000, 'out', '_Pagamento Teste');
+  VALUES (org_a, ds_a, '2024-01-15', 1000, 'outflow', '_Pagamento Teste');
 
   INSERT INTO templates(organization_id, source_type, name, structure)
   VALUES (org_a, 'erp', '_Template Teste', '{}');
@@ -129,22 +128,6 @@ BEGIN
   IF cnt = 0 THEN report := report || E'  [OK]     categorization_rules\n';
   ELSE report := report || '  [FALHOU] categorization_rules (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
 
-  SELECT COUNT(*) INTO cnt FROM fixed_assets WHERE organization_id = org_a;
-  IF cnt = 0 THEN report := report || E'  [OK]     fixed_assets\n';
-  ELSE report := report || '  [FALHOU] fixed_assets (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
-
-  SELECT COUNT(*) INTO cnt FROM loans WHERE organization_id = org_a;
-  IF cnt = 0 THEN report := report || E'  [OK]     loans\n';
-  ELSE report := report || '  [FALHOU] loans (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
-
-  SELECT COUNT(*) INTO cnt FROM equity_movements WHERE organization_id = org_a;
-  IF cnt = 0 THEN report := report || E'  [OK]     equity_movements\n';
-  ELSE report := report || '  [FALHOU] equity_movements (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
-
-  SELECT COUNT(*) INTO cnt FROM inventory_snapshots WHERE organization_id = org_a;
-  IF cnt = 0 THEN report := report || E'  [OK]     inventory_snapshots\n';
-  ELSE report := report || '  [FALHOU] inventory_snapshots (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
-
   SELECT COUNT(*) INTO cnt FROM credit_card_invoices WHERE organization_id = org_a;
   IF cnt = 0 THEN report := report || E'  [OK]     credit_card_invoices\n';
   ELSE report := report || '  [FALHOU] credit_card_invoices (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
@@ -183,14 +166,14 @@ BEGIN
   -- 4. RESULTADO FINAL
   -- ============================================================
 
-  RAISE NOTICE E'\n========== RESULTADO RLS ==========\n%\nTotal: % de 18 tabelas com falha.',
+  RAISE NOTICE E'\n========== RESULTADO RLS ==========\n%\nTotal: % de 14 tabelas com falha.',
     report, fails;
 
   IF fails > 0 THEN
     RAISE EXCEPTION '❌  ISOLAMENTO FALHOU em % tabela(s). Veja RAISE NOTICE acima.', fails;
   END IF;
 
-  RAISE NOTICE '✅  Todos os 18 testes passaram — RLS está correto.';
+  RAISE NOTICE '✅  Todos os 14 testes passaram — RLS está correto.';
 
 END $$;
 
