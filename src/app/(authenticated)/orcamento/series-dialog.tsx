@@ -11,13 +11,16 @@ import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { CellCombobox, CategoryCellCombobox } from '@/components/transacoes-shared/cell-combobox'
 import type { CategoryItem, SimpleDimensionItem } from '@/components/transacoes-shared/types'
-import { createBudgetSeries, updateBudgetSeries } from '@/server/budget'
+import { createBudgetSeries, updateBudgetSeries, getBudgetSeriesEntries } from '@/server/budget'
 import {
   AMOUNT_MODES, AMOUNT_MODE_LABELS, AMOUNT_MODE_HINTS, INTERVAL_OPTIONS, intervalLabel,
+  EDIT_SCOPES, EDIT_SCOPE_LABELS, EDIT_SCOPE_HINTS,
   type AmountMode, type BudgetSeriesInput, type BudgetSeriesListItem,
+  type BudgetEntryListItem, type EditScope, type SeriesUpdatePreview,
 } from '@/lib/budget-types'
 import { expandSeries, fitsInFiscalYear, type RecurrenceInput } from '@/lib/budget-recurrence'
 import { fmtMoney, monthLabel, dateLabel } from '@/lib/format'
+import { ScopeConfirmDialog } from './scope-confirm-dialog'
 
 const inputCls =
   'w-full h-8 rounded-md border border-input px-2 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-ring'
@@ -71,6 +74,12 @@ export function SeriesDialog({
   const [seasonal, setSeasonal] = useState<string[]>([])
   const [notes, setNotes] = useState('')
 
+  // Escopo da edição (só existe no modo edit e com mais de uma ocorrência)
+  const [scope, setScope] = useState<EditScope>('todas')
+  const [anchor, setAnchor] = useState<number | null>(null)
+  const [entries, setEntries] = useState<BudgetEntryListItem[]>([])
+  const [confirmPreview, setConfirmPreview] = useState<SeriesUpdatePreview | null>(null)
+
   const [isSaving, startTransition] = useTransition()
 
   // Reidrata o formulário a cada abertura
@@ -120,6 +129,21 @@ export function SeriesDialog({
       setNotes('')
     }
   }, [open, initial, fiscalYear])
+
+  // As ocorrências existentes alimentam o seletor de âncora de "somente este" /
+  // "este e os próximos". Carregadas sob demanda, só na edição.
+  useEffect(() => {
+    if (!open || mode !== 'edit' || !initial) { setEntries([]); return }
+    setScope('todas')
+    setConfirmPreview(null)
+    let alive = true
+    void getBudgetSeriesEntries(initial.id).then(rows => {
+      if (!alive) return
+      setEntries(rows)
+      setAnchor(rows[0]?.sequence ?? null)
+    })
+    return () => { alive = false }
+  }, [open, mode, initial])
 
   const nOcc = Math.min(12, Math.max(1, Math.trunc(parseNum(occurrences) ?? 0) || 0))
 
@@ -181,10 +205,9 @@ export function SeriesDialog({
     horizon.ok &&
     !isSaving
 
-  function handleSubmit() {
-    if (!canSubmit || !categoryId) return
-
-    const input: BudgetSeriesInput = {
+  function buildInput(): BudgetSeriesInput | null {
+    if (!categoryId) return null
+    return {
       versionId,
       description: description.trim(),
       direction,
@@ -206,22 +229,48 @@ export function SeriesDialog({
       seasonalAmounts: recurrence.seasonalAmounts,
       notes: notes.trim() || null,
     }
+  }
+
+  function submit(overwriteAdjusted = false) {
+    const input = buildInput()
+    if (!input) return
 
     startTransition(async () => {
-      const result = mode === 'create'
-        ? await createBudgetSeries(input)
-        : await updateBudgetSeries(initial!.id, input)
-
-      if ('error' in result && result.error) {
-        toast.error(result.error)
+      if (mode === 'create') {
+        const result = await createBudgetSeries(input)
+        if ('error' in result && result.error) { toast.error(result.error); return }
+        toast.success(`Lançamento criado com ${preview.length} ocorrência${preview.length > 1 ? 's' : ''}.`)
+        onOpenChange(false)
+        onSaved()
         return
       }
-      toast.success(mode === 'create'
-        ? `Lançamento criado com ${preview.length} ocorrência${preview.length > 1 ? 's' : ''}.`
-        : 'Lançamento atualizado.')
+
+      const result = await updateBudgetSeries(initial!.id, input, {
+        scope,
+        fromSequence: anchor ?? undefined,
+        overwriteAdjusted,
+      })
+
+      if ('error' in result && result.error) { toast.error(result.error); return }
+
+      // Two-phase: a action devolve o preview em vez de executar quando há
+      // ajuste manual em risco ou ocorrência a ser removida.
+      if ('needsConfirm' in result && result.needsConfirm) {
+        setConfirmPreview(result.needsConfirm)
+        return
+      }
+
+      const affected = 'affected' in result ? result.affected : 0
+      toast.success(`Lançamento atualizado — ${affected} ocorrência${affected === 1 ? '' : 's'}.`)
+      setConfirmPreview(null)
       onOpenChange(false)
       onSaved()
     })
+  }
+
+  function handleSubmit() {
+    if (!canSubmit) return
+    submit(false)
   }
 
   return (
@@ -507,12 +556,62 @@ export function SeriesDialog({
               </>
             )}
 
+            {/* ── Escopo da edição ── */}
+            {mode === 'edit' && entries.length > 1 && (
+              <div className="pt-1 space-y-2 border-t">
+                <Label className="text-xs pt-2 block">Aplicar a</Label>
+                <div className="space-y-1">
+                  {EDIT_SCOPES.map(s => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setScope(s)}
+                      className={cn(
+                        'w-full text-left rounded-md border px-2 py-1.5 transition-colors',
+                        scope === s ? 'border-primary bg-primary/5' : 'border-input hover:bg-muted',
+                      )}
+                    >
+                      <span className={cn('text-xs font-medium', scope === s ? 'text-primary' : 'text-foreground')}>
+                        {EDIT_SCOPE_LABELS[s]}
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground leading-snug">
+                        {EDIT_SCOPE_HINTS[s]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {scope !== 'todas' && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">A partir de</Label>
+                    <select
+                      value={anchor ?? ''}
+                      onChange={e => setAnchor(Number(e.target.value))}
+                      className={cn(inputCls, 'cursor-pointer')}
+                    >
+                      {entries.map(e => (
+                        <option key={e.id} value={e.sequence}>
+                          {monthLabel(e.competenceDate)} · {fmtMoney(e.amount)}
+                          {e.adjustedFields.length > 0 ? ' (ajustada)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-muted-foreground">
+                  Mudar mês inicial, quantidade ou periodicidade vale sempre para a série inteira —
+                  o escopo é ajustado sozinho nesse caso.
+                </p>
+              </div>
+            )}
+
             {mode === 'edit' && initial && initial.adjustedCount > 0 && (
-              <p className="text-[11px] text-amber-600 flex items-start gap-1.5 pt-1">
+              <p className="text-[11px] text-amber-600 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
-                {initial.adjustedCount} ocorrência{initial.adjustedCount > 1 ? 's foram ajustadas' : ' foi ajustada'} à mão e
-                {initial.adjustedCount > 1 ? ' serão sobrescritas' : ' será sobrescrita'} ao salvar. Os três escopos de edição
-                chegam na próxima sessão.
+                {initial.adjustedCount} ocorrência{initial.adjustedCount > 1 ? 's têm' : ' tem'} ajuste manual.
+                {initial.adjustedCount > 1 ? ' Elas são preservadas' : ' Ele é preservado'} a menos que você
+                confirme a sobrescrita na próxima tela.
               </p>
             )}
           </div>
@@ -524,6 +623,14 @@ export function SeriesDialog({
             {isSaving ? 'Salvando…' : mode === 'create' ? `Criar ${preview.length} ocorrência${preview.length > 1 ? 's' : ''}` : 'Salvar'}
           </Button>
         </DialogFooter>
+
+        <ScopeConfirmDialog
+          open={!!confirmPreview}
+          onOpenChange={o => { if (!o) setConfirmPreview(null) }}
+          preview={confirmPreview}
+          isSaving={isSaving}
+          onConfirm={() => submit(true)}
+        />
       </DialogContent>
     </Dialog>
   )

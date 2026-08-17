@@ -94,6 +94,32 @@ export const EDIT_SCOPE_LABELS: Record<EditScope, string> = {
   todas: 'Toda a série',
 }
 
+export const EDIT_SCOPE_HINTS: Record<EditScope, string> = {
+  esta:  'Só esta ocorrência muda. A regra do lançamento fica intacta.',
+  daqui: 'Vale desta ocorrência em diante. A regra fica como está — as ocorrências alteradas ficam marcadas como ajustadas.',
+  todas: 'Atualiza a regra e todas as ocorrências, inclusive as passadas.',
+}
+
+/**
+ * Campos que mudam a ESTRUTURA da recorrência. Alterá-los é necessariamente
+ * uma operação de série inteira — não existe "mudar a periodicidade só deste
+ * mês" —, então o escopo é promovido para "toda a série" automaticamente.
+ */
+export const SERIES_STRUCTURAL_FIELDS = [
+  'startMonth', 'occurrences', 'intervalMonths', 'dayOfMonth', 'cashLagDays',
+] as const
+
+/** Campos que redefinem o valor gerado. */
+export const SERIES_VALUE_FIELDS = [
+  'amountMode', 'baseAmount', 'totalAmount', 'adjustmentRate', 'adjustmentEvery', 'seasonalAmounts',
+] as const
+
+/** Campos copiados para cada ocorrência e sobrescrevíveis nela. */
+export const SERIES_ATTR_FIELDS = [
+  'description', 'direction', 'categoryId', 'costCenterId',
+  'businessUnitId', 'legalEntityId', 'contactId', 'notes',
+] as const
+
 // ─── Campos que uma ocorrência pode sobrescrever ──────────────────────────────
 // Guardados em `budget_entries.adjusted_fields`. Uma alteração em lote do campo F
 // pula apenas as ocorrências onde F está nesse array.
@@ -352,6 +378,46 @@ export interface BudgetVsActualData {
   coverage:        DimensionCoverage
   /** Orçado cuja data, no regime escolhido, cai fora do período — a cauda de caixa. */
   foraDoHorizonte: { total: number; count: number }
+}
+
+// ─── Escopos de edição e exclusão ─────────────────────────────────────────────
+
+export interface SeriesUpdateOptions {
+  scope: EditScope
+  /** Sequência âncora. Obrigatória em 'esta' e 'daqui'. */
+  fromSequence?: number
+  /** Só depois de o usuário confirmar no diálogo. Nasce sempre desmarcado. */
+  overwriteAdjusted?: boolean
+}
+
+export interface AffectedOccurrence {
+  sequence: number
+  month:    string    // rótulo pronto, ex 'Mar/27'
+  fields?:  AdjustableField[]
+}
+
+export interface SeriesUpdatePreview {
+  scope:           EditScope
+  /** true quando um campo estrutural forçou a operação a valer para a série inteira. */
+  forcedFullScope: boolean
+  /** Ocorrências que serão gravadas. */
+  affectedCount:   number
+  /** Ocorrências que somem por redução da quantidade. */
+  removed:         AffectedOccurrence[]
+  /** Quantas ocorrências novas serão criadas. */
+  appended:        number
+  /** As datas de competência e caixa serão recalculadas. */
+  dateShift:       boolean
+  /** Ajustes manuais que seriam sobrescritos — a razão de existir a confirmação. */
+  conflicts:       AffectedOccurrence[]
+  requiresConfirm: boolean
+}
+
+export interface SeriesDeletePreview {
+  scope:   EditScope
+  removed: AffectedOccurrence[]
+  /** Novo valor de `occurrences` na regra; null quando a série inteira é apagada. */
+  newOccurrences: number | null
 }
 
 export interface BudgetDrillDownEntry {

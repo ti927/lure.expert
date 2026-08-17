@@ -6,6 +6,41 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.3 — Escopos de edição e exclusão
+
+Remove a limitação da 9.1, em que editar uma série regenerava tudo e descartava os ajustes manuais.
+
+**Entregue:**
+- [src/lib/budget-scope.ts](src/lib/budget-scope.ts) — o miolo da sessão. `planSeriesUpdate` (pura) decide o que aconteceria; `applySeriesUpdate` e `applySeriesDelete` executam recebendo o `tx`. Vive fora de `'use server'` deliberadamente: a diretiva não deixa exportar função síncrona, e — mais importante — assim o núcleo pode ser exercitado direto contra o banco num teste, sem sessão HTTP.
+- [src/server/budget.ts](src/server/budget.ts) — `updateBudgetSeries(seriesId, input, { scope, fromSequence, overwriteAdjusted })`, `previewSeriesUpdate`, `previewSeriesDelete` e `deleteBudgetSeries(seriesId, { scope, fromSequence })`. As actions ficaram invólucros finos: auth → validação → plano → porta de confirmação → transação.
+- [scope-confirm-dialog.tsx](src/app/(authenticated)/orcamento/scope-confirm-dialog.tsx) — two-phase sem action extra: a própria action de salvar devolve `{ needsConfirm: preview }` em vez de executar, o cliente abre o diálogo e re-submete com `overwriteAdjusted`.
+- [series-dialog.tsx](src/app/(authenticated)/orcamento/series-dialog.tsx) — seletor dos três escopos (com a explicação de cada um) e seletor da ocorrência âncora, carregada sob demanda.
+- [planejamento-tab.tsx](src/app/(authenticated)/orcamento/planejamento-tab.tsx) — excluir uma ocorrência agora pergunta o alcance: só ela, ou dela em diante.
+
+**Semântica implementada:**
+- **'esta'** — só a ocorrência âncora; a regra nunca é tocada; os campos alterados passam a divergir dela e viram `adjusted_fields`.
+- **'daqui'** — ocorrências de `sequence >= âncora`; a regra também não é tocada. **Não faz split da série** (o padrão de agenda): split mostraria duas linhas onde o usuário criou uma. Preço aceito: uma edição posterior de "toda a série" precisa de `overwriteAdjusted` para retomar. A partir da primeira ocorrência, 'daqui' equivale a 'todas'.
+- **'todas'** — regra + ocorrências, com truncar (`DELETE sequence > N`, nunca regenerar), anexar (expoente do reajuste pela sequência absoluta) e deslocar datas preservando identidade.
+- **Mudança estrutural promove o escopo sozinha.** Não existe "mudar a periodicidade só deste mês"; o preview avisa que o escopo foi ajustado.
+- **Exclusão:** 'esta' não mexe na regra (a sequência fica com buraco, por design); 'daqui' trunca `occurrences` para `âncora − 1`.
+- **Confirmação lista os meses**, não só a contagem, e o checkbox de sobrescrita nasce desmarcado a cada abertura.
+
+**Bug encontrado ao desenhar o teste, antes de rodar:** em escopo parcial, o valor gravado nas ocorrências vinha da expansão da regra **antiga**, não do que o usuário tinha digitado — trocar o valor "só deste mês" não mudaria nada. A correção separa duas expansões com papéis distintos: `writeDrafts` (o que o usuário pediu, é o que se grava) e `ruleDrafts` (o que a regra vigente geraria, é o baseline do `adjusted_fields`). Em escopo 'todas' as duas coincidem; em escopo parcial é justamente a diferença entre elas que faz o valor gravado constar como ajuste manual.
+
+**Verificação — 52 asserções contra o banco real**, cada caso numa transação revertida, chamando as mesmas funções que a action chama e conferindo o resultado **lendo o banco**:
+- `'esta'` alterando valor: a regra não muda, só a ocorrência 3 recebe 15.000 e fica marcada, as vizinhas ficam intocadas e o ajuste prévio da 7 sobrevive.
+- `'daqui'` trocando centro de custo a partir da 5: a regra mantém o CC antigo, 1–4 intocadas, 5–12 com o CC novo e marcadas.
+- `'daqui'` a partir da 1: promovido a 'todas', regra atualizada, nenhuma ocorrência marcada.
+- Truncar 12→6: preview lista as 6 que somem e avisa que Jul/27 tinha ajuste; sobram as sequências 1–6 com valores intocados.
+- Estender 6→12: anexa 6, sequências contínuas, ajuste da 3 preservado, nova ocorrência 12 em dez/27.
+- **Deslocar jan→mar: nada é recriado, as datas andam e o `adjusted_fields` da ocorrência 3 NÃO é zerado** — o caso que a Decisão 13 chama de "o modo que apaga trabalho em silêncio".
+- `overwriteAdjusted`: a ocorrência 7 recebe o valor da regra e a **auto-cura** limpa a marca; sem a flag, ela mantém 13.500 e as outras 11 recebem 15.000.
+- Exclusões: `'esta'` deixa buraco na sequência e não mexe em `occurrences`; `'daqui'` trunca para 4; `'daqui'` da primeira apaga a série e o CASCADE leva as ocorrências.
+
+`tsc` limpo e `npm run build` verde (`/orcamento` em 42,2 kB). **Não verificado automaticamente:** o clique na UI.
+
+---
+
 ### ✅ Sessão 9.2 — Aba Orçado × Realizado (primeiro uso real do módulo)
 
 **Entregue:**

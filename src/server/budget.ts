@@ -37,7 +37,6 @@ import {
   budgetSeriesInputSchema,
   budgetEntryUpdateSchema,
   BUDGET_STATUSES,
-  ADJUSTABLE_FIELDS,
   type BudgetVersionInput,
   type BudgetSeriesInput,
   type BudgetEntryUpdate,
@@ -52,16 +51,22 @@ import {
   type BudgetVsActualRow,
   type BudgetVsActualData,
   type BudgetDrillDownEntry,
+  type EditScope,
+  type SeriesUpdateOptions,
+  type SeriesUpdatePreview,
+  type SeriesDeletePreview,
 } from '@/lib/budget-types'
 import { BP_TYPES, type DreType } from '@/lib/dre-types'
 import { generateMonthRange } from '@/lib/dre-calc'
 import { dimensionFilters } from '@/lib/sql-dimensions'
 import { expandSeries, fitsInFiscalYear, type RecurrenceInput } from '@/lib/budget-recurrence'
+import {
+  planSeriesUpdate, applySeriesUpdate, applySeriesDelete, diffAdjustedFields, money,
+  type SeriesRow, type EntryRow,
+} from '@/lib/budget-scope'
 import { monthLabel } from '@/lib/format'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const money = (v: number) => v.toFixed(2)
 
 /**
  * Confere que cada FK recebida do cliente pertence à organização.
@@ -114,8 +119,18 @@ async function validateTargetsBelongToOrg(
   return results.find(Boolean) ?? null
 }
 
+interface EditableVersion {
+  id:         string
+  fiscalYear: number
+  status:     string
+  name:       string
+}
+
 /** Versão arquivada é somente-leitura — trava na action, não no banco (reversível). */
-async function loadEditableVersion(organizationId: string, versionId: string) {
+async function loadEditableVersion(
+  organizationId: string,
+  versionId: string,
+): Promise<{ error: string } | { version: EditableVersion }> {
   const [version] = await db
     .select({
       id: budgetVersions.id,
@@ -618,110 +633,169 @@ export async function createBudgetSeries(input: BudgetSeriesInput) {
   return { success: true as const, occurrences: drafts.length }
 }
 
+// ─── Escopos de edição ────────────────────────────────────────────────────────
+// A decisão (`planSeriesUpdate`) e a execução (`applySeriesUpdate`) vivem em
+// `@/lib/budget-scope`, para poderem ser exercitadas direto contra o banco.
+
+async function loadSeriesForEdit(
+  organizationId: string,
+  seriesId: string,
+): Promise<{ error: string } | { series: SeriesRow; entries: EntryRow[]; fiscalYear: number }> {
+  const [series] = await db
+    .select()
+    .from(budgetSeries)
+    .where(and(eq(budgetSeries.id, seriesId), eq(budgetSeries.organizationId, organizationId)))
+    .limit(1)
+  if (!series) return { error: 'Lançamento não encontrado.' as const }
+
+  const version = await loadEditableVersion(organizationId, series.versionId)
+  if ('error' in version) return { error: version.error }
+
+  const entries = await db
+    .select()
+    .from(budgetEntries)
+    .where(eq(budgetEntries.seriesId, seriesId))
+    .orderBy(budgetEntries.sequence)
+
+  return { series, entries, fiscalYear: version.version.fiscalYear }
+}
+
+/** O que uma alteração faria, sem executá-la — alimenta o seletor de escopo do diálogo. */
+export async function previewSeriesUpdate(
+  seriesId: string,
+  input: BudgetSeriesInput,
+  options: SeriesUpdateOptions,
+): Promise<{ preview: SeriesUpdatePreview } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+  const parsed = budgetSeriesInputSchema.safeParse(input)
+  if (!parsed.success) return { error: parsed.error.issues[0].message }
+
+  const loaded = await loadSeriesForEdit(organizationId, seriesId)
+  if ('error' in loaded) return { error: loaded.error }
+
+  return { preview: planSeriesUpdate(loaded.series, loaded.entries, parsed.data, options).preview }
+}
+
 /**
- * ATENÇÃO — limitação temporária da sessão 9.1.
+ * Altera o lançamento no escopo pedido.
  *
- * Regenera a série inteira: apaga todas as ocorrências e recria a partir da
- * regra nova, PERDENDO os ajustes manuais. A sessão 9.3 substitui isto pelos
- * três escopos ("somente este mês" / "este e os próximos" / "toda a série") com
- * preservação de `adjusted_fields`. Até lá a UI avisa antes de salvar.
+ * Semântica dos três escopos:
+ *
+ * - **'esta'**  — só a ocorrência âncora; a regra NUNCA é tocada; os campos
+ *   alterados passam a divergir dela e viram `adjusted_fields`.
+ * - **'daqui'** — ocorrências com `sequence >= âncora`; a regra também não é
+ *   tocada (deliberadamente: fazer split da série mostraria duas linhas onde o
+ *   usuário criou uma). Se a âncora é a primeira ocorrência, equivale a 'todas'.
+ * - **'todas'** — regra + todas as ocorrências, com truncar/anexar/deslocar.
+ *
+ * Ocorrências ajustadas à mão são PULADAS campo a campo, a menos que
+ * `overwriteAdjusted` venha true — e aí só depois de o usuário confirmar o
+ * diálogo que lista os meses afetados.
+ *
+ * Retorna `{ needsConfirm }` em vez de executar quando há ajuste manual em risco
+ * ou ocorrência a ser removida.
  */
-export async function updateBudgetSeries(seriesId: string, input: BudgetSeriesInput) {
+export async function updateBudgetSeries(
+  seriesId: string,
+  input: BudgetSeriesInput,
+  options: SeriesUpdateOptions = { scope: 'todas' },
+) {
   const { organizationId } = await getAuthContext()
 
   const parsed = budgetSeriesInputSchema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
   const v = parsed.data
 
-  const [existing] = await db
-    .select({ id: budgetSeries.id, versionId: budgetSeries.versionId })
-    .from(budgetSeries)
-    .where(and(eq(budgetSeries.id, seriesId), eq(budgetSeries.organizationId, organizationId)))
-    .limit(1)
-  if (!existing) return { error: 'Lançamento não encontrado.' }
-
-  const loaded = await loadEditableVersion(organizationId, existing.versionId)
+  const loaded = await loadSeriesForEdit(organizationId, seriesId)
   if ('error' in loaded) return { error: loaded.error }
+  const { series, entries, fiscalYear } = loaded
 
-  const fits = fitsInFiscalYear(v, loaded.version.fiscalYear)
+  const fits = fitsInFiscalYear(v, fiscalYear)
   if (!fits.ok) return { error: fits.message }
 
   const targetError = await validateTargetsBelongToOrg(organizationId, v)
   if (targetError) return { error: targetError }
 
-  const drafts = expandSeries(v)
+  const plan = planSeriesUpdate(series, entries, v, options)
 
-  await db.transaction(async (tx) => {
-    await tx
-      .update(budgetSeries)
-      .set({
-        description: v.description,
-        direction: v.direction,
-        categoryId: v.categoryId,
-        costCenterId: v.costCenterId,
-        businessUnitId: v.businessUnitId,
-        legalEntityId: v.legalEntityId,
-        contactId: v.contactId,
-        startMonth: `${v.startMonth}-01`,
-        occurrences: v.occurrences,
-        intervalMonths: v.intervalMonths,
-        dayOfMonth: v.dayOfMonth,
-        cashLagDays: v.cashLagDays,
-        amountMode: v.amountMode,
-        baseAmount: v.baseAmount === null ? null : money(v.baseAmount),
-        totalAmount: v.totalAmount === null ? null : money(v.totalAmount),
-        adjustmentRate: v.adjustmentRate === null ? null : String(v.adjustmentRate),
-        adjustmentEvery: v.adjustmentEvery,
-        seasonalAmounts: v.seasonalAmounts,
-        notes: v.notes,
-        updatedAt: new Date(),
-      })
-      .where(eq(budgetSeries.id, seriesId))
+  if (plan.preview.requiresConfirm && !options.overwriteAdjusted) {
+    return { needsConfirm: plan.preview }
+  }
 
-    await tx.delete(budgetEntries).where(eq(budgetEntries.seriesId, seriesId))
-
-    await tx.insert(budgetEntries).values(
-      drafts.map(d => ({
-        organizationId,
-        versionId: existing.versionId,
-        seriesId,
-        sequence: d.sequence,
-        description: v.description,
-        direction: v.direction,
-        categoryId: v.categoryId,
-        costCenterId: v.costCenterId,
-        businessUnitId: v.businessUnitId,
-        legalEntityId: v.legalEntityId,
-        contactId: v.contactId,
-        competenceDate: d.competenceDate,
-        cashDate: d.cashDate,
-        amount: money(d.amount),
-      })),
-    )
-  })
+  await db.transaction(tx => applySeriesUpdate(tx, {
+    organizationId,
+    series,
+    entries,
+    input: v,
+    plan,
+    overwriteAdjusted: options.overwriteAdjusted,
+  }))
 
   revalidatePath('/orcamento')
-  return { success: true as const, occurrences: drafts.length }
+  return { success: true as const, scope: plan.effectiveScope, affected: plan.targets.length }
 }
 
-export async function deleteBudgetSeries(seriesId: string) {
+/** O que uma exclusão levaria — alimenta o diálogo de confirmação. */
+export async function previewSeriesDelete(
+  seriesId: string,
+  options: { scope: EditScope; fromSequence?: number },
+): Promise<{ preview: SeriesDeletePreview } | { error: string }> {
   const { organizationId } = await getAuthContext()
-
-  const [existing] = await db
-    .select({ id: budgetSeries.id, versionId: budgetSeries.versionId })
-    .from(budgetSeries)
-    .where(and(eq(budgetSeries.id, seriesId), eq(budgetSeries.organizationId, organizationId)))
-    .limit(1)
-  if (!existing) return { error: 'Lançamento não encontrado.' }
-
-  const loaded = await loadEditableVersion(organizationId, existing.versionId)
+  const loaded = await loadSeriesForEdit(organizationId, seriesId)
   if ('error' in loaded) return { error: loaded.error }
+  const { entries } = loaded
 
-  // ON DELETE CASCADE leva as ocorrências junto.
-  await db.delete(budgetSeries).where(eq(budgetSeries.id, seriesId))
+  const firstSeq = entries.length ? entries[0].sequence : 1
+  const anchor = options.fromSequence ?? firstSeq
+
+  const doomed = options.scope === 'esta'  ? entries.filter(e => e.sequence === anchor)
+               : options.scope === 'daqui' ? entries.filter(e => e.sequence >= anchor)
+               :                             entries
+
+  const wipesSeries = options.scope === 'todas' || (options.scope === 'daqui' && anchor <= firstSeq)
+
+  return {
+    preview: {
+      scope: options.scope,
+      removed: doomed.map(e => ({
+        sequence: e.sequence,
+        month: monthLabel(e.competenceDate),
+        fields: e.adjustedFields as AdjustableField[],
+      })),
+      newOccurrences: wipesSeries ? null : (options.scope === 'daqui' ? anchor - 1 : loaded.series.occurrences),
+    },
+  }
+}
+
+/**
+ * Exclui no escopo pedido.
+ *
+ * - **'esta'**  — só aquela ocorrência. A regra NÃO muda: `occurrences` passa a
+ *   divergir do que existe, e a sequência fica com um buraco. Ambos por design.
+ * - **'daqui'** — ocorrências de `sequence >= âncora`; `occurrences` cai para
+ *   `âncora − 1` (aqui truncar é seguro, nada além do fim é afetado). Se a
+ *   âncora é a primeira, a série inteira vai embora.
+ * - **'todas'** — a série (CASCADE leva as ocorrências).
+ */
+export async function deleteBudgetSeries(
+  seriesId: string,
+  options: { scope?: EditScope; fromSequence?: number } = {},
+) {
+  const { organizationId } = await getAuthContext()
+  const scope = options.scope ?? 'todas'
+
+  const loaded = await loadSeriesForEdit(organizationId, seriesId)
+  if ('error' in loaded) return { error: loaded.error }
+  const { series, entries } = loaded
+
+  const result = await db.transaction(tx => applySeriesDelete(tx, {
+    series, entries, scope, fromSequence: options.fromSequence,
+  }))
+
+  if (result.removed === 0) return { error: 'Nenhuma ocorrência nesse intervalo.' }
 
   revalidatePath('/orcamento')
-  return { success: true as const }
+  return { success: true as const, ...result }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -774,55 +848,24 @@ export async function updateBudgetEntry(entryId: string, patch: BudgetEntryUpdat
   // informado conta como ajuste.
   const draft = expandSeries(toRecurrenceInput(series)).find(d => d.sequence === entry.sequence)
 
-  const expected: Record<AdjustableField, unknown> = {
-    amount:           draft ? draft.amount : Number(entry.amount),
-    description:      series.description,
-    category_id:      series.categoryId,
-    cost_center_id:   series.costCenterId,
-    business_unit_id: series.businessUnitId,
-    legal_entity_id:  series.legalEntityId,
-    contact_id:       series.contactId,
-    competence_date:  draft ? draft.competenceDate : entry.competenceDate,
-    cash_date:        draft ? draft.cashDate : entry.cashDate,
-    notes:            series.notes,
+  const next = {
+    amount:         money(p.amount ?? Number(entry.amount)),
+    description:    p.description ?? entry.description,
+    categoryId:     p.categoryId ?? entry.categoryId,
+    costCenterId:   p.costCenterId   !== undefined ? p.costCenterId   : entry.costCenterId,
+    businessUnitId: p.businessUnitId !== undefined ? p.businessUnitId : entry.businessUnitId,
+    legalEntityId:  p.legalEntityId  !== undefined ? p.legalEntityId  : entry.legalEntityId,
+    contactId:      p.contactId      !== undefined ? p.contactId      : entry.contactId,
+    competenceDate: p.competenceDate ?? entry.competenceDate,
+    cashDate:       p.cashDate ?? entry.cashDate,
+    notes:          p.notes !== undefined ? p.notes : entry.notes,
   }
 
-  const next: Record<AdjustableField, unknown> = {
-    amount:           p.amount ?? Number(entry.amount),
-    description:      p.description ?? entry.description,
-    category_id:      p.categoryId ?? entry.categoryId,
-    cost_center_id:   p.costCenterId !== undefined ? p.costCenterId : entry.costCenterId,
-    business_unit_id: p.businessUnitId !== undefined ? p.businessUnitId : entry.businessUnitId,
-    legal_entity_id:  p.legalEntityId !== undefined ? p.legalEntityId : entry.legalEntityId,
-    contact_id:       p.contactId !== undefined ? p.contactId : entry.contactId,
-    competence_date:  p.competenceDate ?? entry.competenceDate,
-    cash_date:        p.cashDate ?? entry.cashDate,
-    notes:            p.notes !== undefined ? p.notes : entry.notes,
-  }
-
-  const adjustedFields = ADJUSTABLE_FIELDS.filter(f => {
-    const a = expected[f]
-    const b = next[f]
-    if (f === 'amount') return Number(a) !== Number(b)
-    return (a ?? null) !== (b ?? null)
-  })
+  const adjustedFields = diffAdjustedFields(next, series, draft)
 
   await db
     .update(budgetEntries)
-    .set({
-      amount: money(Number(next.amount)),
-      description: next.description as string,
-      categoryId: next.category_id as string,
-      costCenterId: next.cost_center_id as string | null,
-      businessUnitId: next.business_unit_id as string | null,
-      legalEntityId: next.legal_entity_id as string | null,
-      contactId: next.contact_id as string | null,
-      competenceDate: next.competence_date as string,
-      cashDate: next.cash_date as string,
-      notes: next.notes as string | null,
-      adjustedFields: adjustedFields as string[],
-      updatedAt: new Date(),
-    })
+    .set({ ...next, adjustedFields: adjustedFields as string[], updatedAt: new Date() })
     .where(eq(budgetEntries.id, entryId))
 
   revalidatePath('/orcamento')

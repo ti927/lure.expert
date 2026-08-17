@@ -80,9 +80,11 @@ export function PlanejamentoTab({
   const [editing, setEditing] = useState<BudgetSeriesListItem | null>(null)
   const [pendingDelete, setPendingDelete] = useState<
     | { kind: 'series'; id: string; label: string; entryCount: number; adjustedCount: number }
-    | { kind: 'entry'; id: string; label: string; seriesId: string }
+    | { kind: 'entry'; id: string; label: string; seriesId: string; sequence: number; following: number }
     | null
   >(null)
+  // Escopo da exclusão de ocorrência: só esta ou desta em diante.
+  const [deleteScope, setDeleteScope] = useState<'esta' | 'daqui'>('esta')
   const [isMutating, startMutation] = useTransition()
 
   const isArchived = version.status === 'arquivado'
@@ -230,15 +232,26 @@ export function PlanejamentoTab({
     if (!pendingDelete) return
     const target = pendingDelete
     startMutation(async () => {
-      const result = target.kind === 'series'
-        ? await deleteBudgetSeries(target.id)
-        : await deleteBudgetEntry(target.id)
+      let result: { error?: string } = {}
 
-      if ('error' in result && result.error) { toast.error(result.error); return }
+      if (target.kind === 'series') {
+        result = await deleteBudgetSeries(target.id, { scope: 'todas' })
+      } else if (deleteScope === 'daqui') {
+        // Trunca a regra: occurrences cai para (sequência − 1).
+        result = await deleteBudgetSeries(target.seriesId, { scope: 'daqui', fromSequence: target.sequence })
+      } else {
+        // Só esta: a regra não muda e a sequência fica com um buraco, por design.
+        result = await deleteBudgetEntry(target.id)
+      }
+
+      if (result.error) { toast.error(result.error); return }
 
       if (target.kind === 'series') {
         toast.success('Lançamento excluído.')
         setExpanded(prev => { const n = new Set(prev); n.delete(target.id); return n })
+      } else if (deleteScope === 'daqui') {
+        toast.success(`Ocorrências de ${target.label} em diante excluídas.`)
+        await loadEntries(target.seriesId)
       } else {
         toast.success(`Ocorrência de ${target.label} excluída.`)
         await loadEntries(target.seriesId)
@@ -486,9 +499,15 @@ export function PlanejamentoTab({
                                     </td>
                                     <td className="py-1 text-right">
                                       <button
-                                        onClick={() => setPendingDelete({
-                                          kind: 'entry', id: e.id, seriesId: s.id, label: monthLabel(e.competenceDate),
-                                        })}
+                                        onClick={() => {
+                                          setDeleteScope('esta')
+                                          setPendingDelete({
+                                            kind: 'entry', id: e.id, seriesId: s.id,
+                                            label: monthLabel(e.competenceDate),
+                                            sequence: e.sequence,
+                                            following: entries.filter(x => x.sequence > e.sequence).length,
+                                          })
+                                        }}
                                         disabled={isArchived}
                                         className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-muted disabled:opacity-30 disabled:pointer-events-none"
                                         title="Excluir só esta ocorrência"
@@ -561,13 +580,45 @@ export function PlanejamentoTab({
                   )}
                 </>
               ) : (
-                <>
-                  A ocorrência de {pendingDelete?.label} some do orçamento. A regra do lançamento não muda — a
-                  sequência fica com um buraco, o que é esperado.
-                </>
+                <>Escolha o alcance da exclusão.</>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+
+          {pendingDelete?.kind === 'entry' && (
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => setDeleteScope('esta')}
+                className={cn('w-full text-left rounded-md border px-2 py-1.5 transition-colors',
+                  deleteScope === 'esta' ? 'border-primary bg-primary/5' : 'border-input hover:bg-muted')}
+              >
+                <span className={cn('text-xs font-medium', deleteScope === 'esta' ? 'text-primary' : 'text-foreground')}>
+                  Somente {pendingDelete.label}
+                </span>
+                <span className="block text-[11px] text-muted-foreground leading-snug">
+                  A regra do lançamento não muda — a sequência fica com um buraco, o que é esperado.
+                </span>
+              </button>
+
+              {pendingDelete.following > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setDeleteScope('daqui')}
+                  className={cn('w-full text-left rounded-md border px-2 py-1.5 transition-colors',
+                    deleteScope === 'daqui' ? 'border-primary bg-primary/5' : 'border-input hover:bg-muted')}
+                >
+                  <span className={cn('text-xs font-medium', deleteScope === 'daqui' ? 'text-primary' : 'text-foreground')}>
+                    {pendingDelete.label} e as {pendingDelete.following} seguintes
+                  </span>
+                  <span className="block text-[11px] text-muted-foreground leading-snug">
+                    A regra passa a ter {pendingDelete.sequence - 1} ocorrência{pendingDelete.sequence - 1 === 1 ? '' : 's'} —
+                    truncar o fim é seguro.
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isMutating}>Cancelar</AlertDialogCancel>
             <AlertDialogAction
