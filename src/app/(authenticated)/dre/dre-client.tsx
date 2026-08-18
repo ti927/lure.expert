@@ -1,24 +1,30 @@
 'use client'
 
-import { Fragment, useState, useTransition, useMemo, useEffect } from 'react'
+import { Fragment, useState, useTransition, useMemo, useEffect, useCallback } from 'react'
 import {
-  X, Loader2, BarChart3,
+  X, Loader2, BarChart3, Target,
   ChevronRight, ChevronDown, ChevronsDown, ChevronsUp,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
 import { getDreData, getDreDrillDown } from '@/server/dre'
+import { getBudgetForPeriod } from '@/server/budget'
 import type {
-  DreData, DreMonthSubtotals, DreCategoryRow, DrillDownTransaction, LeafCategory,
+  DreData, DreMonthSubtotals, DrillDownTransaction, LeafCategory,
 } from '@/lib/dre-types'
 import { DRE_TYPE_LABELS } from '@/lib/dre-types'
-import type { LayoutSection, ParentNode, SectionBlock } from '@/lib/dre-layout'
+import type { LayoutSection, ParentNode, SectionBlock, BlockSourceRow } from '@/lib/dre-layout'
 import { LAYOUT, BELOW_LAYOUT, buildBlocks } from '@/lib/dre-layout'
-import { verticalShare } from '@/lib/dre-calc'
-import { fmtNum, fmtPct, monthLabel } from '@/lib/format'
+import { computeSubtotals, verticalShare, type SubtotalRow } from '@/lib/dre-calc'
+import type { BudgetPeriodRow } from '@/lib/budget-read'
+import type { BudgetVersionListItem } from '@/lib/budget-types'
+import { BUDGET_STATUS_LABELS } from '@/lib/budget-types'
+import { fmtNum, fmtPct, fmtPctSigned, monthLabel } from '@/lib/format'
 import { Num } from '@/components/financial/num-cell'
 import { DimFilter } from '@/components/transacoes-shared/dim-filter'
+import { CellCombobox } from '@/components/transacoes-shared/cell-combobox'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
@@ -33,10 +39,33 @@ type DrillDownState = {
   dateRange?: { from: string; to: string }
 }
 
+/** O par que cada célula da malha carrega. Sem orçamento, `orcado` é sempre 0. */
+type Cell = { realizado: number; orcado: number }
+
+const EMPTY_CELL: Cell = { realizado: 0, orcado: 0 }
+
+/** Uma linha da malha: os metadados da categoria mais os dois valores do mês. */
+interface CellRow extends BlockSourceRow {
+  realizado: number
+  orcado:    number
+}
+
 const COL_W = 96
-const AV_COL_W = 62
+const THIRD_COL_W = 66
 const TOTAL_COL_W = 106
 const LABEL_W = 260
+
+const STORAGE_KEY = 'lure:dre:filters'
+
+interface SavedFilters {
+  fromMonth?: string
+  toMonth?: string
+  selCc?: string[]
+  selBu?: string[]
+  selLe?: string[]
+  budgetOn?: boolean
+  versionId?: string | null
+}
 
 /**
  * Base da análise vertical: a Receita Líquida de cada mês e a do período.
@@ -50,23 +79,59 @@ interface AvBase {
 }
 
 /**
- * A célula de AV%. Sempre em cinza — proporção não é julgamento, e pintar de
- * verde ou vermelho inventaria um sinal que a coluna do valor, ao lado, já diz.
+ * Variação horizontal: o desvio do realizado sobre o orçado, em percentual.
  *
- * `signed` é para as linhas de subtotal, onde a AV% é margem e não consumo:
+ * Com a convenção `netAmount` do projeto (receita positiva, despesa negativa),
+ * `realizado − orçado` já é "favorável quando positivo" dos DOIS lados da DRE:
+ * gastar menos que o previsto dá positivo, faturar menos dá negativo. Não
+ * inverter por tipo de conta — é o erro mais provável deste módulo.
+ *
+ * Orçado zero devolve 0, que a célula renderiza como travessão. Nunca
+ * `Infinity`, nunca "100%" inventado.
+ */
+function varPct(c: Cell): number {
+  if (c.orcado === 0) return 0
+  return ((c.realizado - c.orcado) / Math.abs(c.orcado)) * 100
+}
+
+const cellTitle = (c: Cell) => `Orçado ${fmtNum(c.orcado)} · Realizado ${fmtNum(c.realizado)}`
+
+/**
+ * A terceira coluna. Existe sempre e troca de significado:
+ * sem orçamento é a análise vertical, com orçamento é o desvio sobre o orçado.
+ *
+ * A AV% vai em cinza — proporção não é julgamento, e pintá-la de verde
+ * inventaria um sinal que a coluna do valor, ao lado, já diz. A Var%, sim, é
+ * julgamento, e vai colorida por sinal.
+ *
+ * `signedAv` é para as linhas de subtotal, onde a AV% é margem e não consumo:
  * ali o sinal é o recado, e uma margem negativa não pode aparecer como positiva.
  */
-function AvCell({ value, base, signed, bold, light, inverted }: {
-  value: number
+function ThirdCell({ cell, base, budgetOn, signedAv, bold, light, inverted }: {
+  cell: Cell
   base: number
-  signed?: boolean
+  budgetOn: boolean
+  signedAv?: boolean
   bold?: boolean
   light?: boolean
   inverted?: boolean
 }) {
+  if (budgetOn) {
+    return (
+      <Num
+        value={varPct(cell)}
+        format={fmtPctSigned}
+        bold={bold}
+        light={light}
+        inverted={inverted}
+        title={cellTitle(cell)}
+        className="px-2"
+      />
+    )
+  }
   return (
     <Num
-      value={verticalShare(value, base, signed)}
+      value={verticalShare(cell.realizado, base, signedAv)}
       format={fmtPct}
       tone="muted"
       bold={bold}
@@ -74,6 +139,55 @@ function AvCell({ value, base, signed, bold, light, inverted }: {
       inverted={inverted}
       className="px-2"
     />
+  )
+}
+
+/** As células dos meses de uma linha. */
+function MonthCells({
+  months, cellAt, avBase, budgetOn, signedAv, bold, light, inverted, onValue, onBudget,
+}: {
+  months:   string[]
+  cellAt:   (month: string) => Cell
+  avBase:   AvBase
+  budgetOn: boolean
+  signedAv?: boolean
+  bold?: boolean
+  light?: boolean
+  inverted?: boolean
+  onValue?:  (month: string) => void
+  onBudget?: (month: string) => void
+}) {
+  return (
+    <>
+      {months.map(m => {
+        const c = cellAt(m)
+        return (
+          <Fragment key={m}>
+            <Num
+              value={c.realizado}
+              bold={bold} light={light} inverted={inverted}
+              className="border-l border-slate-200"
+              onClick={onValue ? () => onValue(m) : undefined}
+            />
+            {budgetOn && (
+              <Num
+                value={c.orcado}
+                bold={bold} light={light} inverted={inverted}
+                title={cellTitle(c)}
+                onClick={onBudget ? () => onBudget(m) : undefined}
+              />
+            )}
+            <ThirdCell
+              cell={c}
+              base={avBase.byMonth[m] ?? 0}
+              budgetOn={budgetOn}
+              signedAv={signedAv}
+              bold={bold} light={light} inverted={inverted}
+            />
+          </Fragment>
+        )
+      })}
+    </>
   )
 }
 
@@ -87,10 +201,12 @@ interface Props {
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
   leafCategories: LeafCategory[]
+  budgetVersions: BudgetVersionListItem[]
 }
 
 export function DreClient({
-  initialData, initialFrom, initialTo, costCenters, businessUnits, legalEntities, leafCategories,
+  initialData, initialFrom, initialTo,
+  costCenters, businessUnits, legalEntities, leafCategories, budgetVersions,
 }: Props) {
   const [data, setData] = useState(initialData)
   const [isPending, startTransition] = useTransition()
@@ -101,13 +217,80 @@ export function DreClient({
   const [selBu, setSelBu]         = useState<string[]>([])
   const [selLe, setSelLe]         = useState<string[]>([])
 
+  // ── Orçamento ──
+  const [budgetOn, setBudgetOn]     = useState(false)
+  const [versionId, setVersionId]   = useState<string | null>(null)
+  const [budgetRows, setBudgetRows] = useState<BudgetPeriodRow[]>([])
+
   const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set())
+
+  /** A vigente do exercício do mês inicial; senão a do final; senão a mais recente. */
+  const defaultVersionId = useCallback((fm: string, tm: string): string | null => {
+    const anos = [Number(fm.slice(0, 4)), Number(tm.slice(0, 4))]
+    for (const ano of anos) {
+      const vigente = budgetVersions.find(v => v.fiscalYear === ano && v.isActive)
+      if (vigente) return vigente.id
+    }
+    for (const ano of anos) {
+      const qualquer = budgetVersions.find(v => v.fiscalYear === ano)
+      if (qualquer) return qualquer.id
+    }
+    return budgetVersions[0]?.id ?? null
+  }, [budgetVersions])
+
+  const rangeOf = useCallback((fm: string, tm: string) => {
+    const [y1, m1] = fm.split('-').map(Number)
+    const [y2, m2] = tm.split('-').map(Number)
+    const lastDay = new Date(y2, m2, 0).getDate()
+    return {
+      from: `${y1}-${String(m1).padStart(2, '0')}-01`,
+      to:   `${y2}-${String(m2).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+    }
+  }, [])
+
+  function fetchData(params: {
+    fm?: string; tm?: string; cc?: string[]; bu?: string[]; le?: string[]
+    on?: boolean; vid?: string | null
+  } = {}) {
+    const fm  = params.fm ?? fromMonth
+    const tm  = params.tm ?? toMonth
+    const cc  = params.cc ?? selCc
+    const bu  = params.bu ?? selBu
+    const le  = params.le ?? selLe
+    const on  = params.on ?? budgetOn
+    const vid = params.vid !== undefined ? params.vid : versionId
+
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        fromMonth: fm, toMonth: tm, selCc: cc, selBu: bu, selLe: le,
+        budgetOn: on, versionId: vid,
+      } satisfies SavedFilters))
+    } catch {}
+
+    const { from, to } = rangeOf(fm, tm)
+    const dims = {
+      costCenterIds: cc.length ? cc : undefined,
+      businessUnitIds: bu.length ? bu : undefined,
+      legalEntityIds: le.length ? le : undefined,
+    }
+
+    startTransition(async () => {
+      // Os filtros de dimensão vão IDÊNTICOS para os dois lados. Aplicar em um
+      // só é o que faz a variação parecer melhor do que é.
+      const [d, b] = await Promise.all([
+        getDreData({ from, to, ...dims }),
+        on && vid ? getBudgetForPeriod(vid, { from, to }, dims) : Promise.resolve(null),
+      ])
+      setData(d)
+      setBudgetRows(b?.rows ?? [])
+    })
+  }
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('lure:dre:filters')
+      const saved = localStorage.getItem(STORAGE_KEY)
       if (!saved) return
-      const p = JSON.parse(saved) as { fromMonth?: string; toMonth?: string; selCc?: string[]; selBu?: string[]; selLe?: string[] }
+      const p = JSON.parse(saved) as SavedFilters
       const validCcIds = new Set(costCenters.map(c => c.id))
       const validBuIds = new Set(businessUnits.map(b => b.id))
       const validLeIds = new Set(legalEntities.map(l => l.id))
@@ -116,64 +299,25 @@ export function DreClient({
       const cc = (p.selCc ?? []).filter(id => validCcIds.has(id))
       const bu = (p.selBu ?? []).filter(id => validBuIds.has(id))
       const le = (p.selLe ?? []).filter(id => validLeIds.has(id))
-      setFromMonth(fm)
-      setToMonth(tm)
-      setSelCc(cc)
-      setSelBu(bu)
-      setSelLe(le)
+      // Versão salva que sumiu (excluída em /orcamento) volta para o default.
+      const vid = p.versionId && budgetVersions.some(v => v.id === p.versionId)
+        ? p.versionId
+        : defaultVersionId(fm, tm)
+      const on = !!p.budgetOn && !!vid
+
+      setFromMonth(fm); setToMonth(tm)
+      setSelCc(cc); setSelBu(bu); setSelLe(le)
+      setVersionId(vid); setBudgetOn(on)
+
       const diffDate = fm !== initialFrom.slice(0, 7) || tm !== initialTo.slice(0, 7)
       const diffDims = cc.length > 0 || bu.length > 0 || le.length > 0
-      if (diffDate || diffDims) fetchData({ fm, tm, cc, bu, le })
+      if (diffDate || diffDims || on) fetchData({ fm, tm, cc, bu, le, on, vid })
     } catch {}
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [drillDown, setDrillDown]         = useState<DrillDownState | null>(null)
   const [drillDownData, setDrillDownData] = useState<DrillDownTransaction[] | null>(null)
   const [isDrillLoading, startDrillTransition] = useTransition()
-
-  const allParentIds = useMemo(() => {
-    const ids = new Set<string>()
-    data.rows.forEach(r => ids.add(r.parentId))
-    return ids
-  }, [data.rows])
-
-  const isFullyExpanded = collapsedParents.size === 0
-
-  function toggleAll() {
-    if (isFullyExpanded) {
-      setCollapsedParents(new Set(allParentIds))
-    } else {
-      setCollapsedParents(new Set())
-    }
-  }
-
-  function fetchData(params: { fm?: string; tm?: string; cc?: string[]; bu?: string[]; le?: string[] } = {}) {
-    const fm = params.fm ?? fromMonth
-    const tm = params.tm ?? toMonth
-    const cc = params.cc ?? selCc
-    const bu = params.bu ?? selBu
-    const le = params.le ?? selLe
-
-    try {
-      localStorage.setItem('lure:dre:filters', JSON.stringify({ fromMonth: fm, toMonth: tm, selCc: cc, selBu: bu, selLe: le }))
-    } catch {}
-
-    const [y1, m1] = fm.split('-').map(Number)
-    const [y2, m2] = tm.split('-').map(Number)
-    const from = `${y1}-${String(m1).padStart(2, '0')}-01`
-    const lastDay = new Date(y2, m2, 0).getDate()
-    const to = `${y2}-${String(m2).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-
-    startTransition(async () => {
-      const d = await getDreData({
-        from, to,
-        costCenterIds: cc.length ? cc : undefined,
-        businessUnitIds: bu.length ? bu : undefined,
-        legalEntityIds: le.length ? le : undefined,
-      })
-      setData(d)
-    })
-  }
 
   function toggleParent(parentId: string) {
     setCollapsedParents(prev => {
@@ -184,16 +328,7 @@ export function DreClient({
     })
   }
 
-  const currentFrom = useMemo(() => {
-    const [y1, m1] = fromMonth.split('-').map(Number)
-    return `${y1}-${String(m1).padStart(2, '0')}-01`
-  }, [fromMonth])
-
-  const currentTo = useMemo(() => {
-    const [y2, m2] = toMonth.split('-').map(Number)
-    const lastDay = new Date(y2, m2, 0).getDate()
-    return `${y2}-${String(m2).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  }, [toMonth])
+  const currentRange = useMemo(() => rangeOf(fromMonth, toMonth), [fromMonth, toMonth, rangeOf])
 
   function openDrillDown(categoryId: string, categoryName: string, month: string, dateRange?: { from: string; to: string }) {
     setDrillDown({ categoryId, categoryName, month, dateRange })
@@ -209,7 +344,7 @@ export function DreClient({
   }
 
   function openDrillDownTotal(categoryId: string, categoryName: string) {
-    openDrillDown(categoryId, categoryName, '', { from: currentFrom, to: currentTo })
+    openDrillDown(categoryId, categoryName, '', currentRange)
   }
 
   function closeDrillDown() {
@@ -223,8 +358,55 @@ export function DreClient({
     return map
   }, [data.subtotals])
 
-  const hasDimFilters = selCc.length > 0 || selBu.length > 0 || selLe.length > 0
-  const { months, rows } = data
+  const { months } = data
+
+  /**
+   * União realizado ∪ orçado por (categoria, mês).
+   *
+   * Categoria orçada e não realizada TEM de aparecer: "orcei R$ 10 mil em
+   * marketing e não gastei nada" é a descoberta mais valiosa da tela, e a
+   * interseção a esconderia.
+   */
+  const rows: CellRow[] = useMemo(() => {
+    const merged = new Map<string, CellRow>()
+
+    for (const r of data.rows) {
+      merged.set(`${r.categoryId}:${r.month}`, {
+        categoryId: r.categoryId, categoryName: r.categoryName, categoryCode: r.categoryCode,
+        categoryType: r.categoryType, parentId: r.parentId, parentName: r.parentName,
+        parentCode: r.parentCode, month: r.month,
+        realizado: r.netAmount, orcado: 0,
+      })
+    }
+
+    for (const b of budgetRows) {
+      const key = `${b.categoryId}:${b.month}`
+      const existing = merged.get(key)
+      if (existing) { existing.orcado = b.orcado; continue }
+      // Célula zerada dos DOIS lados não vira linha. O orçado tem ocorrências de
+      // valor 0 por construção — `shapeMonthly` preenche com zero os meses de
+      // buraco de uma série sazonal —, e sem esta guarda elas trariam para a DRE
+      // categorias que não têm nada a mostrar.
+      if (b.orcado === 0) continue
+      merged.set(key, {
+        categoryId: b.categoryId, categoryName: b.categoryName, categoryCode: b.categoryCode,
+        categoryType: b.categoryType, parentId: b.parentId, parentName: b.parentName,
+        parentCode: b.parentCode, month: b.month,
+        realizado: 0, orcado: b.orcado,
+      })
+    }
+
+    return Array.from(merged.values())
+  }, [data.rows, budgetRows])
+
+  /** A cascata do orçado, rodada no cliente sobre as mesmas linhas. */
+  const subtotalsOrcado = useMemo(() => {
+    if (!budgetOn) return new Map<string, DreMonthSubtotals>()
+    const src: SubtotalRow[] = rows.map(r => ({
+      month: r.month, categoryType: r.categoryType, netAmount: r.orcado,
+    }))
+    return new Map(months.map(m => [m, computeSubtotals(m, src)]))
+  }, [budgetOn, rows, months])
 
   const avBase: AvBase = useMemo(() => {
     const byMonth: Record<string, number> = {}
@@ -237,8 +419,31 @@ export function DreClient({
     return { byMonth, total }
   }, [months, subtotalsByMonth])
 
-  // rótulo + (valor + AV%) por mês + (Total + AV%) + Média
-  const nCols = months.length * 2 + 4
+  const allParentIds = useMemo(() => new Set(rows.map(r => r.parentId)), [rows])
+  const isFullyExpanded = collapsedParents.size === 0
+
+  function toggleAll() {
+    setCollapsedParents(isFullyExpanded ? new Set(allParentIds) : new Set())
+  }
+
+  const selectedVersion = budgetVersions.find(v => v.id === versionId) ?? null
+
+  /** Meses do período que caem fora do exercício da versão — ali não há orçado. */
+  const mesesSemOrcado = useMemo(() => {
+    if (!budgetOn || !selectedVersion) return []
+    return months.filter(m => Number(m.slice(0, 4)) !== selectedVersion.fiscalYear)
+  }, [budgetOn, selectedVersion, months])
+
+  const versionOptions: SimpleDimensionItem[] = budgetVersions.map(v => ({
+    id: v.id,
+    name: `${v.name}${v.isActive ? ' · vigente' : ''}${v.status !== 'rascunho' ? ` · ${BUDGET_STATUS_LABELS[v.status]}` : ''}`,
+    code: String(v.fiscalYear),
+  }))
+
+  const hasDimFilters = selCc.length > 0 || selBu.length > 0 || selLe.length > 0
+  // rótulo + (2 ou 3 por mês) + (2 ou 3 no Total) + Média (só sem orçamento)
+  const perMonth = budgetOn ? 3 : 2
+  const nCols = months.length * perMonth + perMonth + (budgetOn ? 1 : 2)
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -323,7 +528,51 @@ export function DreClient({
               <X className="h-3 w-3" /> Limpar
             </Button>
           )}
+
+          {/* ── Orçamento ── */}
+          <div className="h-5 w-px bg-border mx-0.5" />
+
+          <Button
+            size="sm"
+            variant={budgetOn ? 'secondary' : 'ghost'}
+            disabled={budgetVersions.length === 0}
+            title={budgetVersions.length === 0
+              ? 'Crie uma versão de orçamento em Orçamento para comparar aqui.'
+              : 'Mostra o orçado ao lado do realizado; a terceira coluna passa a ser o desvio.'}
+            className={cn('h-8 text-xs gap-1.5', !budgetOn && 'text-muted-foreground')}
+            onClick={() => {
+              const vid = versionId ?? defaultVersionId(fromMonth, toMonth)
+              const next = !budgetOn
+              setBudgetOn(next)
+              setVersionId(vid)
+              fetchData({ on: next, vid })
+            }}
+          >
+            <Target className="h-3 w-3" />
+            Orçamento
+          </Button>
+
+          {budgetOn && budgetVersions.length > 0 && (
+            <div className="w-60">
+              <CellCombobox
+                value={versionId}
+                options={versionOptions}
+                placeholder="Escolha a versão"
+                onValueChange={id => { setVersionId(id); fetchData({ vid: id }) }}
+              />
+            </div>
+          )}
         </div>
+
+        {/* O orçado que não existe para parte do período — sem isto, colunas
+            vazias parecem defeito. */}
+        {mesesSemOrcado.length > 0 && (
+          <p className="mt-2 text-[11px] text-amber-600">
+            {selectedVersion!.name} cobre o exercício de {selectedVersion!.fiscalYear}.
+            {' '}{mesesSemOrcado.length === 1 ? 'O mês' : 'Os meses'} {mesesSemOrcado.map(monthLabel).join(', ')}
+            {' '}{mesesSemOrcado.length === 1 ? 'fica' : 'ficam'} sem orçado.
+          </p>
+        )}
       </div>
 
       {/* ── Table ── */}
@@ -340,7 +589,11 @@ export function DreClient({
           <table
             className="border-collapse"
             style={{
-              minWidth: LABEL_W + months.length * (COL_W + AV_COL_W) + TOTAL_COL_W + AV_COL_W + TOTAL_COL_W,
+              // As colunas fixas somam o mesmo nos dois estados: com orçamento
+              // são Total + Orç + Var%; sem, são Total + AV% + Média.
+              minWidth: LABEL_W
+                + months.length * (COL_W + THIRD_COL_W + (budgetOn ? COL_W : 0))
+                + 2 * TOTAL_COL_W + THIRD_COL_W,
               width: '100%',
             }}
           >
@@ -349,12 +602,14 @@ export function DreClient({
               {months.map(m => (
                 <Fragment key={m}>
                   <col style={{ width: COL_W, minWidth: COL_W }} />
-                  <col style={{ width: AV_COL_W, minWidth: AV_COL_W }} />
+                  {budgetOn && <col style={{ width: COL_W, minWidth: COL_W }} />}
+                  <col style={{ width: THIRD_COL_W, minWidth: THIRD_COL_W }} />
                 </Fragment>
               ))}
               <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />
-              <col style={{ width: AV_COL_W, minWidth: AV_COL_W }} />
-              <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />
+              {budgetOn && <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />}
+              <col style={{ width: THIRD_COL_W, minWidth: THIRD_COL_W }} />
+              {!budgetOn && <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />}
             </colgroup>
 
             <thead className="sticky top-0 z-20 bg-background border-b border-slate-200 shadow-[0_1px_0_0_#e2e8f0]">
@@ -363,39 +618,47 @@ export function DreClient({
                   Conta
                 </th>
                 {months.map(m => (
-                  <th key={m} colSpan={2}
+                  <th key={m} colSpan={perMonth}
                     className="text-center text-xs font-medium text-muted-foreground px-3 pt-2 pb-0.5 whitespace-nowrap border-l border-slate-200">
                     {monthLabel(m)}
                   </th>
                 ))}
-                <th colSpan={2}
+                <th colSpan={perMonth}
                   className="text-center text-xs font-medium text-muted-foreground/60 px-3 pt-2 pb-0.5 whitespace-nowrap border-l border-slate-300">
                   Total
                 </th>
-                <th rowSpan={2}
-                  className="text-right text-xs font-medium text-muted-foreground/60 px-3 py-2 whitespace-nowrap align-bottom">
-                  Média/mês
-                </th>
+                {!budgetOn && (
+                  <th rowSpan={2}
+                    className="text-right text-xs font-medium text-muted-foreground/60 px-3 py-2 whitespace-nowrap align-bottom">
+                    Média/mês
+                  </th>
+                )}
               </tr>
               <tr>
                 {months.map(m => (
                   <Fragment key={m}>
-                    <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-3 pb-1.5 whitespace-nowrap border-l border-slate-200">
-                      Valor
-                    </th>
-                    <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-2 pb-1.5 whitespace-nowrap"
-                      title="Análise vertical — participação na Receita Líquida do mês">
-                      AV%
-                    </th>
+                    <SubHead className="border-l border-slate-200">{budgetOn ? 'Real' : 'Valor'}</SubHead>
+                    {budgetOn && <SubHead>Orç</SubHead>}
+                    <SubHead
+                      narrow
+                      title={budgetOn
+                        ? 'Variação horizontal — desvio do realizado sobre o orçado'
+                        : 'Análise vertical — participação na Receita Líquida do mês'}
+                    >
+                      {budgetOn ? 'Var%' : 'AV%'}
+                    </SubHead>
                   </Fragment>
                 ))}
-                <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-3 pb-1.5 whitespace-nowrap border-l border-slate-300">
-                  Valor
-                </th>
-                <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-2 pb-1.5 whitespace-nowrap"
-                  title="Participação na Receita Líquida do período inteiro">
-                  AV%
-                </th>
+                <SubHead className="border-l border-slate-300">{budgetOn ? 'Real' : 'Valor'}</SubHead>
+                {budgetOn && <SubHead>Orç</SubHead>}
+                <SubHead
+                  narrow
+                  title={budgetOn
+                    ? 'Desvio do realizado sobre o orçado no período inteiro'
+                    : 'Participação na Receita Líquida do período inteiro'}
+                >
+                  {budgetOn ? 'Var%' : 'AV%'}
+                </SubHead>
               </tr>
             </thead>
 
@@ -407,7 +670,9 @@ export function DreClient({
                   rows={rows}
                   months={months}
                   subtotalsByMonth={subtotalsByMonth}
+                  subtotalsOrcado={subtotalsOrcado}
                   avBase={avBase}
+                  budgetOn={budgetOn}
                   collapsedParents={collapsedParents}
                   toggleParent={toggleParent}
                   openDrillDown={openDrillDown}
@@ -427,7 +692,9 @@ export function DreClient({
                 rows={rows}
                 months={months}
                 subtotalsByMonth={subtotalsByMonth}
+                subtotalsOrcado={subtotalsOrcado}
                 avBase={avBase}
+                budgetOn={budgetOn}
                 collapsedParents={collapsedParents}
                 toggleParent={toggleParent}
                 openDrillDown={openDrillDown}
@@ -436,6 +703,13 @@ export function DreClient({
               />
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── Rodapé do orçamento ── */}
+      {budgetOn && (
+        <div className="shrink-0 px-6 py-2 flex items-center gap-4 text-[11px] text-muted-foreground border-t">
+          <span>Variação positiva é favorável — vale para receita e para despesa.</span>
         </div>
       )}
 
@@ -462,14 +736,38 @@ export function DreClient({
   )
 }
 
+// ─── SubHead ──────────────────────────────────────────────────────────────────
+
+function SubHead({ children, className, title, narrow }: {
+  children: React.ReactNode
+  className?: string
+  title?: string
+  narrow?: boolean
+}) {
+  return (
+    <th
+      title={title}
+      className={cn(
+        'text-right text-[10px] font-normal text-muted-foreground/50 pb-1.5 whitespace-nowrap',
+        narrow ? 'px-2' : 'px-3',
+        className,
+      )}
+    >
+      {children}
+    </th>
+  )
+}
+
 // ─── LayoutBlock ──────────────────────────────────────────────────────────────
 
 interface BlockProps {
   section: LayoutSection
-  rows: DreCategoryRow[]
+  rows: CellRow[]
   months: string[]
   subtotalsByMonth: Map<string, DreMonthSubtotals>
+  subtotalsOrcado: Map<string, DreMonthSubtotals>
   avBase: AvBase
+  budgetOn: boolean
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
@@ -477,14 +775,25 @@ interface BlockProps {
   nCols: number
 }
 
-function LayoutBlock({ section, rows, months, subtotalsByMonth, avBase, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: BlockProps) {
-  const blocks = useMemo(() => buildBlocks(rows, section.types, r => r.netAmount), [rows, section.types])
+function LayoutBlock({
+  section, rows, months, subtotalsByMonth, subtotalsOrcado, avBase, budgetOn,
+  collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols,
+}: BlockProps) {
+  const blocks = useMemo(
+    () => buildBlocks(rows, section.types, (r: CellRow) => ({ realizado: r.realizado, orcado: r.orcado })),
+    [rows, section.types],
+  )
 
-  const subtotalTotal = months.reduce((s, m) => {
-    const sub = subtotalsByMonth.get(m)
-    return s + (sub ? (sub[section.subtotalKey] as number) : 0)
-  }, 0)
-  const subtotalAvg = months.length > 0 ? subtotalTotal / months.length : 0
+  const subtotalAt = (m: string): Cell => ({
+    realizado: (subtotalsByMonth.get(m)?.[section.subtotalKey] as number) ?? 0,
+    orcado:    (subtotalsOrcado.get(m)?.[section.subtotalKey] as number) ?? 0,
+  })
+
+  const subtotalTotal = months.reduce<Cell>((acc, m) => {
+    const c = subtotalAt(m)
+    return { realizado: acc.realizado + c.realizado, orcado: acc.orcado + c.orcado }
+  }, { ...EMPTY_CELL })
+  const subtotalAvg = months.length > 0 ? subtotalTotal.realizado / months.length : 0
 
   return (
     <>
@@ -494,6 +803,7 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, avBase, collapse
           block={block}
           months={months}
           avBase={avBase}
+          budgetOn={budgetOn}
           collapsedParents={collapsedParents}
           toggleParent={toggleParent}
           openDrillDown={openDrillDown}
@@ -509,22 +819,20 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, avBase, collapse
         )}>
           {section.subtotalLabel}
         </td>
-        {months.map(m => {
-          const sub = subtotalsByMonth.get(m)
-          const value = sub ? (sub[section.subtotalKey] as number) : 0
-          return (
-            <Fragment key={m}>
-              <Num value={value} bold inverted={section.keyMetric} className="border-l border-slate-200" />
-              {/* Subtotal: a AV% é MARGEM, então vai com sinal. */}
-              <AvCell value={value} base={avBase.byMonth[m] ?? 0} signed bold inverted={section.keyMetric} />
-            </Fragment>
-          )
-        })}
+        <MonthCells
+          months={months}
+          cellAt={subtotalAt}
+          avBase={avBase}
+          budgetOn={budgetOn}
+          signedAv
+          bold
+          inverted={section.keyMetric}
+        />
         {/* Total */}
-        <Num value={subtotalTotal} bold inverted={section.keyMetric} className="border-l border-slate-300" />
-        <AvCell value={subtotalTotal} base={avBase.total} signed bold inverted={section.keyMetric} />
-        {/* Média */}
-        <Num value={subtotalAvg} bold inverted={section.keyMetric} />
+        <Num value={subtotalTotal.realizado} bold inverted={section.keyMetric} className="border-l border-slate-300" />
+        {budgetOn && <Num value={subtotalTotal.orcado} bold inverted={section.keyMetric} title={cellTitle(subtotalTotal)} />}
+        <ThirdCell cell={subtotalTotal} base={avBase.total} budgetOn={budgetOn} signedAv bold inverted={section.keyMetric} />
+        {!budgetOn && <Num value={subtotalAvg} bold inverted={section.keyMetric} />}
       </tr>
     </>
   )
@@ -533,9 +841,10 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, avBase, collapse
 // ─── TypeBlock ────────────────────────────────────────────────────────────────
 
 interface TypeBlockProps {
-  block: SectionBlock<number>
+  block: SectionBlock<Cell>
   months: string[]
   avBase: AvBase
+  budgetOn: boolean
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
@@ -543,7 +852,10 @@ interface TypeBlockProps {
   nCols: number
 }
 
-function TypeBlock({ block, months, avBase, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: TypeBlockProps) {
+function TypeBlock({
+  block, months, avBase, budgetOn, collapsedParents, toggleParent,
+  openDrillDown, openDrillDownTotal, nCols,
+}: TypeBlockProps) {
   return (
     <>
       <tr className="bg-slate-100/70 border-t border-slate-200">
@@ -558,6 +870,7 @@ function TypeBlock({ block, months, avBase, collapsedParents, toggleParent, open
           parent={parent}
           months={months}
           avBase={avBase}
+          budgetOn={budgetOn}
           isCollapsed={collapsedParents.has(parent.parentId)}
           onToggle={() => toggleParent(parent.parentId)}
           openDrillDown={openDrillDown}
@@ -571,26 +884,36 @@ function TypeBlock({ block, months, avBase, collapsedParents, toggleParent, open
 // ─── ParentBlock ──────────────────────────────────────────────────────────────
 
 interface ParentBlockProps {
-  parent: ParentNode<number>
+  parent: ParentNode<Cell>
   months: string[]
   avBase: AvBase
+  budgetOn: boolean
   isCollapsed: boolean
   onToggle: () => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
   openDrillDownTotal: (categoryId: string, categoryName: string) => void
 }
 
-function ParentBlock({ parent, months, avBase, isCollapsed, onToggle, openDrillDown, openDrillDownTotal }: ParentBlockProps) {
+function ParentBlock({
+  parent, months, avBase, budgetOn, isCollapsed, onToggle, openDrillDown, openDrillDownTotal,
+}: ParentBlockProps) {
   const parentByMonth = useMemo(() => {
-    const result: Record<string, number> = {}
+    const result: Record<string, Cell> = {}
     months.forEach(m => {
-      result[m] = parent.children.reduce((s, c) => s + (c.byMonth[m] ?? 0), 0)
+      result[m] = parent.children.reduce<Cell>((acc, c) => {
+        const cell = c.byMonth[m]
+        if (cell) { acc.realizado += cell.realizado; acc.orcado += cell.orcado }
+        return acc
+      }, { ...EMPTY_CELL })
     })
     return result
   }, [parent.children, months])
 
-  const parentTotal = months.reduce((s, m) => s + (parentByMonth[m] ?? 0), 0)
-  const parentAvg   = months.length > 0 ? parentTotal / months.length : 0
+  const parentTotal = months.reduce<Cell>((acc, m) => {
+    const c = parentByMonth[m] ?? EMPTY_CELL
+    return { realizado: acc.realizado + c.realizado, orcado: acc.orcado + c.orcado }
+  }, { ...EMPTY_CELL })
+  const parentAvg = months.length > 0 ? parentTotal.realizado / months.length : 0
 
   const hasSingleChild =
     parent.children.length === 1 && parent.children[0].categoryName === parent.parentName
@@ -623,34 +946,39 @@ function ParentBlock({ parent, months, avBase, isCollapsed, onToggle, openDrillD
             <span className="truncate">{parent.parentName}</span>
           </div>
         </td>
-        {months.map(m => {
-          const v = parentByMonth[m] ?? 0
-          return (
-            <Fragment key={m}>
-              <Num
-                value={v}
-                bold
-                light
-                className="border-l border-slate-200"
-                onClick={singleChild ? () => openDrillDown(singleChild.categoryId, singleChild.categoryName, m) : undefined}
-              />
-              <AvCell value={v} base={avBase.byMonth[m] ?? 0} bold light />
-            </Fragment>
-          )
-        })}
+        <MonthCells
+          months={months}
+          cellAt={m => parentByMonth[m] ?? EMPTY_CELL}
+          avBase={avBase}
+          budgetOn={budgetOn}
+          bold
+          light
+          onValue={singleChild ? m => openDrillDown(singleChild.categoryId, singleChild.categoryName, m) : undefined}
+        />
         <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold border-l border-slate-300 text-muted-foreground/50">
-          {parentTotal === 0 ? '—' : fmtNum(parentTotal)}
+          {parentTotal.realizado === 0 ? '—' : fmtNum(parentTotal.realizado)}
         </td>
-        <AvCell value={parentTotal} base={avBase.total} bold light />
-        <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold text-muted-foreground/40">
-          {parentAvg === 0 ? '—' : fmtNum(parentAvg)}
-        </td>
+        {budgetOn && (
+          <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold text-muted-foreground/50">
+            {parentTotal.orcado === 0 ? '—' : fmtNum(parentTotal.orcado)}
+          </td>
+        )}
+        <ThirdCell cell={parentTotal} base={avBase.total} budgetOn={budgetOn} bold light />
+        {!budgetOn && (
+          <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold text-muted-foreground/40">
+            {parentAvg === 0 ? '—' : fmtNum(parentAvg)}
+          </td>
+        )}
       </tr>
 
       {/* Child rows */}
       {!isCollapsed && !hasSingleChild && parent.children.map(child => {
-        const childTotal = months.reduce((s, m) => s + (child.byMonth[m] ?? 0), 0)
-        const childAvg   = months.length > 0 ? childTotal / months.length : 0
+        const childTotal = months.reduce<Cell>((acc, m) => {
+          const c = child.byMonth[m]
+          if (c) { acc.realizado += c.realizado; acc.orcado += c.orcado }
+          return acc
+        }, { ...EMPTY_CELL })
+        const childAvg = months.length > 0 ? childTotal.realizado / months.length : 0
 
         return (
           <tr key={child.categoryId} className="border-b border-slate-50">
@@ -664,35 +992,36 @@ function ParentBlock({ parent, months, avBase, isCollapsed, onToggle, openDrillD
                 <span className="truncate">{child.categoryName}</span>
               </div>
             </td>
-            {months.map(m => {
-              const v = child.byMonth[m] ?? 0
-              return (
-                <Fragment key={m}>
-                  <Num
-                    value={v}
-                    light
-                    className="border-l border-slate-200"
-                    onClick={() => openDrillDown(child.categoryId, child.categoryName, m)}
-                  />
-                  <AvCell value={v} base={avBase.byMonth[m] ?? 0} light />
-                </Fragment>
-              )
-            })}
+            <MonthCells
+              months={months}
+              cellAt={m => child.byMonth[m] ?? EMPTY_CELL}
+              avBase={avBase}
+              budgetOn={budgetOn}
+              light
+              onValue={m => openDrillDown(child.categoryId, child.categoryName, m)}
+            />
             <td
               className={cn(
                 'px-3 py-[3px] text-right tabular-nums text-xs border-l border-slate-300',
-                childTotal !== 0
+                childTotal.realizado !== 0
                   ? 'text-muted-foreground/60 cursor-pointer hover:text-foreground hover:underline underline-offset-2'
                   : 'text-muted-foreground/40',
               )}
-              onClick={childTotal !== 0 ? () => openDrillDownTotal(child.categoryId, child.categoryName) : undefined}
+              onClick={childTotal.realizado !== 0 ? () => openDrillDownTotal(child.categoryId, child.categoryName) : undefined}
             >
-              {childTotal === 0 ? '—' : fmtNum(childTotal)}
+              {childTotal.realizado === 0 ? '—' : fmtNum(childTotal.realizado)}
             </td>
-            <AvCell value={childTotal} base={avBase.total} light />
-            <td className="px-3 py-[3px] text-right tabular-nums text-xs text-muted-foreground/30">
-              {childAvg === 0 ? '—' : fmtNum(childAvg)}
-            </td>
+            {budgetOn && (
+              <td className="px-3 py-[3px] text-right tabular-nums text-xs text-muted-foreground/60">
+                {childTotal.orcado === 0 ? '—' : fmtNum(childTotal.orcado)}
+              </td>
+            )}
+            <ThirdCell cell={childTotal} base={avBase.total} budgetOn={budgetOn} light />
+            {!budgetOn && (
+              <td className="px-3 py-[3px] text-right tabular-nums text-xs text-muted-foreground/30">
+                {childAvg === 0 ? '—' : fmtNum(childAvg)}
+              </td>
+            )}
           </tr>
         )
       })}

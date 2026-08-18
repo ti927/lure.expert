@@ -6,6 +6,34 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.7 — Orçado lado a lado na DRE
+
+A terceira coluna criada na 9.6 troca de significado: com o orçamento ligado, cada mês vira `Real` · `Orç` · `Var%`, e a AV% dá lugar ao desvio sobre o orçado.
+
+**Entregue:**
+- [src/lib/budget-read.ts](src/lib/budget-read.ts) — `fetchBudgetRows` e `fetchForaDoHorizonte`, extraídas de `getBudgetVsActual`. O motivo não é economia de linhas: a conciliação verificada na 9.2 (o orçado da aba bate célula a célula com a DRE) só continua valendo se as duas telas lerem pela **mesma** query.
+- [src/server/budget.ts](src/server/budget.ts) — `getBudgetForPeriod(versionId, range, filtros)`, regime fixo em competência, uma query agregada em vez das cinco de `getBudgetVsActual`; `getBudgetVsActual` migrada para a extração no mesmo commit.
+- [dre-client.tsx](src/app/(authenticated)/dre/dre-client.tsx) — botão **Orçamento** + seletor de versão na barra de filtros, união realizado ∪ orçado, cascata do orçado no cliente, `MonthCells`/`ThirdCell` cobrindo os dois estados num caminho de código só.
+- [dre/page.tsx](src/app/(authenticated)/dre/page.tsx) — carrega `listBudgetVersions()`.
+
+**Decisões de desenho:**
+- **Um caminho de código, não dois.** A malha sempre trabalha com um par `{realizado, orcado}`; sem orçamento, `orcado` é 0 e a terceira coluna renderiza AV%. Duas árvores de renderização divergiriam no primeiro ajuste.
+- **Filtros idênticos nos dois lados.** As dimensões vão para `getDreData` e `getBudgetForPeriod` no mesmo objeto. Filtrar só o orçado é o que faz a variação parecer melhor do que é.
+- **Versão default:** a vigente do exercício do mês inicial; senão a do mês final; senão a mais recente. Versão salva no `localStorage` que foi excluída em `/orcamento` cai de volta no default em vez de quebrar.
+- **Aviso de cobertura:** quando o período extrapola o exercício da versão, uma linha em âmbar diz quais meses ficam sem orçado — colunas vazias sem explicação parecem defeito.
+- **"Média/mês" some com o orçamento ligado** e volta ao desligar: é diagnóstico do realizado e a tabela já vai a ~3.000px.
+
+**Achado durante a verificação:** havia 12 células "só orçadas" cujo valor era exatamente zero. Vêm por construção do módulo — `shapeMonthly` preenche com zero os meses de buraco de uma série sazonal, e isso vira ocorrência de R$ 0,00 no banco. Sem guarda, elas trariam para a DRE categorias inteiras que não têm nada a mostrar. A união passou a ignorar célula zerada dos dois lados. Célula zerada vinda do **realizado** continua aparecendo: já era o comportamento de hoje (categoria com estorno que zera o mês) e mexer nisso mudaria a tela sem ninguém pedir.
+
+**Verificação — 28 asserções:**
+- **Fidelidade da extração:** a query **antiga**, recuperada de `git show 71ff721:src/server/budget.ts`, rodada lado a lado com a nova sobre a versão real — **282 células idênticas**, mesma cauda fora do horizonte, e um recorte parcial (mar–jun) com as mesmas 139 células e nenhum mês vazando. Os dois textos de SQL vêm de fontes diferentes; não é o mesmo texto comparado consigo mesmo.
+- **Sinal da variação**, o erro mais provável do módulo: receita acima do previsto positiva, abaixo negativa; **despesa menor que a prevista positiva** (gastei menos = favorável) e maior negativa; orçado zero devolve travessão em vez de `Infinity`. Uma asserção minha estava errada e o código certo: despesa prevista e não realizada dá **+100%**, não −100%.
+- **União contra os dados reais:** soma do realizado idêntica antes e depois, nenhuma célula perdida, soma do orçado íntegra, nenhuma célula acrescentada além das que têm valor, e a cascata do orçado batendo com a soma direta por tipo.
+
+`tsc` limpo e `npm run build` verde (`/dre` 6,78 → 7,87 kB; `/orcamento` caiu de 49,3 → 29,4 kB com a extração). **Não verificado automaticamente:** o clique na UI.
+
+---
+
 ### ✅ Sessão 9.6 — Terceira coluna da DRE e análise vertical
 
 Primeira das três sessões que põem o orçado dentro da `/dre`. Faz a reestruturação de colunas uma vez, com uma feature clássica de DRE, antes de empilhar o orçado em cima — e por isso é entregável sozinha, sem nenhuma dependência do módulo de orçamento.

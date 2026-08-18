@@ -173,7 +173,7 @@ DRE** (9.6 ✅, 9.7 🔲, 9.8 🔲). Fases 0–7 **100% concluídas**.
 
 **Sessões — orçado na DRE:**
 - ✅ 9.6: Terceira coluna por mês + análise vertical (AV% sobre a Receita Líquida). Cabeçalho de duas linhas, `verticalShare` em `lib/dre-calc.ts`, `tone="muted"` no `Num`
-- 🔲 9.7: Orçado lado a lado — a terceira coluna vira Var% quando o orçamento está visível
+- ✅ 9.7: Orçado lado a lado — botão Orçamento + seletor de versão na barra; a terceira coluna vira Var%. `lib/budget-read.ts` (`fetchBudgetRows`) é a MESMA query que a aba Orçado × Realizado usa
 - 🔲 9.8: Drill-down do orçado na DRE + edição do lançamento pelo `SeriesDialog`
 
 **A regra da terceira coluna:** ela existe sempre e troca de significado. Orçamento **oculto** → `Valor`

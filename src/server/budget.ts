@@ -73,6 +73,9 @@ import {
   applyDraftsToBudget, applyDuplicateVersion, type CopiedSeriesDraft,
 } from '@/lib/budget-copy'
 import {
+  fetchBudgetRows, fetchForaDoHorizonte, type BudgetPeriodRow,
+} from '@/lib/budget-read'
+import {
   parseBudgetCsv, buildRecurrenceCandidates, recurrenceToDraft, norm,
   type BudgetCsvLookups, type BudgetCsvParseResult, type LeafCategoryInfo,
   type RecurrenceCandidate,
@@ -896,6 +899,9 @@ export async function updateBudgetEntry(entryId: string, patch: BudgetEntryUpdat
 
 const BP_LIST = sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))
 
+/** Os metadados de categoria que uma célula da matriz precisa antes de ter valor. */
+type BlankSource = Omit<BudgetVsActualRow, 'orcado' | 'realizado'>
+
 /**
  * A matriz de comparação.
  *
@@ -914,14 +920,14 @@ const BP_LIST = sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))
  */
 export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise<BudgetVsActualData> {
   const { organizationId } = await getAuthContext()
-  const { versionId, regime, from, to } = filters
+  const { regime, from, to } = filters
 
-  const budgetDate = regime === 'caixa' ? sql`e.cash_date` : sql`e.competence_date`
-  const txDate     = regime === 'caixa' ? sql`COALESCE(t.effective_date, t.date)` : sql`t.date`
-  const hideCol    = regime === 'caixa' ? sql`c.hide_in_cashflow` : sql`c.hide_in_dre`
+  // O lado orçado (data, coluna de visibilidade e filtros de dimensão) mora em
+  // `fetchBudgetRows`. Aqui sobra só o que o realizado precisa.
+  const txDate  = regime === 'caixa' ? sql`COALESCE(t.effective_date, t.date)` : sql`t.date`
+  const hideCol = regime === 'caixa' ? sql`c.hide_in_cashflow` : sql`c.hide_in_dre`
 
-  const budgetDims = dimensionFilters('e', filters)
-  const txDims     = dimensionFilters('t', filters)
+  const txDims = dimensionFilters('t', filters)
 
   type AggRow = {
     category_id:   string
@@ -935,36 +941,14 @@ export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise
     value:         string
   }
 
+  // O lado orçado sai de `fetchBudgetRows` — a MESMA função que a DRE usa.
+  // Duas queries "parecidas" divergiriam no primeiro filtro que alguém
+  // esquecesse de replicar, e a conciliação verificada na 9.2 morreria em
+  // silêncio.
+  const periodFilters = { ...filters, organizationId }
+
   const [orcadoRows, realizadoRows, semCat, cov, fora] = await Promise.all([
-    // ── Orçado ──
-    db.execute<AggRow>(sql`
-      SELECT
-        c.id::text        AS category_id,
-        c.name            AS category_name,
-        c.code            AS category_code,
-        c.type            AS category_type,
-        c.parent_id::text AS parent_id,
-        p.name            AS parent_name,
-        p.code            AS parent_code,
-        TO_CHAR(DATE_TRUNC('month', ${budgetDate}::date), 'YYYY-MM') AS month,
-        COALESCE(SUM(
-          CASE WHEN e.direction = 'inflow'
-               THEN  e.amount::numeric
-               ELSE -e.amount::numeric END
-        ), 0) AS value
-      FROM budget_entries e
-      JOIN categories c ON e.category_id = c.id
-      JOIN categories p ON c.parent_id   = p.id
-      WHERE e.organization_id = ${organizationId}::uuid
-        AND e.version_id      = ${versionId}::uuid
-        AND ${budgetDate}::date >= ${from}::date
-        AND ${budgetDate}::date <= ${to}::date
-        AND c.type NOT IN (${BP_LIST})
-        AND ${hideCol} = false
-        ${budgetDims}
-      GROUP BY c.id, c.name, c.code, c.type, c.parent_id, p.name, p.code,
-               DATE_TRUNC('month', ${budgetDate}::date)
-    `),
+    fetchBudgetRows(db, periodFilters),
 
     // ── Realizado ──
     db.execute<AggRow>(sql`
@@ -1028,44 +1012,47 @@ export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise
     `),
 
     // ── Orçado fora do período (cauda de caixa) ──
-    db.execute<{ total: string; count: number }>(sql`
-      SELECT
-        COALESCE(SUM(e.amount::numeric), 0) AS total,
-        COUNT(*)::int                       AS count
-      FROM budget_entries e
-      WHERE e.organization_id = ${organizationId}::uuid
-        AND e.version_id      = ${versionId}::uuid
-        AND (${budgetDate}::date < ${from}::date OR ${budgetDate}::date > ${to}::date)
-        ${budgetDims}
-    `),
+    fetchForaDoHorizonte(db, periodFilters),
   ])
 
   // União por (categoria, mês)
   const merged = new Map<string, BudgetVsActualRow>()
 
-  const put = (r: AggRow, field: 'orcado' | 'realizado') => {
-    const key = `${r.category_id}:${r.month}`
-    let row = merged.get(key)
-    if (!row) {
-      row = {
-        categoryId:   r.category_id,
-        categoryName: r.category_name,
-        categoryCode: r.category_code,
-        categoryType: r.category_type as DreType,
-        parentId:     r.parent_id,
-        parentName:   r.parent_name,
-        parentCode:   r.parent_code,
-        month:        r.month,
-        orcado:       0,
-        realizado:    0,
-      }
-      merged.set(key, row)
-    }
-    row[field] = Number(r.value)
+  const blank = (r: BlankSource): BudgetVsActualRow => ({
+    categoryId:   r.categoryId,
+    categoryName: r.categoryName,
+    categoryCode: r.categoryCode,
+    categoryType: r.categoryType,
+    parentId:     r.parentId,
+    parentName:   r.parentName,
+    parentCode:   r.parentCode,
+    month:        r.month,
+    orcado:       0,
+    realizado:    0,
+  })
+
+  for (const r of orcadoRows) {
+    const key = `${r.categoryId}:${r.month}`
+    const row = merged.get(key) ?? blank(r)
+    row.orcado = r.orcado
+    merged.set(key, row)
   }
 
-  orcadoRows.forEach(r => put(r, 'orcado'))
-  realizadoRows.forEach(r => put(r, 'realizado'))
+  for (const r of realizadoRows) {
+    const key = `${r.category_id}:${r.month}`
+    const row = merged.get(key) ?? blank({
+      categoryId:   r.category_id,
+      categoryName: r.category_name,
+      categoryCode: r.category_code,
+      categoryType: r.category_type as DreType,
+      parentId:     r.parent_id,
+      parentName:   r.parent_name,
+      parentCode:   r.parent_code,
+      month:        r.month,
+    })
+    row.realizado = Number(r.value)
+    merged.set(key, row)
+  }
 
   const inflow  = Number(semCat[0]?.inflow ?? 0)
   const outflow = Number(semCat[0]?.outflow ?? 0)
@@ -1080,8 +1067,43 @@ export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise
       businessUnit: Number(cov[0]?.bu ?? 0),
       legalEntity:  Number(cov[0]?.le ?? 0),
     },
-    foraDoHorizonte: { total: Number(fora[0]?.total ?? 0), count: Number(fora[0]?.count ?? 0) },
+    foraDoHorizonte: fora,
   }
+}
+
+/**
+ * O orçado de um período, para a DRE sobrepor ao seu próprio realizado.
+ *
+ * Regime fixo em competência: a DRE é competência por definição do projeto, e o
+ * toggle de regime vive em `/orcamento`, que é onde ele faz sentido.
+ *
+ * Roda UMA query agregada, não as cinco de `getBudgetVsActual` — a DRE já tem o
+ * realizado próprio e não precisa de cobertura nem de `semCategoria`. Mas usa a
+ * mesma `fetchBudgetRows`, então os números são os mesmos da aba de comparação
+ * por construção, não por coincidência.
+ */
+export async function getBudgetForPeriod(
+  versionId: string,
+  range: { from: string; to: string },
+  filters: Pick<BudgetVsActualFilters, 'costCenterIds' | 'businessUnitIds' | 'legalEntityIds'> = {},
+): Promise<{ rows: BudgetPeriodRow[]; foraDoHorizonte: { total: number; count: number } }> {
+  const { organizationId } = await getAuthContext()
+
+  const f = {
+    organizationId,
+    versionId,
+    regime: 'competencia' as const,
+    from: range.from,
+    to: range.to,
+    ...filters,
+  }
+
+  const [rows, foraDoHorizonte] = await Promise.all([
+    fetchBudgetRows(db, f),
+    fetchForaDoHorizonte(db, f),
+  ])
+
+  return { rows, foraDoHorizonte }
 }
 
 /** As ocorrências orçadas por trás de uma célula da matriz. */
