@@ -6,6 +6,39 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.5 — Aceleradores B: planilha e recorrências detectadas
+
+Fecha a Fase 9. Os dois caminhos que faltavam para preencher um orçamento sem digitar lançamento a lançamento.
+
+**Entregue:**
+- [src/lib/budget-import.ts](src/lib/budget-import.ts) — puro. `parseBudgetCsv(texto, mapas, exercício)` devolve prévia e lançamentos; `buildRecurrenceCandidates` e `recurrenceToDraft` convertem a detecção do `/fluxo`; `timesPerMonth` faz a conversão dias → mês.
+- [src/server/budget.ts](src/server/budget.ts) — `previewBudgetCsv`, `importBudgetCsv`, `getRecurrenceCandidates`, `acceptDetectedRecurrences`.
+- [src/lib/csv-templates.ts](src/lib/csv-templates.ts) — `BUDGET_CSV` (obrigatórias × opcionais), `buildBudgetTemplateCsv`, e `downloadCsv` genérico com `downloadTemplate` passando a usá-lo.
+- [import-csv-dialog.tsx](src/app/(authenticated)/orcamento/import-csv-dialog.tsx) e [recurrences-dialog.tsx](src/app/(authenticated)/orcamento/recurrences-dialog.tsx).
+- [orcamento-client.tsx](src/app/(authenticated)/orcamento/orcamento-client.tsx) — os três aceleradores passaram para um menu **Preencher**, cada item com uma linha dizendo o que faz. Guarda comum (`openFiller`): exige versão e recusa versão arquivada.
+
+**Decisões de desenho:**
+- **Planilha em grade de 12 meses** (categorias nas linhas, meses nas colunas), não uma linha por ocorrência. É o formato que já existe na mesa do cliente, e uma linha por ocorrência explodiria 12× o que o módulo trata como um lançamento só.
+- **`categoria` casa por código ou por nome.** Homônimo não escolhe sozinho: recusa a linha listando os códigos disputantes. Categoria desativada também é recusada — o lançamento nasceria impossível de editar depois.
+- **Linha inválida não derruba o arquivo.** Ela aparece na prévia com o motivo e o número da linha da planilha, e é a única de fora. Importar 48 de 50 é mais útil do que recusar as 50 por causa de duas. Cabeçalho errado, sim, invalida tudo — não há como adivinhar de que mês é uma coluna sem nome.
+- **Pontas aparadas, buracos preservados** — mesma regra da cópia, via a `shapeMonthly` extraída da 9.4. Quem só tem valor em nov e dez gera duas ocorrências, não doze; quem tem jan e mar gera três, com fevereiro zerado.
+- **Mensalização das recorrências.** A detecção do `/fluxo` trabalha em dias (aceita 7 a 40) e o orçamento em meses. Copiar o valor médio direto seria caro: uma recorrência semanal de R$ 100 viraria R$ 100/mês em vez de R$ 400. `timesPerMonth` usa inteiro (`round(30/dias)`) de propósito — "a cada 7 dias, 4× por mês" o usuário confere de cabeça, 4,35 não.
+- **Categoria obrigatória nas recorrências**, porque a detecção agrupa por descrição e não conhece plano de contas. O botão fica travado enquanto houver selecionada sem categoria, e o rodapé diz quantas são.
+- **Recorrência fora do exercício aparece bloqueada, não some** — sumir faria o usuário procurar por que a lista está menor do que a do `/fluxo`. Já aceita idem, marcada.
+- **`applyCopyToBudget` virou `applyDraftsToBudget(source)`** e a substituição passou a apagar só o que veio da mesma origem: reimportar a planilha não pode levar junto o que foi copiado do realizado nem o que foi digitado à mão.
+- **`normalizeAmount` movido**, não copiado, de `parsers/excel-csv.ts` para `format.ts` como `parseAmount` — seria a segunda cópia, e o arquivo de origem carrega o SDK da Anthropic.
+
+**Verificação — 64 asserções**, as puras em memória e a gravação contra o banco real em transações revertidas:
+- Planilha: grade de 12 vira lançamento único; pontas aparadas (nov+dez → 2 ocorrências); buraco no meio vira zero e não corta a série; `1.234,56`, `1,234.56` e `R$ 1.234,56` leem o mesmo número; direção deduzida do tipo da categoria quando falta a coluna; as três dimensões resolvidas por nome.
+- Erros: linha ruim não derruba o arquivo (2 válidas + 1 inválida, com o número da linha certo); homônimo recusado listando os dois códigos; desativada recusada; negativo recusado explicando que o sinal vem da coluna `tipo`; linha vazia; dimensão inexistente nomeada; três formas de cabeçalho inválido.
+- Recorrências: conversão dias→mês nos sete casos de borda; candidata mensal; **semanal mensalizada (100 → 400)**; bloqueio para fora do exercício e ancoragem em janeiro para antes dele; já aceita marcada com chave insensível a acento e caixa; dia 31 limitado a 28 para fevereiro não sumir.
+- Gravação: import grava com `source = 'csv'` e expande as ocorrências certas, nenhuma nascendo ajustada; **substituir apaga só a origem igual** (manual e cópia sobrevivem, sem ocorrência órfã); recorrência semanal de R$ 100 aceita em maio vira R$ 3.200 no ano (400 × 8 meses).
+- **Regressão:** a suíte inteira da 9.4 (66 asserções) rodada de novo depois da extração de `shapeMonthly` e da renomeação da gravação — verde.
+
+`tsc` limpo e `npm run build` verde (`/orcamento` de 46,1 → 51,3 kB). **Não verificado automaticamente:** o clique na UI.
+
+---
+
 ### ✅ Sessão 9.4 — Aceleradores A: copiar do realizado e duplicar versão
 
 Os dois caminhos que tiram o usuário da folha em branco. Montar um orçamento anual lançamento a lançamento é o que faz o módulo ser abandonado na primeira semana.

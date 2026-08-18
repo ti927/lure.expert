@@ -1,9 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useState, useTransition } from 'react'
-import { CopyPlus, Loader2, Plus, Target } from 'lucide-react'
+import { ChevronDown, CopyPlus, FileSpreadsheet, Loader2, Plus, Repeat, Target, Wand2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { EmptyState } from '@/components/states/empty-state'
 import { CellCombobox } from '@/components/transacoes-shared/cell-combobox'
@@ -20,6 +23,8 @@ import { ComparacaoTab } from './comparacao-tab'
 import { VersoesTab } from './versoes-tab'
 import { SeriesDialog } from './series-dialog'
 import { CopyActualsDialog } from './copy-actuals-dialog'
+import { ImportCsvDialog } from './import-csv-dialog'
+import { RecurrencesDialog } from './recurrences-dialog'
 
 const STORAGE_KEY = 'lure:orcamento:filters'
 
@@ -52,6 +57,8 @@ export function OrcamentoClient({
   const [tab, setTab] = useState<TabKey>('planejamento')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
+  const [csvOpen, setCsvOpen] = useState(false)
+  const [recurOpen, setRecurOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
 
   const selectedVersion = versions.find(v => v.id === selectedId) ?? null
@@ -126,18 +133,23 @@ export function OrcamentoClient({
     setDialogOpen(true)
   }
 
-  function openCopyActuals() {
-    if (!selectedVersion) {
-      toast.error('Crie uma versão de orçamento antes de copiar o realizado.')
-      setTab('versoes')
-      return
+  /** Guarda comum dos três aceleradores: precisa de versão, e ela não pode estar arquivada. */
+  function openFiller(open: (v: boolean) => void) {
+    return () => {
+      if (!selectedVersion) {
+        toast.error('Crie uma versão de orçamento antes de preencher.')
+        setTab('versoes')
+        return
+      }
+      if (isArchived) {
+        toast.error('Esta versão está arquivada. Duplique-a para trabalhar em cima dela.')
+        return
+      }
+      open(true)
     }
-    if (isArchived) {
-      toast.error('Esta versão está arquivada. Duplique-a para trabalhar em cima dela.')
-      return
-    }
-    setCopyOpen(true)
   }
+
+  const openCopyActuals = openFiller(setCopyOpen)
 
   const versionOptions: SimpleDimensionItem[] = versions.map(v => ({
     id: v.id,
@@ -164,10 +176,44 @@ export function OrcamentoClient({
                 />
               </div>
             )}
-            <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={openCopyActuals}>
-              <CopyPlus className="h-3.5 w-3.5" />
-              Copiar do realizado
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5">
+                  <Wand2 className="h-3.5 w-3.5" />
+                  Preencher
+                  <ChevronDown className="h-3 w-3 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuItem onSelect={openCopyActuals} className="text-xs gap-2 items-start py-2">
+                  <CopyPlus className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Copiar do realizado
+                    <span className="block text-[11px] text-muted-foreground font-normal">
+                      Parte do histórico e aplica um percentual.
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={openFiller(setCsvOpen)} className="text-xs gap-2 items-start py-2">
+                  <FileSpreadsheet className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Importar planilha
+                    <span className="block text-[11px] text-muted-foreground font-normal">
+                      CSV com as categorias nas linhas e os meses nas colunas.
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={openFiller(setRecurOpen)} className="text-xs gap-2 items-start py-2">
+                  <Repeat className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Recorrências detectadas
+                    <span className="block text-[11px] text-muted-foreground font-normal">
+                      O que já se repete no seu extrato, virando previsão.
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button size="sm" className="h-8 text-xs gap-1.5" onClick={openNewSeries}>
               <Plus className="h-3.5 w-3.5" />
               Novo lançamento
@@ -252,12 +298,28 @@ export function OrcamentoClient({
       </div>
 
       {selectedVersion && (
-        <CopyActualsDialog
-          open={copyOpen}
-          onOpenChange={setCopyOpen}
-          version={selectedVersion}
-          onSaved={() => refresh()}
-        />
+        <>
+          <CopyActualsDialog
+            open={copyOpen}
+            onOpenChange={setCopyOpen}
+            version={selectedVersion}
+            onSaved={() => refresh()}
+          />
+          <ImportCsvDialog
+            open={csvOpen}
+            onOpenChange={setCsvOpen}
+            version={selectedVersion}
+            onSaved={() => refresh()}
+          />
+          <RecurrencesDialog
+            open={recurOpen}
+            onOpenChange={setRecurOpen}
+            version={selectedVersion}
+            leafCategories={leafCategories}
+            costCenters={costCenters}
+            onSaved={() => refresh()}
+          />
+        </>
       )}
 
       {selectedVersion && (

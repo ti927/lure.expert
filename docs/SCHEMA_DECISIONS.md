@@ -537,3 +537,56 @@ introduziria uma deriva de um ou dois dias no prazo.
 
 A versão duplicada nasce como `rascunho` e **não** assume a vigência do exercício de destino
 se já houver uma vigente — duplicar é um ato de rascunho, não de publicação.
+
+### 13.11 — Planilha de orçamento em grade de 12 meses (Sessão 9.5)
+
+O import não usa uma linha por ocorrência. Usa **uma linha por lançamento com doze colunas de mês**
+(`jan`..`dez`), que é o formato em que o orçamento já existe na mesa do cliente. Uma linha por
+ocorrência explodiria doze vezes o que o módulo trata como um lançamento só, e obrigaria o usuário
+a reconstruir a recorrência depois.
+
+As colunas de mês são **do calendário do exercício da versão**, não posições relativas: a coluna
+`mar` é março do exercício, sempre. Isso mantém o import coerente com o mapeamento da cópia do
+realizado (13.9) e permite as duas features compartilharem `shapeMonthly` — pontas aparadas,
+buracos internos zerados, valores uniformes virando `fixo` em vez de `sazonal` repetido.
+
+**`categoria` aceita código ou nome.** Código é único por organização; nome não é. Quando o nome
+bate em mais de uma folha, a linha é **recusada listando os códigos** em vez de escolher a primeira
+— escolher errado aqui aloca dinheiro na conta errada e é invisível na conferência.
+
+**Linha inválida não invalida o arquivo.** Ela aparece na prévia com o motivo e o número da linha
+da planilha, e é a única que fica de fora. Recusar as 50 por causa de duas transformaria um
+acelerador em obstáculo. Cabeçalho errado é diferente: sem nome de coluna não há como saber de que
+mês é o número, então aí o arquivo inteiro para.
+
+### 13.12 — Recorrências detectadas: a conversão dias → meses (Sessão 9.5)
+
+A detecção do `/fluxo` trabalha em **dias** (agrupa por descrição nos últimos 180 dias e aceita
+intervalos médios de 7 a 40). O orçamento trabalha em **meses**. Copiar `valorMedio` direto para
+uma série mensal seria um erro caro e silencioso: uma recorrência semanal de R$ 100 viraria
+R$ 100/mês em vez de R$ 400/mês — quatro vezes menos.
+
+`timesPerMonth(dias) = max(1, round(30 / dias))` e o valor mensal é `valorMedio × vezesPorMes`. O
+inteiro é proposital: "a cada 7 dias, 4× por mês" é conferível de cabeça; 4,35 não é. O diálogo
+mostra o valor detectado, o multiplicador e o valor mensal resultante, e deixa o número editável
+antes de aceitar.
+
+**A categoria é obrigatória e vem do usuário.** `RecorrenciaDetectada` não tem categoria — a
+detecção agrupa por descrição, não por plano de contas. Sem escolher, o lançamento não apareceria
+em relatório nenhum (a comparação faz INNER JOIN em `categories`). O botão fica travado enquanto
+houver selecionada sem categoria.
+
+**Recorrência que não cabe no exercício aparece bloqueada, não sumida.** Sumir faria o usuário
+procurar por que a lista está menor que a do `/fluxo`. O mesmo vale para as já aceitas, marcadas
+pelo nome normalizado contra as séries com `source = 'recorrencia_detectada'` da versão.
+
+### 13.13 — `source` decide o que a substituição apaga (Sessão 9.5)
+
+`applyCopyToBudget` virou `applyDraftsToBudget(tx, { source, ... })`, comum às três origens
+geradas (cópia do realizado, planilha, recorrência aceita). O `replaceExisting` apaga apenas as
+séries **daquela mesma origem**.
+
+É o que torna as três reexecutáveis sem se destruírem: reimportar a planilha não pode levar junto
+o que foi copiado do realizado, e nenhuma das duas pode tocar no que foi digitado à mão. Aceitar
+recorrência não oferece substituição de propósito — é ato incremental ("essa aqui também"), não um
+lote que se refaz inteiro.

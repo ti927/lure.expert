@@ -168,7 +168,9 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 9 — Orçamento e Previsão **em andamento** (9.0 ✅, 9.1 ✅, 9.2 ✅, 9.3 ✅, 9.4 ✅ — núcleo + aceleradores A). Fases 0–7 **100% concluídas**.
+**Status:** Fase 9 — Orçamento e Previsão **CONCLUÍDA** (9.0 a 9.5 ✅). Fases 0–7 **100% concluídas**.
+Próximo passo natural: retomar a Fase 8 (adquirentes, 8.2–8.5), pausada. Candidata avulsa: expert lendo
+o orçamento no system prompt (era a "9.6" opcional, nunca comprometida).
 Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
 
 **Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
@@ -180,7 +182,7 @@ Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
 - ✅ 9.2: Aba Orçado × Realizado — matriz 12 meses, toggle Competência/Caixa, 4 modos de célula, colunas Orçado ano / Realizado YTD / Projeção ano / Var. proj., drill-down duplo. Extrações `dre-layout.ts`, `num-cell.tsx`, `dim-filter.tsx`
 - ✅ 9.3: Escopos de edição/exclusão (esta / daqui / todas) com preservação de ajustes manuais, confirmação two-phase e auto-cura. Lógica pura em `lib/budget-scope.ts`
 - ✅ 9.4: Copiar do realizado (prévia + commit, 2 eixos: formato mensal/média × detalhamento categoria/dimensões) + duplicar versão (CTE único com mapa old→new de `series_id`, preserva `adjusted_fields` e `sequence`). Lógica em `lib/budget-copy.ts`
-- 🔲 9.5: Importar CSV + aceitar recorrências detectadas
+- ✅ 9.5: Importar planilha (grade de 12 meses, prévia+commit, linha inválida não derruba o arquivo) + aceitar recorrências detectadas (com mensalização e categoria obrigatória). Lógica em `lib/budget-import.ts`
 
 **Decisões estruturais do orçamento** (ver `docs/SCHEMA_DECISIONS.md` Decisão 13): orçado em
 tabelas separadas de `transactions`; ocorrências materializadas em `budget_entries` (fonte da
@@ -243,7 +245,8 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
-| **Fase 9 — Orçamento (em andamento)** | |
+| **Fase 9 — Orçamento (concluída)** | |
+| 9.5 | Aceleradores B. `lib/budget-import.ts` puro: `parseBudgetCsv` recebe o texto e os mapas de busca já carregados; `buildRecurrenceCandidates` e `recurrenceToDraft` convertem a detecção do `/fluxo`. **Planilha em grade de 12 meses** (categorias nas linhas, meses nas colunas) porque é o formato que já existe no mundo — uma linha por ocorrência explodiria 12× o que é um lançamento só. `categoria` casa por código **ou** nome, com homônimo recusado pedindo o código. Linha inválida não derruba o arquivo: aparece na prévia com o motivo e é a única de fora. **Mensalização das recorrências:** a detecção trabalha em dias (7 a 40) e o orçamento em meses — semanal de R$ 100 vira R$ 400/mês, não R$ 100. Categoria é obrigatória porque a detecção agrupa por descrição e não conhece plano de contas. `applyCopyToBudget` virou `applyDraftsToBudget(source)` e a substituição passou a apagar só o que veio da **mesma origem**. `normalizeAmount` movido de `parsers/excel-csv.ts` para `format.ts` como `parseAmount` |
 | 9.4 | Aceleradores A. `lib/budget-copy.ts` concentra o miolo fora de `'use server'` (mesmo motivo da 9.3): `buildCopyDrafts` puro, `collectActuals`/`countCopiedSeries` recebendo o executor, `applyCopyToBudget` e `applyDuplicateVersion` recebendo o `tx`. Copiar do realizado tem dois eixos separados de propósito — **formato** (mês a mês preservando sazonalidade × média mensal) e **detalhamento** (categoria × categoria+dimensões) — em vez de um "granularidade" ambíguo. Mapeamento por número do mês (jan de origem → jan do exercício), daí o teto de 12 meses: com 13, dois janeiros disputariam o mesmo alvo. Direção entra na chave de agrupamento — compensar entrada com saída produziria mês de sinal trocado, e série tem uma direção só. Valores iguais viram `fixo` em vez de `sazonal` com N campos repetidos. Prévia+commit, e a gravação recalcula do zero. Duplicação num CTE único com `mapped AS MATERIALIZED` (sem isso `gen_random_uuid()` seria reavaliado na segunda referência e as ocorrências apontariam para o nada); `make_interval(years => delta)` desloca e já apara 29/02; o prazo de caixa é preservado em DIAS, não deslocado por ano |
 | 9.3 | Três escopos de edição e exclusão. `lib/budget-scope.ts` concentra a decisão (`planSeriesUpdate`, pura) e a execução (`applySeriesUpdate` / `applySeriesDelete`, recebem o `tx`) — fora de `'use server'` para serem exercitáveis direto contra o banco. Confirmação two-phase: a própria action devolve `{ needsConfirm: preview }` listando os **meses** afetados, e o checkbox de sobrescrita nasce desmarcado. Mudança estrutural promove o escopo para 'todas' sozinha; 'daqui' a partir da primeira ocorrência vira 'todas'. Bug encontrado ao desenhar o teste: em escopo parcial os valores gravados vinham da regra antiga — separado em `writeDrafts` (o que o usuário pediu) vs `ruleDrafts` (baseline do `adjusted_fields`) |
 | 9.2 | `getBudgetVsActual` (união por `categoryId:month`, filtros simétricos nos dois lados, 5 queries em paralelo) + `getBudgetDrillDown` + parâmetro `regime` em `getDreDrillDown`. Aba `comparacao-tab.tsx`: matriz 12 meses Tipo→Pai→Filho, toggle Competência/Caixa, seletor de modo de célula, colunas Orçado ano / Realizado YTD / Projeção ano / Var. proj., corte "Fechado até" recalculando a projeção sem refetch, drill-down duplo (orçado → ocorrências, realizado → `DrillDownDialog`). Três avisos de honestidade: realizado sem categoria, cobertura de dimensão <90%, cauda de caixa fora do exercício. Extrações movidas: `lib/dre-layout.ts` (`LAYOUT`, `buildBlocks` genérico), `financial/num-cell.tsx`, `transacoes-shared/dim-filter.tsx` (com `/dre` e `/fluxo` migrados no mesmo commit) |

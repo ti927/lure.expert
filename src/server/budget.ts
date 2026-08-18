@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { revalidatePath } from 'next/cache'
+import { z } from 'zod'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db'
 import {
@@ -38,7 +39,9 @@ import {
   budgetEntryUpdateSchema,
   copyActualsInputSchema,
   duplicateVersionInputSchema,
+  recurrenceChoiceSchema,
   BUDGET_STATUSES,
+  type RecurrenceChoice,
   type CopyActualsInput,
   type CopyActualsPreview,
   type DuplicateVersionInput,
@@ -66,14 +69,20 @@ import { generateMonthRange } from '@/lib/dre-calc'
 import { dimensionFilters } from '@/lib/sql-dimensions'
 import { expandSeries, fitsInFiscalYear, type RecurrenceInput } from '@/lib/budget-recurrence'
 import {
-  buildCopyDrafts, monthsBetween, collectActuals, countCopiedSeries,
-  applyCopyToBudget, applyDuplicateVersion, type CopiedSeriesDraft,
+  buildCopyDrafts, monthsBetween, collectActuals, countSeriesBySource,
+  applyDraftsToBudget, applyDuplicateVersion, type CopiedSeriesDraft,
 } from '@/lib/budget-copy'
+import {
+  parseBudgetCsv, buildRecurrenceCandidates, recurrenceToDraft, norm,
+  type BudgetCsvLookups, type BudgetCsvParseResult, type LeafCategoryInfo,
+  type RecurrenceCandidate,
+} from '@/lib/budget-import'
 import {
   planSeriesUpdate, applySeriesUpdate, applySeriesDelete, diffAdjustedFields, money,
   type SeriesRow, type EntryRow,
 } from '@/lib/budget-scope'
 import { monthLabel } from '@/lib/format'
+import { getFluxoData } from '@/server/fluxo'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1271,7 +1280,7 @@ export async function previewCopyActuals(
       targetTotals,
       semCategoria,
       inativas,
-      existingCopied: await countCopiedSeries(db, planned.input.versionId),
+      existingCopied: await countSeriesBySource(db, planned.input.versionId, 'copia_realizado'),
     },
   }
 }
@@ -1296,11 +1305,12 @@ export async function copyActualsToBudget(input: CopyActualsInput) {
   const notes = `Copiado do realizado de ${monthLabel(v.sourceFrom)} a ${monthLabel(v.sourceTo)}`
     + (v.adjustmentPct !== 0 ? ` com ${v.adjustmentPct > 0 ? '+' : ''}${v.adjustmentPct}%` : '')
 
-  const result = await db.transaction(tx => applyCopyToBudget(tx, {
+  const result = await db.transaction(tx => applyDraftsToBudget(tx, {
     organizationId,
     versionId:       v.versionId,
     userId,
     drafts,
+    source:          'copia_realizado',
     notes,
     replaceExisting: v.replaceExisting ?? false,
   }))
@@ -1369,5 +1379,212 @@ export async function duplicateBudgetVersion(sourceId: string, input: DuplicateV
 
   revalidatePath('/orcamento')
   return { success: true as const, id: result.versionId, series: result.series, entries: result.entries, shifted: delta }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACELERADORES B — planilha e recorrências detectadas
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// A validação linha a linha e a conversão dias → meses vivem em
+// `@/lib/budget-import`, puras. Daqui saem só os mapas de busca e a gravação.
+
+/** Os cadastros da organização, indexados como o parser precisa. */
+async function loadCsvLookups(organizationId: string): Promise<BudgetCsvLookups> {
+  const [cats, ccs, bus, les] = await Promise.all([
+    db.select({
+      id: categories.id, name: categories.name, code: categories.code,
+      type: categories.type, isActive: categories.isActive, parentId: categories.parentId,
+    }).from(categories).where(eq(categories.organizationId, organizationId)),
+    db.select({ id: costCenters.id, name: costCenters.name })
+      .from(costCenters).where(eq(costCenters.organizationId, organizationId)),
+    db.select({ id: businessUnits.id, name: businessUnits.name })
+      .from(businessUnits).where(eq(businessUnits.organizationId, organizationId)),
+    db.select({ id: legalEntities.id, name: legalEntities.name })
+      .from(legalEntities).where(eq(legalEntities.organizationId, organizationId)),
+  ])
+
+  const byCode = new Map<string, LeafCategoryInfo>()
+  const byName = new Map<string, LeafCategoryInfo[]>()
+
+  for (const c of cats) {
+    // Só folhas: natureza pai não recebe lançamento (mesma regra do manual).
+    if (!c.parentId) continue
+    const info: LeafCategoryInfo = {
+      id: c.id, name: c.name, code: c.code, type: c.type, isActive: c.isActive,
+    }
+    if (c.code) byCode.set(norm(c.code), info)
+    const key = norm(c.name)
+    byName.set(key, [...(byName.get(key) ?? []), info])
+  }
+
+  const flat = (rows: { id: string; name: string }[]) =>
+    new Map(rows.map(r => [norm(r.name), r.id]))
+
+  return {
+    byCode, byName,
+    costCenters:   flat(ccs),
+    businessUnits: flat(bus),
+    legalEntities: flat(les),
+  }
+}
+
+/** O que a planilha criaria, sem gravar nada. Linha inválida não invalida o arquivo. */
+export async function previewBudgetCsv(
+  versionId: string,
+  csv: string,
+): Promise<{ preview: BudgetCsvParseResult; existing: { series: number; total: number } } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const loaded = await loadEditableVersion(organizationId, versionId)
+  if ('error' in loaded) return { error: loaded.error }
+
+  const lookups = await loadCsvLookups(organizationId)
+  const preview = parseBudgetCsv(csv, lookups, loaded.version.fiscalYear)
+
+  return { preview, existing: await countSeriesBySource(db, versionId, 'csv') }
+}
+
+/**
+ * Importa a planilha. Recalcula do zero a partir do mesmo texto — a prévia
+ * serve para o usuário decidir, nunca como fonte do que se grava.
+ *
+ * Linhas inválidas ficam de fora e o retorno diz quantas. Importar 48 de 50 é
+ * mais útil do que recusar as 50 por causa de duas.
+ */
+export async function importBudgetCsv(
+  versionId: string,
+  csv: string,
+  options: { replaceExisting?: boolean } = {},
+) {
+  const { organizationId, userId } = await getAuthContext()
+
+  const loaded = await loadEditableVersion(organizationId, versionId)
+  if ('error' in loaded) return { error: loaded.error }
+
+  const lookups = await loadCsvLookups(organizationId)
+  const parsed = parseBudgetCsv(csv, lookups, loaded.version.fiscalYear)
+
+  if (parsed.fileError) return { error: parsed.fileError }
+  if (parsed.drafts.length === 0) return { error: 'Nenhuma linha válida para importar.' }
+  if (parsed.drafts.length > MAX_COPIED_SERIES) {
+    return { error: `A planilha tem ${parsed.drafts.length} linhas válidas, acima do limite de ${MAX_COPIED_SERIES}.` }
+  }
+
+  const result = await db.transaction(tx => applyDraftsToBudget(tx, {
+    organizationId,
+    versionId,
+    userId,
+    drafts:          parsed.drafts,
+    source:          'csv',
+    notes:           'Importado de planilha',
+    replaceExisting: options.replaceExisting ?? false,
+  }))
+
+  revalidatePath('/orcamento')
+  return { success: true as const, ...result, skipped: parsed.invalid }
+}
+
+/**
+ * As recorrências que o `/fluxo` detectou, preparadas para virar orçamento.
+ *
+ * Reusa `getFluxoData` em vez de repetir o SQL de detecção: os números que o
+ * usuário vê aqui têm de ser exatamente os que ele vê lá.
+ */
+export async function getRecurrenceCandidates(
+  versionId: string,
+): Promise<{ candidates: RecurrenceCandidate[] } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const loaded = await loadEditableVersion(organizationId, versionId)
+  if ('error' in loaded) return { error: loaded.error }
+
+  const [fluxo, aceitas] = await Promise.all([
+    getFluxoData(),
+    db.select({ description: budgetSeries.description })
+      .from(budgetSeries)
+      .where(and(
+        eq(budgetSeries.versionId, versionId),
+        eq(budgetSeries.source, 'recorrencia_detectada'),
+      )),
+  ])
+
+  return {
+    candidates: buildRecurrenceCandidates(
+      fluxo.recorrencias,
+      loaded.version.fiscalYear,
+      new Set(aceitas.map(a => norm(a.description))),
+    ),
+  }
+}
+
+/**
+ * Cria um lançamento para cada recorrência escolhida.
+ *
+ * A recorrência detectada não tem categoria — o `/fluxo` agrupa por descrição,
+ * não por plano de contas. Por isso a escolha da categoria vem do cliente e é
+ * obrigatória: sem ela o lançamento não apareceria em relatório nenhum.
+ *
+ * `replaceExisting` fica de fora de propósito: aceitar recorrência é ato
+ * incremental ("essa aqui também"), não um lote que se refaz inteiro.
+ */
+export async function acceptDetectedRecurrences(
+  versionId: string,
+  choices: RecurrenceChoice[],
+) {
+  const { organizationId, userId } = await getAuthContext()
+
+  const loaded = await loadEditableVersion(organizationId, versionId)
+  if ('error' in loaded) return { error: loaded.error }
+
+  const parsed = z.array(recurrenceChoiceSchema).min(1, 'Escolha ao menos uma recorrência.').safeParse(choices)
+  if (!parsed.success) return { error: parsed.error.issues[0].message }
+
+  // A lista é recalculada no servidor: o cliente manda a chave e a escolha, não
+  // o valor detectado nem as datas.
+  const listed = await getRecurrenceCandidates(versionId)
+  if ('error' in listed) return { error: listed.error }
+  const byKey = new Map(listed.candidates.map(c => [c.key, c]))
+
+  const drafts: CopiedSeriesDraft[] = []
+
+  for (const choice of parsed.data) {
+    const candidate = byKey.get(choice.key)
+    if (!candidate) return { error: 'Uma das recorrências não está mais na lista. Reabra o diálogo.' }
+    if (candidate.blocked) return { error: `"${candidate.descricao}": ${candidate.blocked}` }
+
+    const targetError = await validateTargetsBelongToOrg(organizationId, {
+      categoryId:     choice.categoryId,
+      costCenterId:   choice.costCenterId,
+      businessUnitId: null, legalEntityId: null, contactId: null,
+    })
+    if (targetError) return { error: `"${candidate.descricao}": ${targetError}` }
+
+    const [cat] = await db
+      .select({ name: categories.name, code: categories.code })
+      .from(categories)
+      .where(eq(categories.id, choice.categoryId))
+      .limit(1)
+
+    drafts.push(recurrenceToDraft(candidate, {
+      categoryId:   choice.categoryId,
+      categoryName: cat?.name ?? '',
+      categoryCode: cat?.code ?? null,
+      costCenterId: choice.costCenterId,
+      amount:       choice.amount,
+    }))
+  }
+
+  const result = await db.transaction(tx => applyDraftsToBudget(tx, {
+    organizationId,
+    versionId,
+    userId,
+    drafts,
+    source:          'recorrencia_detectada',
+    notes:           'Aceito das recorrências detectadas no fluxo',
+    replaceExisting: false,
+  }))
+
+  revalidatePath('/orcamento')
+  return { success: true as const, ...result }
 }
 

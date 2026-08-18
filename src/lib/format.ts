@@ -31,3 +31,51 @@ export function fmtMoney(value: number): string {
 export function fmtBRL(value: number): string {
   return `R$ ${MONEY.format(value)}`
 }
+
+/**
+ * Texto de planilha → número. `null` quando não dá para ler.
+ *
+ * Movido de `parsers/excel-csv.ts` na sessão 9.5, sem alteração de comportamento
+ * — o import de orçamento seria a segunda cópia, e o arquivo de origem carrega
+ * o SDK da Anthropic junto.
+ *
+ * Trata parênteses e prefixo como negativo, remove R$/espaços/+, e desambigua
+ * BR (1.234,56) de US (1,234.56) pela posição do último separador.
+ */
+export function parseAmount(s: string | undefined | null): number | null {
+  if (s === null || s === undefined) return null
+  let v = String(s).trim()
+  if (!v) return null
+
+  let negative = false
+  if (v.startsWith('(') && v.endsWith(')')) {
+    negative = true
+    v = v.slice(1, -1).trim()
+  }
+  if (v.startsWith('-')) {
+    negative = true
+    v = v.slice(1).trim()
+  }
+
+  v = v.replace(/R\$\s*/g, '').replace(/[+\s]/g, '')
+
+  const hasComma = v.includes(',')
+  const hasDot = v.includes('.')
+  if (hasComma && hasDot) {
+    if (v.lastIndexOf(',') > v.lastIndexOf('.')) {
+      // BR: 1.234,56
+      v = v.replace(/\./g, '').replace(',', '.')
+    } else {
+      // US: 1,234.56
+      v = v.replace(/,/g, '')
+    }
+  } else if (hasComma) {
+    v = v.replace(',', '.')
+  }
+  // só ponto → assume decimal (não mexe)
+
+  const n = Number(v)
+  if (Number.isNaN(n)) return null
+  const abs = Math.abs(n)
+  return negative ? -abs : abs
+}

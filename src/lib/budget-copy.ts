@@ -31,7 +31,9 @@ import { budgetSeries, budgetEntries } from '@/db/schema'
 import { expandSeries, round2, lastDayOfMonth, type RecurrenceInput } from './budget-recurrence'
 import { BP_TYPES } from './dre-types'
 import { money, type BudgetTx } from './budget-scope'
-import type { AmountMode, CopyActualsInput, CopyGranularity, CopyShape } from './budget-types'
+import type {
+  AmountMode, BudgetSource, CopyActualsInput, CopyGranularity, CopyShape,
+} from './budget-types'
 
 /** Uma linha do realizado agregada por (categoria, direção, dimensões, mês). */
 export interface ActualMonthRow {
@@ -95,6 +97,56 @@ interface Group {
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
+
+/** O que uma coluna de 12 meses vira, em termos de regra de série. */
+export interface MonthlyShape {
+  startMonth:      string
+  occurrences:     number
+  amountMode:      AmountMode
+  baseAmount:      number | null
+  seasonalAmounts: number[] | null
+  total:           number
+}
+
+/**
+ * Converte valores por mês do calendário na regra de uma série.
+ *
+ * O intervalo vai do primeiro ao último mês COM movimento; meses vazios no meio
+ * viram zero. Aparar as pontas evita ocorrências de R$ 0 em janeiro só porque a
+ * categoria começou em setembro. Valores todos iguais viram 'fixo' — o usuário
+ * edita um número só depois, em vez de N campos dizendo a mesma coisa.
+ *
+ * Devolve `null` quando não há nada com valor. Usado pela cópia do realizado
+ * (9.4) e pelo import de planilha (9.5) — as duas produzem a mesma forma de
+ * série a partir de uma grade de 12 meses.
+ */
+export function shapeMonthly(
+  byMonth: Map<number, number>,
+  fiscalYear: number,
+  factor = 1,
+): MonthlyShape | null {
+  const active = Array.from(byMonth.entries())
+    .filter(([, v]) => v !== 0)
+    .map(([m]) => m)
+    .sort((a, b) => a - b)
+
+  if (active.length === 0) return null
+
+  const first = active[0]
+  const span  = active[active.length - 1] - first + 1
+
+  const values = Array.from({ length: span }, (_, i) => round2((byMonth.get(first + i) ?? 0) * factor))
+  const uniform = values.every(v => v === values[0])
+
+  return {
+    startMonth:      `${fiscalYear}-${pad(first)}`,
+    occurrences:     span,
+    amountMode:      uniform ? 'fixo' : 'sazonal',
+    baseAmount:      uniform ? values[0] : null,
+    seasonalAmounts: uniform ? null : values,
+    total:           round2(values.reduce((acc, v) => acc + v, 0)),
+  }
+}
 
 /**
  * Agrupa o realizado e devolve os lançamentos a criar.
@@ -181,28 +233,10 @@ export function buildCopyDrafts(rows: ActualMonthRow[], opts: CopyShapeOptions):
     }
 
     // ── Mês a mês ──
-    // O intervalo vai do primeiro ao último mês COM movimento; meses vazios no
-    // meio viram zero. Aparar as pontas evita ocorrências de R$ 0 em janeiro só
-    // porque a categoria começou em setembro.
-    const months = Array.from(g.byMonth.keys()).sort((a, b) => a - b)
-    const first = months[0]
-    const last  = months[months.length - 1]
-    const span  = last - first + 1
+    const shape = shapeMonthly(g.byMonth, opts.fiscalYear, factor)
+    if (!shape) continue
 
-    const values = Array.from({ length: span }, (_, i) => round2((g.byMonth.get(first + i) ?? 0) * factor))
-    const uniform = values.every(v => v === values[0])
-
-    drafts.push({
-      ...common,
-      startMonth:      `${opts.fiscalYear}-${pad(first)}`,
-      occurrences:     span,
-      // Valores todos iguais viram 'fixo': o usuário edita um número só depois,
-      // em vez de N campos que dizem a mesma coisa.
-      amountMode:      uniform ? 'fixo' : 'sazonal',
-      baseAmount:      uniform ? values[0] : null,
-      seasonalAmounts: uniform ? null : values,
-      total:           round2(values.reduce((acc, v) => acc + v, 0)),
-    })
+    drafts.push({ ...common, ...shape })
   }
 
   return drafts.sort((a, b) =>
@@ -358,15 +392,19 @@ export async function collectActuals(
   }
 }
 
-/** O que já foi copiado antes para esta versão — alimenta a opção de substituir. */
-export async function countCopiedSeries(client: BudgetReader, versionId: string) {
+/** O que já veio dessa origem para esta versão — alimenta a opção de substituir. */
+export async function countSeriesBySource(
+  client: BudgetReader,
+  versionId: string,
+  source: BudgetSource,
+) {
   const [row] = await client.execute<{ series: number; total: string }>(sql`
     SELECT
       (SELECT COUNT(*) FROM budget_series s
-        WHERE s.version_id = ${versionId}::uuid AND s.source = 'copia_realizado')::int AS series,
+        WHERE s.version_id = ${versionId}::uuid AND s.source = ${source})::int AS series,
       COALESCE((SELECT SUM(e.amount) FROM budget_entries e
                   JOIN budget_series s ON e.series_id = s.id
-                 WHERE s.version_id = ${versionId}::uuid AND s.source = 'copia_realizado'), 0) AS total
+                 WHERE s.version_id = ${versionId}::uuid AND s.source = ${source}), 0) AS total
   `)
   return { series: Number(row?.series ?? 0), total: Number(row?.total ?? 0) }
 }
@@ -395,28 +433,33 @@ export function draftToRecurrence(d: CopiedSeriesDraft): RecurrenceInput {
 }
 
 /**
- * Grava os lançamentos copiados.
+ * Grava lançamentos gerados — serve a cópia do realizado (9.4), o import de
+ * planilha e as recorrências aceitas (9.5). O que muda entre elas é o `source`,
+ * e é por ele que a substituição apaga só o que veio da mesma origem: reimportar
+ * a planilha não pode levar junto o que foi copiado do realizado nem o que foi
+ * digitado à mão.
  *
- * Nenhuma ocorrência nasce ajustada: o percentual está embutido no valor da
- * REGRA, não é um override por ocorrência. `adjusted_fields` fica vazio e uma
- * edição em lote posterior funciona normalmente.
+ * Nenhuma ocorrência nasce ajustada: o valor está na REGRA, não é override por
+ * ocorrência. `adjusted_fields` fica vazio e uma edição em lote posterior
+ * funciona normalmente.
  *
  * As ocorrências saem de `expandSeries`, a mesma expansão do caminho manual —
- * um lançamento copiado e um digitado à mão com os mesmos parâmetros produzem
+ * um lançamento gerado e um digitado à mão com os mesmos parâmetros produzem
  * exatamente as mesmas linhas.
  */
-export async function applyCopyToBudget(
+export async function applyDraftsToBudget(
   tx: BudgetTx,
   params: {
     organizationId: string
     versionId:      string
     userId:         string | null
     drafts:         CopiedSeriesDraft[]
+    source:         BudgetSource
     notes:          string
     replaceExisting: boolean
   },
 ): Promise<{ series: number; entries: number; replaced: number }> {
-  const { organizationId, versionId, userId, drafts, notes } = params
+  const { organizationId, versionId, userId, drafts, source, notes } = params
 
   let replaced = 0
   if (params.replaceExisting) {
@@ -424,7 +467,7 @@ export async function applyCopyToBudget(
       DELETE FROM budget_series
       WHERE organization_id = ${organizationId}::uuid
         AND version_id      = ${versionId}::uuid
-        AND source          = 'copia_realizado'
+        AND source          = ${source}
       RETURNING id::text AS id
     `)
     replaced = gone.length
@@ -476,7 +519,7 @@ export async function applyCopyToBudget(
       adjustmentRate:  null,
       adjustmentEvery: 1,
       seasonalAmounts: draft.seasonalAmounts,
-      source:          'copia_realizado' as const,
+      source,
       notes,
       createdByUserId: userId,
     })))

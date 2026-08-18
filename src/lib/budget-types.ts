@@ -528,6 +528,15 @@ export interface CopyActualsPreviewRow {
   total:          number
 }
 
+/** Escolha do usuário para uma recorrência detectada que ele quer aceitar. */
+export const recurrenceChoiceSchema = z.object({
+  key:          z.string().min(1),
+  categoryId:   z.string().uuid('Escolha a categoria'),
+  costCenterId: uuidOrNull,
+  amount:       z.number().positive('Informe um valor maior que zero'),
+})
+export type RecurrenceChoice = z.infer<typeof recurrenceChoiceSchema>
+
 export interface CopyActualsPreview {
   rows:           CopyActualsPreviewRow[]
   monthsInSource: number

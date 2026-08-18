@@ -1,6 +1,7 @@
 import { parse } from 'csv-parse/sync'
 import * as XLSX from 'xlsx'
 import { anthropic } from '@/lib/anthropic'
+import { parseAmount } from '@/lib/format'
 
 export type StagingRow = {
   rowIndex: number
@@ -275,52 +276,6 @@ function normalizeDate(s: string | undefined | null): string | null {
   return null
 }
 
-function normalizeAmount(s: string | undefined | null): number | null {
-  if (s === null || s === undefined) return null
-  let v = String(s).trim()
-  if (!v) return null
-
-  // Detecta sinal negativo via parênteses ou prefixo
-  let negative = false
-  if (v.startsWith('(') && v.endsWith(')')) {
-    negative = true
-    v = v.slice(1, -1).trim()
-  }
-  if (v.startsWith('-')) {
-    negative = true
-    v = v.slice(1).trim()
-  }
-
-  // Remove R$, espaços, +
-  v = v.replace(/R\$\s*/g, '').replace(/[+\s]/g, '')
-
-  // Formato BR (1.234,56) vs US (1,234.56)
-  // Se tem vírgula seguida por exatamente 2 dígitos no fim e ponto antes, é BR
-  // Se tem ponto seguido por exatamente 2 dígitos no fim e vírgula antes, é US
-  // Se só tem vírgula → BR (vírgula decimal)
-  // Se só tem ponto → ambíguo, assume decimal
-  const hasComma = v.includes(',')
-  const hasDot = v.includes('.')
-  if (hasComma && hasDot) {
-    if (v.lastIndexOf(',') > v.lastIndexOf('.')) {
-      // BR: 1.234,56
-      v = v.replace(/\./g, '').replace(',', '.')
-    } else {
-      // US: 1,234.56
-      v = v.replace(/,/g, '')
-    }
-  } else if (hasComma) {
-    // BR só com vírgula decimal
-    v = v.replace(',', '.')
-  }
-  // só ponto → assume decimal (não mexe)
-
-  const n = Number(v)
-  if (Number.isNaN(n)) return null
-  const abs = Math.abs(n)
-  return negative ? -abs : abs
-}
-
 function deriveDirection(
   row: string[],
   mapping: ColumnMapping,
@@ -428,7 +383,7 @@ export async function parseExcelOrCsv(
 
     const date = mapping.date !== null ? normalizeDate(row[mapping.date]) : null
     const effectiveDate = mapping.effectiveDate !== null ? normalizeDate(row[mapping.effectiveDate]) : null
-    const amount = mapping.amount !== null ? normalizeAmount(row[mapping.amount]) : null
+    const amount = mapping.amount !== null ? parseAmount(row[mapping.amount]) : null
     const description = mapping.description !== null
       ? (row[mapping.description] ?? '').slice(0, 200) || null
       : null
