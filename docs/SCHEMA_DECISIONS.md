@@ -590,3 +590,57 @@ séries **daquela mesma origem**.
 o que foi copiado do realizado, e nenhuma das duas pode tocar no que foi digitado à mão. Aceitar
 recorrência não oferece substituição de propósito — é ato incremental ("essa aqui também"), não um
 lote que se refaz inteiro.
+
+### 13.14 — A terceira coluna da DRE troca de significado (Sessões 9.6–9.8)
+
+Cada mês da `/dre` tem uma coluna a mais, que **existe sempre** e muda de sentido conforme o
+orçamento esteja oculto ou visível:
+
+| Orçamento | Colunas do mês | A terceira é |
+|---|---|---|
+| **Oculto** | `Valor` · `AV%` | **variação vertical** — participação na Receita Líquida do mês |
+| **Visível** | `Real` · `Orç` · `Var%` | **variação horizontal** — desvio percentual sobre o orçado |
+
+As duas leituras nunca aparecem juntas. Mostrar as duas exigiria uma quarta subcoluna por mês
+(~3.700px de tabela), e a terceira troca de significado justamente para não acumular.
+
+**AV% é cinza; Var% é colorida.** A distinção não é estética: proporção não é julgamento. Pintar
+"Aluguel = 10,4% da receita" de verde inventaria um sinal que a coluna do valor, ao lado, já diz.
+O desvio sobre o orçado, sim, é julgamento — e segue a convenção do módulo, em que **positivo é
+favorável dos dois lados da DRE**: gastar menos que o previsto dá verde, faturar menos dá vermelho.
+
+**A AV% de uma linha de conta e a de um subtotal não são a mesma coisa.** Numa conta é *consumo*, e
+se lê em magnitude ("Habitação consome 30,3%"). Num subtotal é *margem*, e vai com sinal. Sem essa
+distinção, um EBITDA de −11,6% aparece como "11,6%" — indistinguível de uma margem positiva, no
+exato mês em que o número mais importa. O caso foi encontrado nos dados reais (mai/2026, com SGA em
+111,6% da receita líquida) e é o que motivou o parâmetro `signed` de `verticalShare`.
+
+**Consequência conhecida da magnitude:** quando um pai tem filhos de sinais opostos (um estorno
+junto de despesas), as AV% dos filhos não somam a do pai. Medido nos dados reais: 213 grupos
+pai→mês batem, 6 não. É inerente a ler magnitude, não é defeito de cálculo.
+
+**A terceira coluna nunca é clicável.** `Valor`/`Real` abrem as transações, `Orç` abre o orçamento;
+um terceiro destino para uma proporção ou um desvio seria adivinhação. O tooltip da célula mostra os
+números que originaram o cálculo.
+
+### 13.15 — União realizado ∪ orçado na DRE (Sessão 9.7)
+
+`getDreData` devolve só categorias com realizado. Ligar o orçamento faz a malha unir os dois lados
+por `categoryId:month`, porque **categoria orçada e não realizada tem de aparecer** — "orcei R$ 10
+mil em marketing e não gastei nada" é a descoberta mais valiosa da tela, e a interseção a esconderia.
+
+A malha trabalha sempre com um par `{realizado, orcado}`, mesmo com o orçamento desligado (aí
+`orcado` é 0). Um caminho de código só: duas árvores de renderização divergiriam no primeiro ajuste.
+
+**Célula zerada dos dois lados não vira linha** — mas só quando o zero vem do orçado. O orçamento
+tem ocorrências de valor 0 por construção: `shapeMonthly` preenche com zero os meses de buraco de
+uma série sazonal (13.11), e sem essa guarda elas trariam para a DRE categorias inteiras sem nada a
+mostrar. Célula zerada vinda do **realizado** continua aparecendo: já era o comportamento da tela
+(categoria com estorno que zera o mês), e mudá-lo seria alterar a DRE sem ninguém pedir.
+
+**A leitura do orçado é a mesma dos dois lados.** `fetchBudgetRows`, em `src/lib/budget-read.ts`,
+serve a `getBudgetVsActual` e a `getBudgetForPeriod`. Não é economia de linhas: a conciliação
+verificada na 9.2 — o orçado da aba bate célula a célula com a DRE — só continua valendo se as duas
+telas lerem pela mesma query. Uma segunda query "parecida" divergiria no primeiro filtro que alguém
+esquecesse de replicar. Pelo mesmo motivo os filtros de dimensão vão **idênticos** para os dois
+lados: filtrar só o orçado é o que faz a variação parecer melhor do que é.

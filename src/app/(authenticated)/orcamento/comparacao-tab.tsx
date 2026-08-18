@@ -3,17 +3,16 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Loader2, Target, X } from 'lucide-react'
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/states/empty-state'
 import { PartialDataBanner } from '@/components/states/partial-data-banner'
 import { Num } from '@/components/financial/num-cell'
 import { DimFilter } from '@/components/transacoes-shared/dim-filter'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
+import { BudgetDrillDownDialog } from '@/components/budget/budget-drilldown-dialog'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import { cn } from '@/lib/utils'
-import { fmtNum, fmtMoney, monthLabel, dateLabel } from '@/lib/format'
+import { fmtMoney, monthLabel } from '@/lib/format'
 import { LAYOUT, BELOW_LAYOUT, buildBlocks, type LayoutSection } from '@/lib/dre-layout'
 import { computeSubtotals, type SubtotalRow } from '@/lib/dre-calc'
 import { DRE_TYPE_LABELS, type DrillDownTransaction, type LeafCategory } from '@/lib/dre-types'
@@ -79,9 +78,12 @@ interface Props {
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
   leafCategories: LeafCategory[]
+  contactOptions: SimpleDimensionItem[]
 }
 
-export function ComparacaoTab({ version, costCenters, businessUnits, legalEntities, leafCategories }: Props) {
+export function ComparacaoTab({
+  version, costCenters, businessUnits, legalEntities, leafCategories, contactOptions,
+}: Props) {
   const fy = version.fiscalYear
 
   const [regime, setRegime] = useState<BudgetRegime>('competencia')
@@ -590,63 +592,29 @@ export function ComparacaoTab({ version, costCenters, businessUnits, legalEntiti
       )}
 
       {/* ── Drill-down do orçado ── */}
-      <Dialog open={!!budgetDrill} onOpenChange={o => { if (!o) { setBudgetDrill(null); setBudgetData(null) } }}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle>
-              {budgetDrill?.title}
-              <span className="ml-2 text-xs font-normal text-muted-foreground">{budgetDrill?.subtitle} · orçado</span>
-            </DialogTitle>
-          </DialogHeader>
-
-          {isDrilling || !budgetData ? (
-            <div className="py-10 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-          ) : budgetData.length === 0 ? (
-            <p className="py-10 text-center text-xs text-muted-foreground">Nada orçado nesta célula.</p>
-          ) : (
-            <>
-              <div className="flex-1 min-h-0 overflow-auto border rounded-lg">
-                <table className="w-full text-xs border-collapse [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0">
-                  <thead className="sticky top-0 z-10">
-                    <tr className="bg-muted border-b">
-                      <th className="text-left font-medium px-2 py-1.5">Descrição</th>
-                      <th className="text-left font-medium px-2 py-1.5 w-28">Competência</th>
-                      <th className="text-left font-medium px-2 py-1.5 w-28">Caixa</th>
-                      <th className="text-left font-medium px-2 py-1.5 w-32">Centro de custo</th>
-                      <th className="text-right font-medium px-2 py-1.5 w-32">Valor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {budgetData.map(e => (
-                      <tr key={e.id} className="border-b last:border-b-0">
-                        <td className="px-2 py-1">
-                          {e.description}
-                          {e.adjusted && (
-                            <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-amber-500/15 text-amber-600">ajustada</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1 tabular-nums">{dateLabel(e.competenceDate)}</td>
-                        <td className="px-2 py-1 tabular-nums">{dateLabel(e.cashDate)}</td>
-                        <td className="px-2 py-1 text-muted-foreground truncate">{e.costCenterName ?? '—'}</td>
-                        <td className={cn('px-2 py-1 text-right tabular-nums',
-                          e.direction === 'inflow' ? 'text-emerald-700' : 'text-rose-600')}>
-                          {fmtMoney(e.amount)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex items-center justify-between text-xs pt-2">
-                <span className="text-muted-foreground">{budgetData.length} ocorrências</span>
-                <span className="tabular-nums font-medium">
-                  Total: {fmtNum(budgetData.reduce((s, e) => s + (e.direction === 'inflow' ? e.amount : -e.amount), 0))}
-                </span>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      {budgetDrill && (
+        <BudgetDrillDownDialog
+          open
+          onOpenChange={o => { if (!o) { setBudgetDrill(null); setBudgetData(null) } }}
+          title={budgetDrill.title}
+          subtitle={budgetDrill.subtitle}
+          data={budgetData}
+          loading={isDrilling}
+          edit={{
+            versionId: version.id,
+            fiscalYear: fy,
+            readOnlyReason: version.status === 'arquivado'
+              ? 'Versão arquivada — duplique-a para editar.'
+              : null,
+            leafCategories,
+            costCenters,
+            businessUnits,
+            legalEntities,
+            contactOptions,
+            onSaved: () => { setBudgetDrill(null); setBudgetData(null); fetchData() },
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -25,7 +25,7 @@ import {
 import {
   getBudgetSeriesEntries, deleteBudgetSeries, deleteBudgetEntry, updateBudgetEntry,
 } from '@/server/budget'
-import { SeriesDialog } from './series-dialog'
+import { SeriesDialog } from '@/components/budget/series-dialog'
 
 // Chave própria: `lure:orcamento:filters` guarda versão + aba no shell.
 const STORAGE_KEY = 'lure:orcamento:planejamento:filters'

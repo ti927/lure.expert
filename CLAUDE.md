@@ -168,13 +168,13 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.5 ✅). Em andamento: **orçado dentro da
-DRE** (9.6 ✅, 9.7 🔲, 9.8 🔲). Fases 0–7 **100% concluídas**.
+**Status:** Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.5 ✅). **Orçado dentro da DRE
+concluído** (9.6, 9.7, 9.8 ✅). Fases 0–7 **100% concluídas**.
 
 **Sessões — orçado na DRE:**
 - ✅ 9.6: Terceira coluna por mês + análise vertical (AV% sobre a Receita Líquida). Cabeçalho de duas linhas, `verticalShare` em `lib/dre-calc.ts`, `tone="muted"` no `Num`
 - ✅ 9.7: Orçado lado a lado — botão Orçamento + seletor de versão na barra; a terceira coluna vira Var%. `lib/budget-read.ts` (`fetchBudgetRows`) é a MESMA query que a aba Orçado × Realizado usa
-- 🔲 9.8: Drill-down do orçado na DRE + edição do lançamento pelo `SeriesDialog`
+- ✅ 9.8: Drill-down do orçado na DRE + edição do lançamento pelo `SeriesDialog`. `components/budget/` reúne `series-dialog`, `scope-confirm-dialog` e o novo `budget-drilldown-dialog` (extraído da aba de comparação)
 
 **A regra da terceira coluna:** ela existe sempre e troca de significado. Orçamento **oculto** → `Valor`
 + `AV%` (variação vertical, participação na Receita Líquida). Orçamento **visível** → `Real` + `Orç` +

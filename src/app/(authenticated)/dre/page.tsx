@@ -2,7 +2,9 @@ import type { Metadata } from 'next'
 import { getDreData } from '@/server/dre'
 
 export const metadata: Metadata = { title: 'DRE' }
-import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories } from '@/server/dimensions'
+import {
+  getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories, getContactOptions,
+} from '@/server/dimensions'
 import { listBudgetVersions } from '@/server/budget'
 import { DreClient } from './dre-client'
 
@@ -21,13 +23,16 @@ function defaultRange() {
 export default async function DrePage() {
   const { from, to } = defaultRange()
 
-  const [data, costCenters, businessUnits, legalEntities, leafCategories, budgetVersions] = await Promise.all([
+  const [
+    data, costCenters, businessUnits, legalEntities, leafCategories, budgetVersions, contactOptions,
+  ] = await Promise.all([
     getDreData({ from, to }),
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
     getLeafCategories(),
     listBudgetVersions(),
+    getContactOptions(),
   ])
 
   return (
@@ -40,6 +45,7 @@ export default async function DrePage() {
       legalEntities={legalEntities.filter(l => l.isActive)}
       leafCategories={leafCategories}
       budgetVersions={budgetVersions}
+      contactOptions={contactOptions}
     />
   )
 }

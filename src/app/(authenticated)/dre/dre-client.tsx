@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
 import { getDreData, getDreDrillDown } from '@/server/dre'
-import { getBudgetForPeriod } from '@/server/budget'
+import { getBudgetForPeriod, getBudgetDrillDown } from '@/server/budget'
 import type {
   DreData, DreMonthSubtotals, DrillDownTransaction, LeafCategory,
 } from '@/lib/dre-types'
@@ -18,8 +18,9 @@ import type { LayoutSection, ParentNode, SectionBlock, BlockSourceRow } from '@/
 import { LAYOUT, BELOW_LAYOUT, buildBlocks } from '@/lib/dre-layout'
 import { computeSubtotals, verticalShare, type SubtotalRow } from '@/lib/dre-calc'
 import type { BudgetPeriodRow } from '@/lib/budget-read'
-import type { BudgetVersionListItem } from '@/lib/budget-types'
+import type { BudgetVersionListItem, BudgetDrillDownEntry } from '@/lib/budget-types'
 import { BUDGET_STATUS_LABELS } from '@/lib/budget-types'
+import { BudgetDrillDownDialog } from '@/components/budget/budget-drilldown-dialog'
 import { fmtNum, fmtPct, fmtPctSigned, monthLabel } from '@/lib/format'
 import { Num } from '@/components/financial/num-cell'
 import { DimFilter } from '@/components/transacoes-shared/dim-filter'
@@ -202,11 +203,12 @@ interface Props {
   legalEntities: LegalEntity[]
   leafCategories: LeafCategory[]
   budgetVersions: BudgetVersionListItem[]
+  contactOptions: SimpleDimensionItem[]
 }
 
 export function DreClient({
   initialData, initialFrom, initialTo,
-  costCenters, businessUnits, legalEntities, leafCategories, budgetVersions,
+  costCenters, businessUnits, legalEntities, leafCategories, budgetVersions, contactOptions,
 }: Props) {
   const [data, setData] = useState(initialData)
   const [isPending, startTransition] = useTransition()
@@ -319,6 +321,11 @@ export function DreClient({
   const [drillDownData, setDrillDownData] = useState<DrillDownTransaction[] | null>(null)
   const [isDrillLoading, startDrillTransition] = useTransition()
 
+  // ── Drill-down do orçado ──
+  const [budgetDrill, setBudgetDrill] = useState<{ title: string; subtitle: string } | null>(null)
+  const [budgetDrillData, setBudgetDrillData] = useState<BudgetDrillDownEntry[] | null>(null)
+  const [isBudgetDrilling, startBudgetDrill] = useTransition()
+
   function toggleParent(parentId: string) {
     setCollapsedParents(prev => {
       const next = new Set(prev)
@@ -350,6 +357,37 @@ export function DreClient({
   function closeDrillDown() {
     setDrillDown(null)
     setDrillDownData(null)
+  }
+
+  const dimArgs = useMemo(() => ({
+    costCenterIds: selCc.length ? selCc : undefined,
+    businessUnitIds: selBu.length ? selBu : undefined,
+    legalEntityIds: selLe.length ? selLe : undefined,
+  }), [selCc, selBu, selLe])
+
+  /** Clique na subcoluna Orç. `month` nulo é a coluna Total. */
+  function openBudgetDrill(categoryId: string, categoryName: string, month: string | null) {
+    if (!versionId) return
+    const range = month
+      ? (() => {
+          const [y, m] = month.split('-').map(Number)
+          const last = new Date(y, m, 0).getDate()
+          return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, '0')}` }
+        })()
+      : currentRange
+
+    setBudgetDrill({
+      title: categoryName,
+      subtitle: month
+        ? monthLabel(month)
+        : `${monthLabel(fromMonth)} a ${monthLabel(toMonth)}`,
+    })
+    setBudgetDrillData(null)
+    startBudgetDrill(async () => {
+      setBudgetDrillData(
+        await getBudgetDrillDown(versionId, categoryId, 'competencia', range, dimArgs),
+      )
+    })
   }
 
   const subtotalsByMonth = useMemo(() => {
@@ -677,6 +715,7 @@ export function DreClient({
                   toggleParent={toggleParent}
                   openDrillDown={openDrillDown}
                   openDrillDownTotal={openDrillDownTotal}
+                  openBudgetDrill={openBudgetDrill}
                   nCols={nCols}
                 />
               ))}
@@ -699,6 +738,7 @@ export function DreClient({
                 toggleParent={toggleParent}
                 openDrillDown={openDrillDown}
                 openDrillDownTotal={openDrillDownTotal}
+                openBudgetDrill={openBudgetDrill}
                 nCols={nCols}
               />
             </tbody>
@@ -711,6 +751,32 @@ export function DreClient({
         <div className="shrink-0 px-6 py-2 flex items-center gap-4 text-[11px] text-muted-foreground border-t">
           <span>Variação positiva é favorável — vale para receita e para despesa.</span>
         </div>
+      )}
+
+      {/* ── Drill-down do orçado, com edição do lançamento ── */}
+      {budgetDrill && selectedVersion && (
+        <BudgetDrillDownDialog
+          open
+          onOpenChange={o => { if (!o) { setBudgetDrill(null); setBudgetDrillData(null) } }}
+          title={budgetDrill.title}
+          subtitle={budgetDrill.subtitle}
+          data={budgetDrillData}
+          loading={isBudgetDrilling}
+          edit={{
+            versionId: selectedVersion.id,
+            fiscalYear: selectedVersion.fiscalYear,
+            readOnlyReason: selectedVersion.status === 'arquivado'
+              ? 'Versão arquivada — duplique-a para editar.'
+              : null,
+            leafCategories,
+            costCenters,
+            businessUnits,
+            legalEntities,
+            contactOptions,
+            // Editar aqui muda o orçado da malha: recarrega os dois.
+            onSaved: () => { setBudgetDrill(null); setBudgetDrillData(null); fetchData() },
+          }}
+        />
       )}
 
       {/* ── Drill-down dialog ── */}
@@ -772,12 +838,13 @@ interface BlockProps {
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
   openDrillDownTotal: (categoryId: string, categoryName: string) => void
+  openBudgetDrill: (categoryId: string, categoryName: string, month: string | null) => void
   nCols: number
 }
 
 function LayoutBlock({
   section, rows, months, subtotalsByMonth, subtotalsOrcado, avBase, budgetOn,
-  collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols,
+  collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, openBudgetDrill, nCols,
 }: BlockProps) {
   const blocks = useMemo(
     () => buildBlocks(rows, section.types, (r: CellRow) => ({ realizado: r.realizado, orcado: r.orcado })),
@@ -808,6 +875,7 @@ function LayoutBlock({
           toggleParent={toggleParent}
           openDrillDown={openDrillDown}
           openDrillDownTotal={openDrillDownTotal}
+          openBudgetDrill={openBudgetDrill}
           nCols={nCols}
         />
       ))}
@@ -849,12 +917,13 @@ interface TypeBlockProps {
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
   openDrillDownTotal: (categoryId: string, categoryName: string) => void
+  openBudgetDrill: (categoryId: string, categoryName: string, month: string | null) => void
   nCols: number
 }
 
 function TypeBlock({
   block, months, avBase, budgetOn, collapsedParents, toggleParent,
-  openDrillDown, openDrillDownTotal, nCols,
+  openDrillDown, openDrillDownTotal, openBudgetDrill, nCols,
 }: TypeBlockProps) {
   return (
     <>
@@ -875,6 +944,7 @@ function TypeBlock({
           onToggle={() => toggleParent(parent.parentId)}
           openDrillDown={openDrillDown}
           openDrillDownTotal={openDrillDownTotal}
+          openBudgetDrill={openBudgetDrill}
         />
       ))}
     </>
@@ -892,10 +962,12 @@ interface ParentBlockProps {
   onToggle: () => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
   openDrillDownTotal: (categoryId: string, categoryName: string) => void
+  openBudgetDrill: (categoryId: string, categoryName: string, month: string | null) => void
 }
 
 function ParentBlock({
-  parent, months, avBase, budgetOn, isCollapsed, onToggle, openDrillDown, openDrillDownTotal,
+  parent, months, avBase, budgetOn, isCollapsed, onToggle,
+  openDrillDown, openDrillDownTotal, openBudgetDrill,
 }: ParentBlockProps) {
   const parentByMonth = useMemo(() => {
     const result: Record<string, Cell> = {}
@@ -954,6 +1026,7 @@ function ParentBlock({
           bold
           light
           onValue={singleChild ? m => openDrillDown(singleChild.categoryId, singleChild.categoryName, m) : undefined}
+          onBudget={singleChild ? m => openBudgetDrill(singleChild.categoryId, singleChild.categoryName, m) : undefined}
         />
         <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold border-l border-slate-300 text-muted-foreground/50">
           {parentTotal.realizado === 0 ? '—' : fmtNum(parentTotal.realizado)}
@@ -999,6 +1072,7 @@ function ParentBlock({
               budgetOn={budgetOn}
               light
               onValue={m => openDrillDown(child.categoryId, child.categoryName, m)}
+              onBudget={m => openBudgetDrill(child.categoryId, child.categoryName, m)}
             />
             <td
               className={cn(
@@ -1012,7 +1086,15 @@ function ParentBlock({
               {childTotal.realizado === 0 ? '—' : fmtNum(childTotal.realizado)}
             </td>
             {budgetOn && (
-              <td className="px-3 py-[3px] text-right tabular-nums text-xs text-muted-foreground/60">
+              <td
+                className={cn(
+                  'px-3 py-[3px] text-right tabular-nums text-xs',
+                  childTotal.orcado !== 0
+                    ? 'text-muted-foreground/60 cursor-pointer hover:text-foreground hover:underline underline-offset-2'
+                    : 'text-muted-foreground/40',
+                )}
+                onClick={childTotal.orcado !== 0 ? () => openBudgetDrill(child.categoryId, child.categoryName, null) : undefined}
+              >
                 {childTotal.orcado === 0 ? '—' : fmtNum(childTotal.orcado)}
               </td>
             )}

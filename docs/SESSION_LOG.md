@@ -6,6 +6,30 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.8 — Drill-down do orçado e edição pela DRE
+
+Fecha o ciclo: quem vê o desvio na DRE corrige a previsão ali mesmo, sem trocar de tela.
+
+**Entregue:**
+- [src/components/budget/budget-drilldown-dialog.tsx](src/components/budget/budget-drilldown-dialog.tsx) — extraído de `comparacao-tab.tsx`, onde estava embutido. Ganhou um botão de edição por ocorrência.
+- [src/components/budget/](src/components/budget/) — `series-dialog.tsx` e `scope-confirm-dialog.tsx` **movidos** de `app/(authenticated)/orcamento/`. A DRE precisa do primeiro, e importar de dentro da pasta de outra rota acoplaria as duas telas — mesmo motivo que criou `components/transacoes-shared/`.
+- [src/server/budget.ts](src/server/budget.ts) — `getBudgetSeries(seriesId)`, uma linha só, para abrir a edição a partir de um `seriesId` solto. Delega para `listBudgetSeries` com filtro, para as duas telas mostrarem exatamente os mesmos campos.
+- [dre-client.tsx](src/app/(authenticated)/dre/dre-client.tsx) — clique na subcoluna `Orç` (por mês e no Total) abre o diálogo; salvar recarrega a malha.
+- [comparacao-tab.tsx](src/app/(authenticated)/orcamento/comparacao-tab.tsx) — migrada para o componente extraído no mesmo commit, e ganhou a edição de brinde.
+
+**Decisões de desenho:**
+- **A edição é opcional no componente.** Sem a prop `edit`, o diálogo é somente leitura e a coluna de ação nem aparece — quem embutir isso em outra tela decide.
+- **Versão arquivada mostra o motivo em vez de um botão morto.** A action recusaria de qualquer jeito; dizer antes evita o usuário digitar para depois levar erro.
+- **`versionId` vem de quem abriu.** `BudgetSeriesListItem` não carrega a versão, e a alternativa — mudar o tipo e a query de listagem — seria mexer em duas telas por um dado que o chamador já tem em mãos.
+
+**Verificação — 6 asserções, todas contra o banco real:**
+- **282 células conferidas uma a uma**, somando as **470 ocorrências** que as compõem: a soma do diálogo bate com o valor da célula em todas, sem nenhuma divergente e sem célula sem ocorrência. É a propriedade que sustenta a tela — se a lista somasse diferente do número clicado, o usuário confere uma vez, vê divergir, e não confia em mais nenhum número.
+- Integridade do que o botão de edição carrega: nenhuma ocorrência aponta para série inexistente, para série de outra organização, ou para série de outra versão.
+
+`tsc` limpo e `npm run build` verde (`/dre` 7,87 → 8,69 kB; `/orcamento` 29,4 → 21,3 kB com a extração). **Não verificado automaticamente:** o clique na UI — abrir o diálogo, editar e ver a malha atualizar exige sessão autenticada.
+
+---
+
 ### ✅ Sessão 9.7 — Orçado lado a lado na DRE
 
 A terceira coluna criada na 9.6 troca de significado: com o orçamento ligado, cada mês vira `Real` · `Orç` · `Var%`, e a AV% dá lugar ao desvio sobre o orçado.

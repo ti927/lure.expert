@@ -21,7 +21,7 @@ import type { LegalEntity } from '@/db/schema/legal-entities'
 import { PlanejamentoTab } from './planejamento-tab'
 import { ComparacaoTab } from './comparacao-tab'
 import { VersoesTab } from './versoes-tab'
-import { SeriesDialog } from './series-dialog'
+import { SeriesDialog } from '@/components/budget/series-dialog'
 import { CopyActualsDialog } from './copy-actuals-dialog'
 import { ImportCsvDialog } from './import-csv-dialog'
 import { RecurrencesDialog } from './recurrences-dialog'
@@ -273,6 +273,7 @@ export function OrcamentoClient({
               businessUnits={businessUnits}
               legalEntities={legalEntities}
               leafCategories={leafCategories}
+              contactOptions={contactOptions}
             />
           ) : (
             <div className="h-full flex items-center justify-center px-6">

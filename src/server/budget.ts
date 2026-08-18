@@ -499,6 +499,28 @@ export async function listBudgetSeries(versionId: string): Promise<BudgetSeriesL
   }))
 }
 
+/**
+ * Uma série pelo id, no formato que o `SeriesDialog` consome.
+ *
+ * Existe para abrir a edição a partir de um drill-down, onde só se conhece o
+ * `seriesId`: `listBudgetSeries` traria centenas de linhas para preencher um
+ * diálogo. Reusa a mesma query com um filtro a mais, para as duas telas
+ * mostrarem exatamente os mesmos campos.
+ */
+export async function getBudgetSeries(seriesId: string): Promise<BudgetSeriesListItem | null> {
+  const { organizationId } = await getAuthContext()
+
+  const [row] = await db
+    .select({ versionId: budgetSeries.versionId })
+    .from(budgetSeries)
+    .where(and(eq(budgetSeries.id, seriesId), eq(budgetSeries.organizationId, organizationId)))
+    .limit(1)
+  if (!row) return null
+
+  const all = await listBudgetSeries(row.versionId)
+  return all.find(s => s.id === seriesId) ?? null
+}
+
 export async function getBudgetSeriesEntries(seriesId: string): Promise<BudgetEntryListItem[]> {
   const { organizationId } = await getAuthContext()
 
