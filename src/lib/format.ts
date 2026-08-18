@@ -32,6 +32,18 @@ export function fmtBRL(value: number): string {
   return `R$ ${MONEY.format(value)}`
 }
 
+const PCT = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+
+/** '30,3%' — sem sinal. Para proporções, como a análise vertical da DRE. */
+export function fmtPct(value: number): string {
+  return `${PCT.format(value)}%`
+}
+
+/** '+28,8%' — com sinal explícito. Para variações, onde a direção é o recado. */
+export function fmtPctSigned(value: number): string {
+  return `${value > 0 ? '+' : ''}${PCT.format(value)}%`
+}
+
 /**
  * Texto de planilha → número. `null` quando não dá para ler.
  *

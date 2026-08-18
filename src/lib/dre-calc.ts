@@ -31,6 +31,29 @@ export function generateMonthRange(from: string, to: string): string[] {
   return months
 }
 
+/**
+ * Análise vertical: quanto um valor representa da base, em percentual.
+ *
+ * Duas leituras, e a diferença entre elas importa:
+ *
+ * - **Linha de conta (`signed = false`)** — é CONSUMO, e se lê em magnitude, do
+ *   jeito da DRE clássica: "Habitação consome 30,3% da receita", não "−30,3%".
+ *   O sinal já está na coluna do valor, ao lado.
+ *
+ * - **Linha de subtotal (`signed = true`)** — é MARGEM, e aí o sinal é o recado.
+ *   Sem ele, um EBITDA de −11,6% aparece como "11,6%", idêntico a uma margem
+ *   positiva de 11,6% — caso real encontrado nos dados de teste (mai/2026, com
+ *   SGA em 111,6% da receita líquida).
+ *
+ * Base zero devolve 0, que a célula renderiza como travessão — nunca `Infinity`
+ * nem `NaN`.
+ */
+export function verticalShare(value: number, base: number, signed = false): number {
+  if (base === 0) return 0
+  const pct = (Math.abs(value) / Math.abs(base)) * 100
+  return signed && value < 0 ? -pct : pct
+}
+
 export function sumByTypes(month: string, rows: readonly SubtotalRow[], types: DreType[]): number {
   return rows
     .filter(r => r.month === month && types.includes(r.categoryType))

@@ -14,6 +14,12 @@ interface NumCellProps {
   light?: boolean
   /** Linha de fundo escuro: inverte a paleta para tons claros. */
   inverted?: boolean
+  /**
+   * `'sign'` (padrão) colore por sinal. `'muted'` é para números que NÃO são
+   * julgamento — a análise vertical da DRE é proporção, e pintar "Aluguel =
+   * 10,4% da receita" de verde inventaria um sinal que não existe.
+   */
+  tone?: 'sign' | 'muted'
   /** Sobrescreve a cor do zero (o /fluxo usa um tom fixo). */
   zeroClassName?: string
   /** Formatação alternativa do número (ex.: percentual). */
@@ -24,7 +30,7 @@ interface NumCellProps {
 }
 
 export function Num({
-  value, bold, light, inverted, zeroClassName, format, className, title, onClick,
+  value, bold, light, inverted, tone = 'sign', zeroClassName, format, className, title, onClick,
 }: NumCellProps) {
   const isZero = value === 0
   const clickable = !isZero && !!onClick
@@ -32,6 +38,8 @@ export function Num({
   let colorClass: string
   if (isZero) {
     colorClass = zeroClassName ?? (light ? 'text-muted-foreground/25' : 'text-muted-foreground/40')
+  } else if (tone === 'muted') {
+    colorClass = inverted ? 'text-slate-300' : 'text-muted-foreground'
   } else if (inverted) {
     colorClass = value > 0 ? 'text-emerald-300' : 'text-rose-300'
   } else {

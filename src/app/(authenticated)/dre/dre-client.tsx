@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useMemo, useEffect } from 'react'
+import { Fragment, useState, useTransition, useMemo, useEffect } from 'react'
 import {
   X, Loader2, BarChart3,
   ChevronRight, ChevronDown, ChevronsDown, ChevronsUp,
@@ -15,7 +15,8 @@ import type {
 import { DRE_TYPE_LABELS } from '@/lib/dre-types'
 import type { LayoutSection, ParentNode, SectionBlock } from '@/lib/dre-layout'
 import { LAYOUT, BELOW_LAYOUT, buildBlocks } from '@/lib/dre-layout'
-import { fmtNum, monthLabel } from '@/lib/format'
+import { verticalShare } from '@/lib/dre-calc'
+import { fmtNum, fmtPct, monthLabel } from '@/lib/format'
 import { Num } from '@/components/financial/num-cell'
 import { DimFilter } from '@/components/transacoes-shared/dim-filter'
 import type { CostCenter } from '@/db/schema/cost-centers'
@@ -33,8 +34,48 @@ type DrillDownState = {
 }
 
 const COL_W = 96
+const AV_COL_W = 62
 const TOTAL_COL_W = 106
 const LABEL_W = 260
+
+/**
+ * Base da análise vertical: a Receita Líquida de cada mês e a do período.
+ *
+ * A DRE clássica lê "esta conta consome X% da receita líquida". A base sai dos
+ * subtotais que a tela já calcula — nenhum dado novo do servidor.
+ */
+interface AvBase {
+  byMonth: Record<string, number>
+  total:   number
+}
+
+/**
+ * A célula de AV%. Sempre em cinza — proporção não é julgamento, e pintar de
+ * verde ou vermelho inventaria um sinal que a coluna do valor, ao lado, já diz.
+ *
+ * `signed` é para as linhas de subtotal, onde a AV% é margem e não consumo:
+ * ali o sinal é o recado, e uma margem negativa não pode aparecer como positiva.
+ */
+function AvCell({ value, base, signed, bold, light, inverted }: {
+  value: number
+  base: number
+  signed?: boolean
+  bold?: boolean
+  light?: boolean
+  inverted?: boolean
+}) {
+  return (
+    <Num
+      value={verticalShare(value, base, signed)}
+      format={fmtPct}
+      tone="muted"
+      bold={bold}
+      light={light}
+      inverted={inverted}
+      className="px-2"
+    />
+  )
+}
 
 // ─── DreClient ────────────────────────────────────────────────────────────────
 
@@ -184,7 +225,20 @@ export function DreClient({
 
   const hasDimFilters = selCc.length > 0 || selBu.length > 0 || selLe.length > 0
   const { months, rows } = data
-  const nCols = months.length + 3  // label + months + Total + Média
+
+  const avBase: AvBase = useMemo(() => {
+    const byMonth: Record<string, number> = {}
+    let total = 0
+    for (const m of months) {
+      const v = subtotalsByMonth.get(m)?.receitaLiquida ?? 0
+      byMonth[m] = v
+      total += v
+    }
+    return { byMonth, total }
+  }, [months, subtotalsByMonth])
+
+  // rótulo + (valor + AV%) por mês + (Total + AV%) + Média
+  const nCols = months.length * 2 + 4
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -285,30 +339,62 @@ export function DreClient({
         <div className={cn('flex-1 overflow-auto min-h-0', isPending && 'opacity-50 pointer-events-none')}>
           <table
             className="border-collapse"
-            style={{ minWidth: LABEL_W + months.length * COL_W + 2 * TOTAL_COL_W, width: '100%' }}
+            style={{
+              minWidth: LABEL_W + months.length * (COL_W + AV_COL_W) + TOTAL_COL_W + AV_COL_W + TOTAL_COL_W,
+              width: '100%',
+            }}
           >
             <colgroup>
               <col style={{ width: LABEL_W, minWidth: LABEL_W }} />
-              {months.map(m => <col key={m} style={{ width: COL_W, minWidth: COL_W }} />)}
+              {months.map(m => (
+                <Fragment key={m}>
+                  <col style={{ width: COL_W, minWidth: COL_W }} />
+                  <col style={{ width: AV_COL_W, minWidth: AV_COL_W }} />
+                </Fragment>
+              ))}
               <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />
+              <col style={{ width: AV_COL_W, minWidth: AV_COL_W }} />
               <col style={{ width: TOTAL_COL_W, minWidth: TOTAL_COL_W }} />
             </colgroup>
 
             <thead className="sticky top-0 z-20 bg-background border-b border-slate-200 shadow-[0_1px_0_0_#e2e8f0]">
               <tr>
-                <th className="text-left text-xs font-medium text-muted-foreground px-4 py-2">
+                <th rowSpan={2} className="text-left text-xs font-medium text-muted-foreground px-4 py-2 align-bottom">
                   Conta
                 </th>
                 {months.map(m => (
-                  <th key={m} className="text-right text-xs font-medium text-muted-foreground px-3 py-2 whitespace-nowrap">
+                  <th key={m} colSpan={2}
+                    className="text-center text-xs font-medium text-muted-foreground px-3 pt-2 pb-0.5 whitespace-nowrap border-l border-slate-200">
                     {monthLabel(m)}
                   </th>
                 ))}
-                <th className="text-right text-xs font-medium text-muted-foreground/60 px-3 py-2 whitespace-nowrap border-l border-slate-200">
+                <th colSpan={2}
+                  className="text-center text-xs font-medium text-muted-foreground/60 px-3 pt-2 pb-0.5 whitespace-nowrap border-l border-slate-300">
                   Total
                 </th>
-                <th className="text-right text-xs font-medium text-muted-foreground/60 px-3 py-2 whitespace-nowrap">
+                <th rowSpan={2}
+                  className="text-right text-xs font-medium text-muted-foreground/60 px-3 py-2 whitespace-nowrap align-bottom">
                   Média/mês
+                </th>
+              </tr>
+              <tr>
+                {months.map(m => (
+                  <Fragment key={m}>
+                    <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-3 pb-1.5 whitespace-nowrap border-l border-slate-200">
+                      Valor
+                    </th>
+                    <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-2 pb-1.5 whitespace-nowrap"
+                      title="Análise vertical — participação na Receita Líquida do mês">
+                      AV%
+                    </th>
+                  </Fragment>
+                ))}
+                <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-3 pb-1.5 whitespace-nowrap border-l border-slate-300">
+                  Valor
+                </th>
+                <th className="text-right text-[10px] font-normal text-muted-foreground/50 px-2 pb-1.5 whitespace-nowrap"
+                  title="Participação na Receita Líquida do período inteiro">
+                  AV%
                 </th>
               </tr>
             </thead>
@@ -321,6 +407,7 @@ export function DreClient({
                   rows={rows}
                   months={months}
                   subtotalsByMonth={subtotalsByMonth}
+                  avBase={avBase}
                   collapsedParents={collapsedParents}
                   toggleParent={toggleParent}
                   openDrillDown={openDrillDown}
@@ -340,6 +427,7 @@ export function DreClient({
                 rows={rows}
                 months={months}
                 subtotalsByMonth={subtotalsByMonth}
+                avBase={avBase}
                 collapsedParents={collapsedParents}
                 toggleParent={toggleParent}
                 openDrillDown={openDrillDown}
@@ -381,6 +469,7 @@ interface BlockProps {
   rows: DreCategoryRow[]
   months: string[]
   subtotalsByMonth: Map<string, DreMonthSubtotals>
+  avBase: AvBase
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
@@ -388,7 +477,7 @@ interface BlockProps {
   nCols: number
 }
 
-function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: BlockProps) {
+function LayoutBlock({ section, rows, months, subtotalsByMonth, avBase, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: BlockProps) {
   const blocks = useMemo(() => buildBlocks(rows, section.types, r => r.netAmount), [rows, section.types])
 
   const subtotalTotal = months.reduce((s, m) => {
@@ -404,6 +493,7 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents
           key={block.type}
           block={block}
           months={months}
+          avBase={avBase}
           collapsedParents={collapsedParents}
           toggleParent={toggleParent}
           openDrillDown={openDrillDown}
@@ -422,10 +512,17 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents
         {months.map(m => {
           const sub = subtotalsByMonth.get(m)
           const value = sub ? (sub[section.subtotalKey] as number) : 0
-          return <Num key={m} value={value} bold inverted={section.keyMetric} />
+          return (
+            <Fragment key={m}>
+              <Num value={value} bold inverted={section.keyMetric} className="border-l border-slate-200" />
+              {/* Subtotal: a AV% é MARGEM, então vai com sinal. */}
+              <AvCell value={value} base={avBase.byMonth[m] ?? 0} signed bold inverted={section.keyMetric} />
+            </Fragment>
+          )
         })}
         {/* Total */}
-        <Num value={subtotalTotal} bold inverted={section.keyMetric} />
+        <Num value={subtotalTotal} bold inverted={section.keyMetric} className="border-l border-slate-300" />
+        <AvCell value={subtotalTotal} base={avBase.total} signed bold inverted={section.keyMetric} />
         {/* Média */}
         <Num value={subtotalAvg} bold inverted={section.keyMetric} />
       </tr>
@@ -438,6 +535,7 @@ function LayoutBlock({ section, rows, months, subtotalsByMonth, collapsedParents
 interface TypeBlockProps {
   block: SectionBlock<number>
   months: string[]
+  avBase: AvBase
   collapsedParents: Set<string>
   toggleParent: (id: string) => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
@@ -445,7 +543,7 @@ interface TypeBlockProps {
   nCols: number
 }
 
-function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: TypeBlockProps) {
+function TypeBlock({ block, months, avBase, collapsedParents, toggleParent, openDrillDown, openDrillDownTotal, nCols }: TypeBlockProps) {
   return (
     <>
       <tr className="bg-slate-100/70 border-t border-slate-200">
@@ -459,6 +557,7 @@ function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDow
           key={parent.parentId}
           parent={parent}
           months={months}
+          avBase={avBase}
           isCollapsed={collapsedParents.has(parent.parentId)}
           onToggle={() => toggleParent(parent.parentId)}
           openDrillDown={openDrillDown}
@@ -474,13 +573,14 @@ function TypeBlock({ block, months, collapsedParents, toggleParent, openDrillDow
 interface ParentBlockProps {
   parent: ParentNode<number>
   months: string[]
+  avBase: AvBase
   isCollapsed: boolean
   onToggle: () => void
   openDrillDown: (categoryId: string, categoryName: string, month: string) => void
   openDrillDownTotal: (categoryId: string, categoryName: string) => void
 }
 
-function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown, openDrillDownTotal }: ParentBlockProps) {
+function ParentBlock({ parent, months, avBase, isCollapsed, onToggle, openDrillDown, openDrillDownTotal }: ParentBlockProps) {
   const parentByMonth = useMemo(() => {
     const result: Record<string, number> = {}
     months.forEach(m => {
@@ -526,18 +626,22 @@ function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown, ope
         {months.map(m => {
           const v = parentByMonth[m] ?? 0
           return (
-            <Num
-              key={m}
-              value={v}
-              bold
-              light
-              onClick={singleChild ? () => openDrillDown(singleChild.categoryId, singleChild.categoryName, m) : undefined}
-            />
+            <Fragment key={m}>
+              <Num
+                value={v}
+                bold
+                light
+                className="border-l border-slate-200"
+                onClick={singleChild ? () => openDrillDown(singleChild.categoryId, singleChild.categoryName, m) : undefined}
+              />
+              <AvCell value={v} base={avBase.byMonth[m] ?? 0} bold light />
+            </Fragment>
           )
         })}
-        <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold border-l border-slate-100 text-muted-foreground/50">
+        <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold border-l border-slate-300 text-muted-foreground/50">
           {parentTotal === 0 ? '—' : fmtNum(parentTotal)}
         </td>
+        <AvCell value={parentTotal} base={avBase.total} bold light />
         <td className="px-3 py-[3px] text-right tabular-nums text-xs font-semibold text-muted-foreground/40">
           {parentAvg === 0 ? '—' : fmtNum(parentAvg)}
         </td>
@@ -563,17 +667,20 @@ function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown, ope
             {months.map(m => {
               const v = child.byMonth[m] ?? 0
               return (
-                <Num
-                  key={m}
-                  value={v}
-                  light
-                  onClick={() => openDrillDown(child.categoryId, child.categoryName, m)}
-                />
+                <Fragment key={m}>
+                  <Num
+                    value={v}
+                    light
+                    className="border-l border-slate-200"
+                    onClick={() => openDrillDown(child.categoryId, child.categoryName, m)}
+                  />
+                  <AvCell value={v} base={avBase.byMonth[m] ?? 0} light />
+                </Fragment>
               )
             })}
             <td
               className={cn(
-                'px-3 py-[3px] text-right tabular-nums text-xs border-l border-slate-100',
+                'px-3 py-[3px] text-right tabular-nums text-xs border-l border-slate-300',
                 childTotal !== 0
                   ? 'text-muted-foreground/60 cursor-pointer hover:text-foreground hover:underline underline-offset-2'
                   : 'text-muted-foreground/40',
@@ -582,6 +689,7 @@ function ParentBlock({ parent, months, isCollapsed, onToggle, openDrillDown, ope
             >
               {childTotal === 0 ? '—' : fmtNum(childTotal)}
             </td>
+            <AvCell value={childTotal} base={avBase.total} light />
             <td className="px-3 py-[3px] text-right tabular-nums text-xs text-muted-foreground/30">
               {childAvg === 0 ? '—' : fmtNum(childAvg)}
             </td>

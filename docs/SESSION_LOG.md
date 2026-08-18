@@ -6,6 +6,41 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.6 — Terceira coluna da DRE e análise vertical
+
+Primeira das três sessões que põem o orçado dentro da `/dre`. Faz a reestruturação de colunas uma vez, com uma feature clássica de DRE, antes de empilhar o orçado em cima — e por isso é entregável sozinha, sem nenhuma dependência do módulo de orçamento.
+
+**A regra que vale para as três sessões:** cada mês passa a ter uma coluna a mais, que **existe sempre** e troca de significado. Orçamento oculto → `Valor` + `AV%`. Orçamento visível (9.7) → `Real` + `Orç` + `Var%`. A coluna Total segue a mesma regra, e as duas leituras nunca aparecem juntas.
+
+**Entregue:**
+- [src/lib/dre-calc.ts](src/lib/dre-calc.ts) — `verticalShare(value, base, signed?)`. Base zero devolve 0, que a célula já renderiza como travessão: nunca `Infinity`, nunca `NaN`.
+- [src/components/financial/num-cell.tsx](src/components/financial/num-cell.tsx) — prop opcional `tone: 'sign' | 'muted'`. Aditiva; `/fluxo` e a aba Orçado × Realizado não mudam.
+- [src/lib/format.ts](src/lib/format.ts) — `fmtPct` ('30,3%') e `fmtPctSigned` ('+28,8%'), com vírgula decimal PT-BR.
+- [dre-client.tsx](src/app/(authenticated)/dre/dre-client.tsx) — `colgroup` e cabeçalho de duas linhas (mês em cima com `colSpan`, `Valor`/`AV%` embaixo), coluna de AV% em linhas de detalhe, de pai e de subtotal.
+
+**Decisões de desenho:**
+- **AV% é cinza, não colorida por sinal.** Proporção não é julgamento: pintar "Aluguel = 10,4% da receita" de verde inventaria um sinal que a coluna do valor, ao lado, já diz. Daí o `tone="muted"` no `Num`.
+- **Base = Receita Líquida do mês**, que `computeSubtotals` já entrega — a DRE não precisou de nenhum dado novo do servidor. Na coluna Total a base é a soma das Receitas Líquidas do período, não a média das AV%.
+- **A coluna de AV% não é clicável.** `Valor` abre as transações; um segundo destino para uma proporção seria adivinhação.
+
+**Achado durante a verificação, e a correção que ele forçou:** rodando contra os dados reais, "Empresa Testes 1" em mai/2026 aparecia com **SGA em 111,6% da receita líquida e EBITDA em 11,6%** — só que esse EBITDA é **negativo**. Em magnitude, uma margem de −11,6% fica idêntica a uma de +11,6%, e a leitura se inverte no exato mês em que o número mais importa.
+
+A correção separa as duas leituras que a AV% tem, que não são a mesma coisa:
+- **Linha de conta** é *consumo* — magnitude, do jeito da DRE clássica ("Habitação consome 30,3%").
+- **Linha de subtotal** é *margem* — vai com sinal, porque ali o sinal é o recado.
+
+`verticalShare` ganhou o parâmetro `signed`, usado só nas linhas de subtotal.
+
+**Verificação — 25 asserções**, as puras em memória e o resto contra as três organizações reais:
+- Bordas: base zero, valor zero, base igual ao valor (100%), despesa negativa saindo positiva sem `signed` e negativa com ele, base negativa, terços sem erro de ponto flutuante, nunca `Infinity` nem `NaN`.
+- Nas três orgs: **Receita Líquida = 100,0% em todos os 30 meses com receita**; os 9 meses sem receita mostram travessão em vez de erro; a AV% do Total é finita.
+- O caso que motivou o `signed`, testado nos dois sentidos: o mês de EBITDA negativo mostra margem negativa **e** apareceria positivo sem o parâmetro.
+- **Aditividade medida, não presumida:** 213 grupos pai→filho batem, 6 não — são os que têm filhos de sinais opostos dentro do mesmo pai (um estorno junto de despesas). É inerente a ler magnitude e está registrado como limitação conhecida, não como bug.
+
+`tsc` limpo e `npm run build` verde (`/dre` de 8,08 → 6,78 kB, porque `fmtPct` saiu para o módulo compartilhado). **Não verificado automaticamente:** o clique na UI.
+
+---
+
 ### ✅ Sessão 9.5 — Aceleradores B: planilha e recorrências detectadas
 
 Fecha a Fase 9. Os dois caminhos que faltavam para preencher um orçamento sem digitar lançamento a lançamento.

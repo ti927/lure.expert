@@ -168,9 +168,21 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 9 — Orçamento e Previsão **CONCLUÍDA** (9.0 a 9.5 ✅). Fases 0–7 **100% concluídas**.
-Próximo passo natural: retomar a Fase 8 (adquirentes, 8.2–8.5), pausada. Candidata avulsa: expert lendo
-o orçamento no system prompt (era a "9.6" opcional, nunca comprometida).
+**Status:** Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.5 ✅). Em andamento: **orçado dentro da
+DRE** (9.6 ✅, 9.7 🔲, 9.8 🔲). Fases 0–7 **100% concluídas**.
+
+**Sessões — orçado na DRE:**
+- ✅ 9.6: Terceira coluna por mês + análise vertical (AV% sobre a Receita Líquida). Cabeçalho de duas linhas, `verticalShare` em `lib/dre-calc.ts`, `tone="muted"` no `Num`
+- 🔲 9.7: Orçado lado a lado — a terceira coluna vira Var% quando o orçamento está visível
+- 🔲 9.8: Drill-down do orçado na DRE + edição do lançamento pelo `SeriesDialog`
+
+**A regra da terceira coluna:** ela existe sempre e troca de significado. Orçamento **oculto** → `Valor`
++ `AV%` (variação vertical, participação na Receita Líquida). Orçamento **visível** → `Real` + `Orç` +
+`Var%` (variação horizontal, desvio sobre o orçado). A coluna Total segue a mesma regra. As duas leituras
+nunca aparecem juntas.
+
+Depois disso: retomar a Fase 8 (adquirentes, 8.2–8.5), pausada. Candidata avulsa nunca comprometida:
+expert lendo o orçamento no system prompt.
 Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
 
 **Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
