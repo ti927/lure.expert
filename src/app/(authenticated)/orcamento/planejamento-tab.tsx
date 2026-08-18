@@ -19,7 +19,7 @@ import type {
 import { cn } from '@/lib/utils'
 import { fmtMoney, monthLabel, dateLabel } from '@/lib/format'
 import {
-  AMOUNT_MODES, AMOUNT_MODE_LABELS, ADJUSTABLE_FIELD_LABELS, intervalLabel,
+  AMOUNT_MODES, AMOUNT_MODE_LABELS, ADJUSTABLE_FIELD_LABELS, BUDGET_SOURCE_LABELS, intervalLabel,
   type BudgetSeriesListItem, type BudgetEntryListItem, type BudgetVersionListItem,
 } from '@/lib/budget-types'
 import {
@@ -61,12 +61,13 @@ interface Props {
   leafCategories: CategoryItem[]
   contactOptions: SimpleDimensionItem[]
   onChanged: () => void
+  onCopyActuals: () => void
 }
 
 export function PlanejamentoTab({
   version, series, isPending,
   costCenters, businessUnits, legalEntities, leafCategories, contactOptions,
-  onChanged,
+  onChanged, onCopyActuals,
 }: Props) {
   const [filters, setFilters] = useState<Filters>({})
   const [sort, setSort] = useState<SortKey>('')
@@ -267,7 +268,11 @@ export function PlanejamentoTab({
         <EmptyState
           icon={<CalendarClock className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
           title={`Nenhuma previsão em ${version.name}`}
-          description="Lance a primeira previsão de recebimento ou pagamento em Novo lançamento, no topo da tela."
+          description={`O caminho mais rápido é partir do que já aconteceu: copie o realizado de ${version.fiscalYear - 1} `
+            + 'e ajuste o que muda. Ou lance uma a uma em Novo lançamento, no topo da tela.'}
+          action={version.status !== 'arquivado'
+            ? { label: 'Copiar do realizado', onClick: onCopyActuals }
+            : undefined}
         />
       </div>
     )
@@ -386,6 +391,12 @@ export function PlanejamentoTab({
                       </td>
                       <td className="px-2 py-1.5">
                         <span className="font-medium">{s.description}</span>
+                        {s.source !== 'manual' && (
+                          <span className="ml-2 text-[10px] rounded px-1.5 py-0.5 bg-sky-500/15 text-sky-700"
+                            title={s.notes ?? undefined}>
+                            {BUDGET_SOURCE_LABELS[s.source]}
+                          </span>
+                        )}
                         {s.adjustedCount > 0 && (
                           <span className="ml-2 text-[10px] rounded px-1.5 py-0.5 bg-amber-500/15 text-amber-600 tabular-nums">
                             {s.adjustedCount} ajustada{s.adjustedCount > 1 ? 's' : ''}

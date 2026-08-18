@@ -6,6 +6,40 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 9.4 — Aceleradores A: copiar do realizado e duplicar versão
+
+Os dois caminhos que tiram o usuário da folha em branco. Montar um orçamento anual lançamento a lançamento é o que faz o módulo ser abandonado na primeira semana.
+
+**Entregue:**
+- [src/lib/budget-copy.ts](src/lib/budget-copy.ts) — o miolo, fora de `'use server'` pelo mesmo motivo da 9.3. `buildCopyDrafts` é puro (agrupa o realizado e escolhe o formato da série); `collectActuals` e `countCopiedSeries` recebem o executor (`db` ou `tx`); `applyCopyToBudget` e `applyDuplicateVersion` recebem o `tx`.
+- [src/server/budget.ts](src/server/budget.ts) — `previewCopyActuals`, `copyActualsToBudget` e `duplicateBudgetVersion`, todas invólucros finos (auth → validação → miolo → revalidate).
+- [src/lib/budget-types.ts](src/lib/budget-types.ts) — `COPY_SHAPES` / `COPY_GRANULARITIES` com rótulos e explicações, `copyActualsInputSchema`, `duplicateVersionInputSchema`, `CopyActualsPreview`.
+- [copy-actuals-dialog.tsx](src/app/(authenticated)/orcamento/copy-actuals-dialog.tsx) — prévia+commit: período, regime, formato, detalhamento e percentual; "Ver prévia" lista os lançamentos com realizado → orçado lado a lado; qualquer mudança de parâmetro invalida a prévia.
+- [versoes-tab.tsx](src/app/(authenticated)/orcamento/versoes-tab.tsx) — botão Duplicar por versão, com aviso do deslocamento de datas quando o exercício muda.
+- [planejamento-tab.tsx](src/app/(authenticated)/orcamento/planejamento-tab.tsx) — badge de origem (`BUDGET_SOURCE_LABELS`) nas séries não-manuais; `EmptyState` passa a oferecer "Copiar do realizado" como ação.
+
+**Decisões de desenho:**
+- **Dois eixos, não um.** O plano falava em `granularity`; virou **formato** (mês a mês × média mensal) e **detalhamento** (categoria × categoria+dimensões). Um parâmetro só misturaria tempo com dimensão e viraria adivinhação na hora de usar.
+- **Mapeamento por número do mês**, não por posição: março de origem vira março do exercício, mesmo que o período comece em julho. É daí que sai o teto de 12 meses — com 13, dois janeiros disputariam o mesmo alvo e o valor dobraria em silêncio.
+- **Direção entra na chave de agrupamento.** Compensar entrada com saída na mesma categoria produziria meses de sinal trocado, e uma série tem uma direção só com valor sempre positivo. Categoria com estorno gera dois lançamentos — que é a verdade do histórico.
+- **Mês a mês apara as pontas** (começa no primeiro mês com movimento) e preenche buracos internos com zero. **Valores todos iguais viram `fixo`**, não `sazonal` com N campos repetindo o mesmo número.
+- **`adjustmentPct` não vira `adjustment_rate`.** Um é aplicação única sobre o valor copiado; o outro é o reajuste que se acumula ao longo do ano. Documentado nos dois arquivos porque é a confusão mais provável.
+- **Exclusões declaradas, não silenciosas.** Sem categoria e categoria inativa saem da cópia (a segunda porque a tela de edição recusaria salvar um lançamento nelas depois) e voltam como número na prévia. Ocultas, BP e `pending` seguem as mesmas regras da `getBudgetVsActual`.
+- **Teto de 300 lançamentos** falha com o número na mensagem em vez de cortar em silêncio.
+- **`mapped AS MATERIALIZED`** na duplicação: sem isso o `gen_random_uuid()` seria reavaliado na segunda referência do CTE e as ocorrências apontariam para séries inexistentes. `make_interval(years => delta)` desloca e já apara 29/02. O **prazo de caixa é preservado em dias**, não deslocado por ano — o lag é a regra de negócio, a data é consequência.
+- **Duplicar nunca destrona** a versão vigente do exercício de destino, e nasce como rascunho.
+
+**Verificação — 66 asserções**, as puras em memória e as demais contra o banco real em transações revertidas, chamando as mesmas funções da action:
+- Moldagem: sazonalidade preservada com zero no meio, pontas aparadas, valores iguais virando `fixo`, +8% aplicado uma vez, média achatando em 12, entrada/saída não se compensando, os dois detalhamentos.
+- Leitura: sem categoria, oculta, inativa, BP e `pending` fora da soma — as duas primeiras declaradas em números próprios; competência e caixa lendo datas diferentes.
+- **DoD:** copiar 12 meses de 2026 → orçado 2027 com +8% grava no banco exatamente `realizado × 1,08` nas duas direções, com `source = 'copia_realizado'`, começando em jan/2027, e **nenhuma ocorrência nascendo ajustada**.
+- Substituir cópia anterior remove só o que veio de cópia — o lançamento manual da mesma versão continua lá, sem ocorrência órfã.
+- **Duplicação preserva `adjusted_fields` e `sequence`** (inclusive o buraco de uma exclusão pontual), o valor ajustado à mão, o array sazonal, as dimensões e a observação; desloca competência por ano e caixa por dias; 29/02/2028 → 28/02/2029; delta 0 não move nada e a origem fica intacta; nenhuma ocorrência cai na série errada (o cruzamento que pegaria um mapa old→new embaralhado).
+
+`tsc` limpo e `npm run build` verde (`/orcamento` de 42,2 → 46,1 kB). **Não verificado automaticamente:** o clique na UI.
+
+---
+
 ### ✅ Sessão 9.3 — Escopos de edição e exclusão
 
 Remove a limitação da 9.1, em que editar uma série regenerava tudo e descartava os ajustes manuais.

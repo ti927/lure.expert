@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, useTransition } from 'react'
-import { Loader2, Plus, Target } from 'lucide-react'
+import { CopyPlus, Loader2, Plus, Target } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -19,6 +19,7 @@ import { PlanejamentoTab } from './planejamento-tab'
 import { ComparacaoTab } from './comparacao-tab'
 import { VersoesTab } from './versoes-tab'
 import { SeriesDialog } from './series-dialog'
+import { CopyActualsDialog } from './copy-actuals-dialog'
 
 const STORAGE_KEY = 'lure:orcamento:filters'
 
@@ -50,6 +51,7 @@ export function OrcamentoClient({
   const [series, setSeries] = useState(initialSeries)
   const [tab, setTab] = useState<TabKey>('planejamento')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [copyOpen, setCopyOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
 
   const selectedVersion = versions.find(v => v.id === selectedId) ?? null
@@ -124,6 +126,19 @@ export function OrcamentoClient({
     setDialogOpen(true)
   }
 
+  function openCopyActuals() {
+    if (!selectedVersion) {
+      toast.error('Crie uma versão de orçamento antes de copiar o realizado.')
+      setTab('versoes')
+      return
+    }
+    if (isArchived) {
+      toast.error('Esta versão está arquivada. Duplique-a para trabalhar em cima dela.')
+      return
+    }
+    setCopyOpen(true)
+  }
+
   const versionOptions: SimpleDimensionItem[] = versions.map(v => ({
     id: v.id,
     name: `${v.name}${v.isActive ? ' · vigente' : ''}${v.status !== 'rascunho' ? ` · ${BUDGET_STATUS_LABELS[v.status]}` : ''}`,
@@ -149,6 +164,10 @@ export function OrcamentoClient({
                 />
               </div>
             )}
+            <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={openCopyActuals}>
+              <CopyPlus className="h-3.5 w-3.5" />
+              Copiar do realizado
+            </Button>
             <Button size="sm" className="h-8 text-xs gap-1.5" onClick={openNewSeries}>
               <Plus className="h-3.5 w-3.5" />
               Novo lançamento
@@ -185,6 +204,7 @@ export function OrcamentoClient({
               leafCategories={leafCategories}
               contactOptions={contactOptions}
               onChanged={() => refresh()}
+              onCopyActuals={openCopyActuals}
             />
           ) : (
             <div className="h-full flex items-center justify-center px-6">
@@ -230,6 +250,15 @@ export function OrcamentoClient({
           />
         )}
       </div>
+
+      {selectedVersion && (
+        <CopyActualsDialog
+          open={copyOpen}
+          onOpenChange={setCopyOpen}
+          version={selectedVersion}
+          onSaved={() => refresh()}
+        />
+      )}
 
       {selectedVersion && (
         <SeriesDialog

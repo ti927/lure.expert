@@ -151,6 +151,37 @@ export const ADJUSTABLE_FIELD_LABELS: Record<AdjustableField, string> = {
   notes:            'observação',
 }
 
+// ─── Cópia do realizado ───────────────────────────────────────────────────────
+// Duas escolhas independentes, deliberadamente separadas: uma diz o FORMATO no
+// tempo, a outra o DETALHAMENTO por dimensão. Um parâmetro só ("granularidade")
+// misturaria as duas e viraria adivinhação na hora de usar.
+
+export const COPY_SHAPES = ['mensal', 'media'] as const
+export type CopyShape = (typeof COPY_SHAPES)[number]
+
+export const COPY_SHAPE_LABELS: Record<CopyShape, string> = {
+  mensal: 'Mês a mês',
+  media:  'Média mensal',
+}
+
+export const COPY_SHAPE_HINTS: Record<CopyShape, string> = {
+  mensal: 'Preserva a sazonalidade: cada mês do orçado recebe o valor do mês correspondente do período de origem.',
+  media:  'Distribui o total do período em 12 parcelas iguais. Achata a sazonalidade — use quando o histórico é irregular demais para servir de padrão.',
+}
+
+export const COPY_GRANULARITIES = ['categoria', 'dimensoes'] as const
+export type CopyGranularity = (typeof COPY_GRANULARITIES)[number]
+
+export const COPY_GRANULARITY_LABELS: Record<CopyGranularity, string> = {
+  categoria: 'Por categoria',
+  dimensoes: 'Categoria + dimensões',
+}
+
+export const COPY_GRANULARITY_HINTS: Record<CopyGranularity, string> = {
+  categoria: 'Um lançamento por categoria. As dimensões ficam em branco e podem ser preenchidas depois.',
+  dimensoes: 'Um lançamento por combinação de categoria, centro de custo, unidade e entidade. Gera mais linhas — e só faz sentido se o realizado tiver essas dimensões preenchidas.',
+}
+
 // ─── Schemas Zod ──────────────────────────────────────────────────────────────
 
 const uuidOrNull = z.string().uuid().nullable()
@@ -433,4 +464,79 @@ export interface BudgetDrillDownEntry {
   legalEntityName:  string | null
   contactName:      string | null
   adjusted:         boolean
+}
+
+// ─── Aceleradores: copiar do realizado e duplicar versão ──────────────────────
+// Declarados no fim do arquivo de propósito: `z.enum(BUDGET_REGIMES)` é avaliado
+// na carga do módulo e quebraria se viesse antes da constante.
+
+/**
+ * Cópia do realizado.
+ *
+ * `adjustmentPct` é PERCENTUAL de aplicação única (8 = +8% em cima de tudo) —
+ * não confundir com `adjustmentRate` da série, que é fração decimal e se acumula
+ * a cada N ocorrências. Os dois existem e significam coisas diferentes.
+ */
+export const copyActualsInputSchema = z.object({
+  versionId:       z.string().uuid(),
+  sourceFrom:      monthString,
+  sourceTo:        monthString,
+  regime:          z.enum(BUDGET_REGIMES),
+  shape:           z.enum(COPY_SHAPES),
+  granularity:     z.enum(COPY_GRANULARITIES),
+  adjustmentPct:   z.number().min(-100, 'Redução máxima de 100%').max(1000, 'Aumento máximo de 1000%'),
+  replaceExisting: z.boolean().optional(),
+}).superRefine((v, ctx) => {
+  if (v.sourceTo < v.sourceFrom) {
+    ctx.addIssue({ code: 'custom', path: ['sourceTo'], message: 'O mês final não pode ser anterior ao inicial.' })
+    return
+  }
+  const [fy, fm] = v.sourceFrom.split('-').map(Number)
+  const [ty, tm] = v.sourceTo.split('-').map(Number)
+  const months = (ty * 12 + tm) - (fy * 12 + fm) + 1
+  // Teto de 12: o mapeamento é por NÚMERO DO MÊS (janeiro de origem vira janeiro
+  // do exercício). Com mais de 12 meses, dois janeiros cairiam no mesmo alvo e o
+  // valor dobraria em silêncio.
+  if (months > 12) {
+    ctx.addIssue({
+      code: 'custom', path: ['sourceTo'],
+      message: `O período tem ${months} meses. Escolha no máximo 12 — cada mês de origem vira o mês correspondente do exercício.`,
+    })
+  }
+})
+export type CopyActualsInput = z.infer<typeof copyActualsInputSchema>
+
+export const duplicateVersionInputSchema = z.object({
+  name:       z.string().trim().min(1, 'Nome obrigatório').max(120, 'Máximo 120 caracteres'),
+  fiscalYear: z.number().int().min(2000, 'Exercício inválido').max(2100, 'Exercício inválido'),
+})
+export type DuplicateVersionInput = z.infer<typeof duplicateVersionInputSchema>
+
+/** Uma linha da prévia: o lançamento que seria criado. */
+export interface CopyActualsPreviewRow {
+  description:    string
+  direction:      'inflow' | 'outflow'
+  categoryName:   string
+  categoryCode:   string | null
+  dimensionLabel: string | null
+  startMonth:     string      // 'YYYY-MM' já no exercício de destino
+  occurrences:    number
+  amountMode:     AmountMode
+  /** Realizado do grupo, antes do percentual. */
+  sourceTotal:    number
+  /** Soma das ocorrências que serão gravadas. */
+  total:          number
+}
+
+export interface CopyActualsPreview {
+  rows:           CopyActualsPreviewRow[]
+  monthsInSource: number
+  sourceTotals:   { inflow: number; outflow: number }
+  targetTotals:   { inflow: number; outflow: number }
+  /** Realizado sem categoria no período — não entra na cópia, e por isso é declarado. */
+  semCategoria:   { count: number; total: number }
+  /** Realizado em categoria desativada — idem: o lançamento seria inválido na edição. */
+  inativas:       { count: number; total: number }
+  /** O que já foi copiado antes para esta versão. Alimenta a opção de substituir. */
+  existingCopied: { series: number; total: number }
 }

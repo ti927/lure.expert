@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { Archive, Check, CheckCircle2, Loader2, Plus, Star, Trash2 } from 'lucide-react'
+import { Archive, Check, CheckCircle2, Copy, Loader2, Plus, Star, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -16,7 +16,8 @@ import { cn } from '@/lib/utils'
 import { fmtMoney } from '@/lib/format'
 import { BUDGET_STATUS_LABELS, type BudgetVersionListItem } from '@/lib/budget-types'
 import {
-  createBudgetVersion, deleteBudgetVersion, setActiveBudgetVersion, updateBudgetVersionStatus,
+  createBudgetVersion, deleteBudgetVersion, duplicateBudgetVersion,
+  setActiveBudgetVersion, updateBudgetVersionStatus,
 } from '@/server/budget'
 
 const inputCls =
@@ -42,6 +43,9 @@ export function VersoesTab({ versions, selectedId, isPending, onSelect, onChange
   const [fiscalYear, setFiscalYear] = useState(String(new Date().getFullYear() + 1))
   const [description, setDescription] = useState('')
   const [pendingDelete, setPendingDelete] = useState<BudgetVersionListItem | null>(null)
+  const [duplicating, setDuplicating] = useState<BudgetVersionListItem | null>(null)
+  const [dupName, setDupName] = useState('')
+  const [dupYear, setDupYear] = useState('')
   const [isMutating, startMutation] = useTransition()
 
   function openCreate() {
@@ -66,6 +70,31 @@ export function VersoesTab({ versions, selectedId, isPending, onSelect, onChange
       if ('error' in result && result.error) { toast.error(result.error); return }
       toast.success('Versão criada.')
       setCreateOpen(false)
+      onChanged('id' in result ? result.id : undefined)
+    })
+  }
+
+  function openDuplicate(v: BudgetVersionListItem) {
+    // Padrão = revisão do mesmo exercício. Trocar o ano transforma em virada de
+    // ano, e o aviso no diálogo diz o que acontece com as datas.
+    setDupName(`${v.name} (cópia)`.slice(0, 120))
+    setDupYear(String(v.fiscalYear))
+    setDuplicating(v)
+  }
+
+  function submitDuplicate() {
+    if (!duplicating) return
+    const year = Number(dupYear)
+    if (!dupName.trim()) { toast.error('Informe o nome da nova versão.'); return }
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) { toast.error('Exercício inválido.'); return }
+
+    const source = duplicating
+    startMutation(async () => {
+      const result = await duplicateBudgetVersion(source.id, { name: dupName.trim(), fiscalYear: year })
+      if ('error' in result && result.error) { toast.error(result.error); return }
+      const series = 'series' in result ? result.series : 0
+      toast.success(`Versão duplicada com ${series} ${series === 1 ? 'lançamento' : 'lançamentos'}.`)
+      setDuplicating(null)
       onChanged('id' in result ? result.id : undefined)
     })
   }
@@ -180,6 +209,11 @@ export function VersoesTab({ versions, selectedId, isPending, onSelect, onChange
                             <Star className="h-3 w-3" /> Vigente
                           </button>
                         )}
+                        <button onClick={() => openDuplicate(v)} disabled={isMutating}
+                          className="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30"
+                          title="Duplicar versão">
+                          <Copy className="h-3 w-3" />
+                        </button>
                         {v.status === 'rascunho' && (
                           <button onClick={() => changeStatus(v, 'aprovado')} disabled={isMutating}
                             className="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:text-emerald-700 hover:bg-muted disabled:opacity-30"
@@ -250,6 +284,50 @@ export function VersoesTab({ versions, selectedId, isPending, onSelect, onChange
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={isMutating}>Cancelar</Button>
             <Button onClick={submitCreate} disabled={isMutating || !name.trim()}>
               {isMutating ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Criando…</> : 'Criar versão'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicar versão */}
+      <Dialog open={!!duplicating} onOpenChange={open => { if (!open) setDuplicating(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Duplicar versão</DialogTitle>
+            <DialogDescription>
+              Copia os lançamentos de &quot;{duplicating?.name}&quot; — inclusive os valores ajustados à mão.
+              Mesmo exercício é revisão ou cenário; exercício diferente é a virada de ano.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-1">
+            <div className="space-y-2">
+              <Label htmlFor="dup-name" className="text-xs">Nome da nova versão</Label>
+              <input id="dup-name" value={dupName} onChange={e => setDupName(e.target.value.slice(0, 120))}
+                className={inputCls} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="dup-year" className="text-xs">Exercício</Label>
+              <input id="dup-year" type="number" min={2000} max={2100} value={dupYear}
+                onChange={e => setDupYear(e.target.value)} className={inputCls} />
+              {duplicating && Number(dupYear) !== duplicating.fiscalYear && Number.isInteger(Number(dupYear)) && (
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  As datas serão deslocadas em {Math.abs(Number(dupYear) - duplicating.fiscalYear)}
+                  {Math.abs(Number(dupYear) - duplicating.fiscalYear) === 1 ? ' ano' : ' anos'}
+                  {Number(dupYear) < duplicating.fiscalYear ? ' para trás' : ''}, mantendo dia, prazo de caixa e
+                  os {duplicating.entryCount} valores como estão.
+                </p>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              A nova versão nasce como rascunho e não assume a vigência de quem já está valendo.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDuplicating(null)} disabled={isMutating}>Cancelar</Button>
+            <Button onClick={submitDuplicate} disabled={isMutating || !dupName.trim()}>
+              {isMutating ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Duplicando…</> : 'Duplicar'}
             </Button>
           </DialogFooter>
         </DialogContent>

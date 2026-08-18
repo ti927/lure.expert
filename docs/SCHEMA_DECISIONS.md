@@ -326,6 +326,9 @@ determinismo. LLM continua sendo usado pra detectar `categoryHints` advisory.
 6. Caso contrário → cai pra Camada 1 (regra) → 4 (LLM)
 
 **Onde acontece o lookup:**
+- [src/lib/parsers/excel-csv.ts](src/lib/parsers/excel-csv.ts) — `detectAuthoritativeColumns()`
+  identifica as colunas por regex no header normalizado e grava o resultado em
+  `rawData.__categoryMapping`.
 - [src/server/staging.ts](src/server/staging.ts) — no `approveAndInsert`, carrega
   contexto da org uma vez por import e tenta match por linha antes do INSERT.
   Linhas casadas entram no DB já com `categoryId` preenchido e **não** entram no
@@ -460,9 +463,77 @@ funções async, e a coluna "Projeção do ano" da tela de comparação roda `co
 cliente. `getAuthContext` segue copiado nos 8+ arquivos antigos de `src/server/` — migração
 incremental, não refactor horizontal de uma vez.
 
-**Arquivos:**
-- `src/lib/parsers/excel-csv.ts` — `detectAuthoritativeColumns()`, gravação em
-  `rawData.__categoryMapping`
-- `src/lib/categorizer.ts` — `findCategoryByCsvMapping()`, `inferTipoCode()`,
-  `TIPO_ALIASES`, Layer 0 em `categorizeTransaction`
-- `src/server/staging.ts` — pre-classificação no `approveAndInsert`
+A 9.4 seguiu o mesmo critério: `budget-copy.ts` nasceu em `src/lib/` — server-only, importa
+`db` — para que o miolo dos aceleradores pudesse ser exercitado direto contra o banco, sem
+sessão HTTP. Nenhum componente client importa dele; os tipos que a UI precisa moram em
+`budget-types.ts`.
+
+### 13.9 — Copiar do realizado: dois eixos, e o mapeamento por número do mês (Sessão 9.4)
+
+O plano previa um parâmetro `granularity`. Na implementação virou **dois**, porque
+respondem a perguntas diferentes:
+
+- **Formato** — `mensal` preserva a sazonalidade (cada mês recebe o valor do mês
+  correspondente); `media` distribui o total em 12 parcelas iguais. É uma escolha sobre o
+  **tempo**.
+- **Detalhamento** — `categoria` gera um lançamento por categoria; `dimensoes` gera um por
+  combinação de categoria com centro de custo, unidade e entidade. É uma escolha sobre a
+  **dimensão**.
+
+Um parâmetro só misturaria as duas e obrigaria o usuário a adivinhar qual metade estava
+escolhendo.
+
+**O mapeamento é por número do mês, não por posição na lista:** março de origem vira março
+do exercício de destino, mesmo que o período comece em julho. Daí sai o **teto de 12 meses**
+do período de origem — com 13, dois janeiros disputariam o mesmo alvo e o valor dobraria sem
+nenhum sinal. A validação está no `superRefine` do `copyActualsInputSchema` e diz o número
+de meses escolhido.
+
+**Direção entra na chave de agrupamento.** Compensar entrada com saída dentro da mesma
+categoria produziria meses de sinal trocado, e uma série tem uma direção só com `amount`
+sempre positivo. Uma categoria com estorno gera dois lançamentos — que é o histórico real,
+não um defeito.
+
+**`adjustmentPct` ≠ `adjustment_rate`.** O primeiro é percentual de aplicação única sobre o
+valor copiado (8 → ×1,08) e desaparece dentro do número gravado; o segundo é fração decimal
+que se acumula a cada N ocorrências e fica na regra. A série copiada nasce em `fixo` ou
+`sazonal`, nunca em `reajuste`.
+
+**O que fica de fora é declarado.** Realizado sem categoria e em categoria desativada não
+entram na cópia — a segunda porque `validateTargetsBelongToOrg` recusaria salvar um
+lançamento nela depois, o que deixaria a linha impossível de editar. Os dois voltam como
+número na prévia. Ocultas no regime, contas de balanço e `pending` seguem exatamente as
+regras da `getBudgetVsActual`, para que "copiei o realizado" e "o realizado que a comparação
+mostra" sejam o mesmo número.
+
+### 13.10 — Duplicação de versão: o mapa de ids e o que NÃO se regenera (Sessão 9.4)
+
+Duplicar copia séries e ocorrências num **único statement**. O problema é que `RETURNING`
+não devolve o id de origem, então não há como ligar as ocorrências novas às séries novas
+depois do INSERT. A solução é gerar o uuid **junto da leitura**:
+
+```sql
+WITH mapped AS MATERIALIZED (
+  SELECT s.*, gen_random_uuid() AS new_id FROM budget_series s WHERE s.version_id = $src
+)
+```
+
+`MATERIALIZED` é obrigatório, não estilo: `mapped` é referenciada duas vezes (pelo INSERT de
+séries e pelo de ocorrências) e `gen_random_uuid()` é volátil. Sem a palavra, uma reavaliação
+daria ids diferentes nas duas referências e as ocorrências apontariam para o nada. As FKs
+funcionam dentro do mesmo statement porque os gatilhos de integridade referencial são AFTER
+ROW e disparam no fim dele, quando as séries já existem.
+
+**`adjusted_fields` e `sequence` são copiados, nunca regenerados.** Regenerar é o bug número
+um dessa funcionalidade em produtos comerciais: apaga em silêncio exatamente o trabalho
+manual que a duplicação existe para preservar. Buracos de sequência (de uma exclusão
+pontual) também são preservados — buracos são válidos, ver 13.5.
+
+**O deslocamento usa `make_interval(years => delta)`**, que já apara 29/02 → 28/02 ao cair
+em ano não bissexto. Mas o **prazo de caixa é preservado em dias**
+(`nova_competência + (cash_date − competence_date)`), não deslocado por ano: o lag é a regra
+de negócio ("recebo em 30 dias") e a data é consequência dela. Deslocar as duas por ano
+introduziria uma deriva de um ou dois dias no prazo.
+
+A versão duplicada nasce como `rascunho` e **não** assume a vigência do exercício de destino
+se já houver uma vigente — duplicar é um ato de rascunho, não de publicação.

@@ -36,7 +36,12 @@ import {
   budgetVersionInputSchema,
   budgetSeriesInputSchema,
   budgetEntryUpdateSchema,
+  copyActualsInputSchema,
+  duplicateVersionInputSchema,
   BUDGET_STATUSES,
+  type CopyActualsInput,
+  type CopyActualsPreview,
+  type DuplicateVersionInput,
   type BudgetVersionInput,
   type BudgetSeriesInput,
   type BudgetEntryUpdate,
@@ -60,6 +65,10 @@ import { BP_TYPES, type DreType } from '@/lib/dre-types'
 import { generateMonthRange } from '@/lib/dre-calc'
 import { dimensionFilters } from '@/lib/sql-dimensions'
 import { expandSeries, fitsInFiscalYear, type RecurrenceInput } from '@/lib/budget-recurrence'
+import {
+  buildCopyDrafts, monthsBetween, collectActuals, countCopiedSeries,
+  applyCopyToBudget, applyDuplicateVersion, type CopiedSeriesDraft,
+} from '@/lib/budget-copy'
 import {
   planSeriesUpdate, applySeriesUpdate, applySeriesDelete, diffAdjustedFields, money,
   type SeriesRow, type EntryRow,
@@ -1161,3 +1170,204 @@ export async function deleteBudgetEntry(entryId: string) {
   revalidatePath('/orcamento')
   return { success: true as const, month: monthLabel(entry.competenceDate) }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACELERADORES — copiar do realizado e duplicar versão
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// O miolo (leitura do realizado, moldagem, gravação e o CTE de duplicação) vive
+// em `@/lib/budget-copy`, fora de 'use server', para poder ser exercitado direto
+// contra o banco. Daqui para baixo é só autenticação, validação e revalidate.
+
+/**
+ * Teto de lançamentos gerados por uma cópia. Existe para o detalhamento por
+ * dimensão não produzir centenas de linhas sem ninguém perceber — quando
+ * estoura, a action FALHA dizendo o número, em vez de cortar em silêncio.
+ */
+const MAX_COPIED_SERIES = 300
+
+/** Anotado à mão: sem isso o `'error' in planned` não estreita a união. */
+type CopyPlan =
+  | { error: string }
+  | {
+      input:        CopyActualsInput
+      fiscalYear:   number
+      drafts:       CopiedSeriesDraft[]
+      semCategoria: { count: number; total: number }
+      inativas:     { count: number; total: number }
+    }
+
+/**
+ * O caminho comum da prévia e da gravação — as duas partem do mesmo lugar.
+ *
+ * Sem `validateTargetsBelongToOrg` de propósito: aqui as FKs não vêm do cliente,
+ * vêm de `transactions` da própria organização, já filtradas por
+ * `organization_id` e por INNER JOIN nas categorias dela. Não há id de fora para
+ * validar.
+ */
+async function planCopy(organizationId: string, input: CopyActualsInput): Promise<CopyPlan> {
+  const parsed = copyActualsInputSchema.safeParse(input)
+  if (!parsed.success) return { error: parsed.error.issues[0].message }
+  const v = parsed.data
+
+  const loaded = await loadEditableVersion(organizationId, v.versionId)
+  if ('error' in loaded) return { error: loaded.error }
+
+  const { actuals, semCategoria, inativas } = await collectActuals(db, organizationId, v)
+
+  const drafts = buildCopyDrafts(actuals, {
+    fiscalYear:    loaded.version.fiscalYear,
+    shape:         v.shape,
+    granularity:   v.granularity,
+    adjustmentPct: v.adjustmentPct,
+  })
+
+  if (drafts.length > MAX_COPIED_SERIES) {
+    return {
+      error: `O período gera ${drafts.length} lançamentos, acima do limite de ${MAX_COPIED_SERIES}. `
+           + 'Use o detalhamento "Por categoria" ou reduza o período.',
+    }
+  }
+
+  return { input: v, fiscalYear: loaded.version.fiscalYear, drafts, semCategoria, inativas }
+}
+
+/**
+ * O que a cópia criaria, sem gravar nada. A gravação refaz o cálculo do zero — a
+ * prévia serve para o usuário decidir, nunca como fonte do que se grava.
+ */
+export async function previewCopyActuals(
+  input: CopyActualsInput,
+): Promise<{ preview: CopyActualsPreview } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const planned = await planCopy(organizationId, input)
+  if ('error' in planned) return { error: planned.error }
+  const { drafts, semCategoria, inativas } = planned
+
+  const sourceTotals = { inflow: 0, outflow: 0 }
+  const targetTotals = { inflow: 0, outflow: 0 }
+  for (const d of drafts) {
+    sourceTotals[d.direction] += d.sourceTotal
+    targetTotals[d.direction] += d.total
+  }
+
+  return {
+    preview: {
+      rows: drafts.map(d => ({
+        description:    d.description,
+        direction:      d.direction,
+        categoryName:   d.categoryName,
+        categoryCode:   d.categoryCode,
+        dimensionLabel: d.dimensionLabel,
+        startMonth:     d.startMonth,
+        occurrences:    d.occurrences,
+        amountMode:     d.amountMode,
+        sourceTotal:    d.sourceTotal,
+        total:          d.total,
+      })),
+      monthsInSource: monthsBetween(planned.input.sourceFrom, planned.input.sourceTo),
+      sourceTotals,
+      targetTotals,
+      semCategoria,
+      inativas,
+      existingCopied: await countCopiedSeries(db, planned.input.versionId),
+    },
+  }
+}
+
+/**
+ * Cria os lançamentos orçados a partir do realizado.
+ *
+ * As séries nascem com `source = 'copia_realizado'`, o que permite substituí-las
+ * numa segunda passada sem tocar no que foi lançado à mão.
+ */
+export async function copyActualsToBudget(input: CopyActualsInput) {
+  const { organizationId, userId } = await getAuthContext()
+
+  const planned = await planCopy(organizationId, input)
+  if ('error' in planned) return { error: planned.error }
+  const { drafts, input: v } = planned
+
+  if (drafts.length === 0) {
+    return { error: 'Não há realizado categorizado nesse período para copiar.' }
+  }
+
+  const notes = `Copiado do realizado de ${monthLabel(v.sourceFrom)} a ${monthLabel(v.sourceTo)}`
+    + (v.adjustmentPct !== 0 ? ` com ${v.adjustmentPct > 0 ? '+' : ''}${v.adjustmentPct}%` : '')
+
+  const result = await db.transaction(tx => applyCopyToBudget(tx, {
+    organizationId,
+    versionId:       v.versionId,
+    userId,
+    drafts,
+    notes,
+    replaceExisting: v.replaceExisting ?? false,
+  }))
+
+  revalidatePath('/orcamento')
+  return { success: true as const, ...result }
+}
+
+/**
+ * Duplica uma versão inteira — o mesmo caminho serve para revisão (mesmo
+ * exercício, outro nome) e para cenário ou virada de ano (exercício diferente).
+ */
+export async function duplicateBudgetVersion(sourceId: string, input: DuplicateVersionInput) {
+  const { organizationId, userId } = await getAuthContext()
+
+  const parsed = duplicateVersionInputSchema.safeParse(input)
+  if (!parsed.success) return { error: parsed.error.issues[0].message }
+  const { name, fiscalYear } = parsed.data
+
+  const [source] = await db
+    .select({
+      id: budgetVersions.id,
+      fiscalYear: budgetVersions.fiscalYear,
+      description: budgetVersions.description,
+    })
+    .from(budgetVersions)
+    .where(and(eq(budgetVersions.id, sourceId), eq(budgetVersions.organizationId, organizationId)))
+    .limit(1)
+  if (!source) return { error: 'Versão de origem não encontrada.' }
+
+  const [dup] = await db
+    .select({ id: budgetVersions.id })
+    .from(budgetVersions)
+    .where(and(
+      eq(budgetVersions.organizationId, organizationId),
+      eq(budgetVersions.fiscalYear, fiscalYear),
+      sql`lower(btrim(${budgetVersions.name})) = lower(btrim(${name}))`,
+    ))
+    .limit(1)
+  if (dup) return { error: `Já existe uma versão chamada "${name}" no exercício de ${fiscalYear}.` }
+
+  // Mesma regra do createBudgetVersion: só nasce vigente se o exercício ainda
+  // não tem uma. Duplicar nunca destrona a versão que já está valendo.
+  const [existingActive] = await db
+    .select({ id: budgetVersions.id })
+    .from(budgetVersions)
+    .where(and(
+      eq(budgetVersions.organizationId, organizationId),
+      eq(budgetVersions.fiscalYear, fiscalYear),
+      eq(budgetVersions.isActive, true),
+    ))
+    .limit(1)
+
+  const delta = fiscalYear - source.fiscalYear
+
+  const result = await db.transaction(tx => applyDuplicateVersion(tx, {
+    organizationId,
+    sourceId,
+    name,
+    fiscalYear,
+    description: source.description,
+    isActive:    !existingActive,
+    userId,
+    delta,
+  }))
+
+  revalidatePath('/orcamento')
+  return { success: true as const, id: result.versionId, series: result.series, entries: result.entries, shifted: delta }
+}
+
