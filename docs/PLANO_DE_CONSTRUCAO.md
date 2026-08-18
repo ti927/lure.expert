@@ -804,13 +804,13 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 9 — Orçamento e Previsão
+### FASE 9 — Orçamento e Previsão ✅ CONCLUÍDA
 
 **Objetivo:** o cliente declara o que deveria acontecer, e o sistema mostra a variação contra o que aconteceu. É a camada que faltava para o produto responder "vamos fechar o ano dentro do previsto?".
 
 **Inserida fora da ordem original** (a pedido do cliente, com a Fase 8 pausada em 8.1). As fases antes numeradas 9 e 10 passaram a **10** e **11**.
 
-**Deliverables:**
+**Deliverables entregues:**
 - Três tabelas separadas de `transactions`: `budget_versions` (exercício + versão nomeada), `budget_series` (a regra de repetição), `budget_entries` (as ocorrências materializadas)
 - Lançamento com recorrência: N ocorrências a cada M meses, em 4 modos de valor (fixo, reajuste % periódico, sazonal, parcelamento de um total)
 - Duas datas por lançamento — competência (alimenta a DRE Orçada) e caixa (alimenta o Fluxo Projetado)
@@ -821,9 +821,42 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 **Sessões:** 9.0 fundação · 9.1 CRUD + Planejamento · 9.2 Orçado × Realizado (primeiro uso real) · 9.3 escopos de edição · 9.4 copiar/duplicar · 9.5 CSV + recorrências.
 
-**Decisões estruturais:** `docs/SCHEMA_DECISIONS.md` Decisão 13.
+**Divergências do plano original, todas para mais:**
+- Os aceleradores viraram **quatro**, não três: copiar do realizado ganhou dois eixos independentes (formato mês-a-mês × média mensal, e detalhamento por categoria × por dimensão) em vez de um parâmetro só de granularidade.
+- O import de CSV virou **grade de 12 meses** (categorias nas linhas, meses nas colunas) em vez de uma linha por lançamento — é o formato em que o orçamento já existe na planilha do cliente.
+- As recorrências detectadas passaram a ser **mensalizadas**: a detecção do `/fluxo` trabalha em dias e o orçamento em meses, então uma recorrência semanal de R$ 100 entra como R$ 400/mês, não R$ 100.
 
-**Tempo:** ~2 semanas
+**Decisões estruturais:** `docs/SCHEMA_DECISIONS.md` Decisão 13 (13.1 a 13.13).
+
+**Tempo real:** 6 sessões.
+
+---
+
+### FASE 9.6–9.8 — Orçado dentro da DRE ✅ CONCLUÍDA
+
+**Objetivo:** o orçado deixa de viver só em `/orcamento` e passa a aparecer na `/dre`, que é a tela de trabalho real do controller. Quem está lendo o demonstrativo vê a meta na mesma linha, sem trocar de tela.
+
+**Pedido do cliente depois de usar a Fase 9**, o que confirma a tese: a comparação entre duas malhas de 12 meses em telas diferentes não acontece na cabeça de ninguém.
+
+**A regra central — a terceira coluna existe sempre e troca de significado:**
+
+| Orçamento | Colunas do mês | A terceira é |
+|---|---|---|
+| **Oculto** | `Valor` · `AV%` | variação vertical — participação na Receita Líquida do mês |
+| **Visível** | `Real` · `Orç` · `Var%` | variação horizontal — desvio percentual sobre o orçado |
+
+**Deliverables entregues:**
+- Análise vertical (AV%) na DRE, com base na Receita Líquida do mês e do período — feature clássica de demonstrativo que faltava, entregue sozinha na 9.6
+- Botão **Orçamento** e seletor de versão na barra de filtros; ligando, cada mês vira Real / Orç / Var% sob os mesmos filtros de dimensão
+- União realizado ∪ orçado: categoria orçada e não realizada aparece, porque "orcei e não gastei" é o achado mais valioso da tela
+- Drill-down do orçado com **botão de edição por ocorrência**, abrindo o mesmo diálogo de lançamento de `/orcamento`, com os três escopos
+- `src/components/budget/` reúne os diálogos que as duas telas compartilham; `src/lib/budget-read.ts` garante que DRE e aba de comparação leiam o orçado pela **mesma** query
+
+**Sessões:** 9.6 terceira coluna + AV% · 9.7 orçado lado a lado · 9.8 drill-down e edição.
+
+**Decisões estruturais:** `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
+
+**Tempo real:** 3 sessões.
 
 ---
 
@@ -1073,13 +1106,19 @@ Manter foco é mais difícil do que escrever código. Esta lista te protege.
 ## Apêndice — Roadmap visual de 6 meses
 
 ```
-Mês 1: Scaffolding + Fundações de Design/Voz + Schema + Multi-tenancy
-Mês 2: Ingestão de arquivos + Categorização IA
-Mês 3: Open Finance + Conversa
-Mês 4: Dashboard + BP gerencial + SEFAZ
-Mês 5: Cartões/Adquirentes + Agente Proativo
-Mês 6: Onboarding + Billing + Beta com 5 clientes pagantes
+Mês 1: Scaffolding + Fundações de Design/Voz + Schema + Multi-tenancy   ✅
+Mês 2: Ingestão de arquivos + Categorização IA                          ✅
+Mês 3: Open Finance + Conversa                                          ✅
+Mês 4: Dashboard + BP gerencial + SEFAZ                                 ✅
+Mês 5: Cartões/Adquirentes ⏸ (pausado em 8.1) → Orçamento e Previsão    ✅
+       + Orçado dentro da DRE                                           ✅
+Mês 6: Retomar adquirentes (8.2–8.5) + Agente Proativo + Onboarding/Billing
 ```
+
+**Onde o roadmap divergiu:** o Mês 5 trocou de conteúdo. Os connectors de adquirente pararam
+em 8.1 (Stone) e o cliente pediu **Orçamento e Previsão**, que não estava no plano de 6 meses —
+e que se provou a peça que faltava para o produto responder "vamos fechar o ano dentro do
+previsto?". A Fase 8 volta para o Mês 6.
 
 Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em diante é refinamento, novos connectors, e expansão de ICP.
 
@@ -1098,8 +1137,11 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v1.8** — Fase 4 fechada (4.D reconciliação + 4.E UX /contas + 4.F hint Pluggy IA). Fase 5 reescrita para refletir execução real: analytics financeiro (Dashboard KPIs, DRE 12 meses, Indicadores, Fluxo de Caixa projetado) + Expert drawer com chat Sonnet. Sessões 5.B, 5.D, 5.E, 5.F todas marcadas ✅. Pendente: 5.G (relatório fechamento mensal). Nota sobre divergência entre plano original (tool use) e execução atual (chat simples com KPI context) — tool use diferido para fase futura documentada.
 - **v1.9** — Fase 6 fechada. Deliverables entregues: BP via upload + seletor de mês + indicadores financeiros completos (Margem EBITDA, Liquidez Corrente/Seca, DCSR, Endividamento Geral, ROE, Ciclo Financeiro) + alertas no dashboard + separação date/effective_date (competência vs caixa) em todo o pipeline. Divergências do plano original documentadas (AR/AP diferido, BP via snapshot em vez de tabelas de apoio). Fase 7 (SEFAZ) suspensa por decisão de produto.
 
+- **v2.0** — **Fase 9 (Orçamento e Previsão) fechada** em 6 sessões, inserida fora da ordem original a pedido do cliente e com a Fase 8 pausada em 8.1. Três tabelas separadas de `transactions`, lançamento com recorrência em 4 modos de valor, duas datas por lançamento, três escopos de edição, e quatro aceleradores (copiar do realizado, duplicar versão, importar planilha, aceitar recorrências detectadas). As fases antes numeradas 9 e 10 passaram a **10** e **11**. Decisões estruturais em `SCHEMA_DECISIONS.md` Decisão 13 (13.1–13.13).
+- **v2.1** — **Orçado dentro da DRE (9.6–9.8) fechado**, pedido depois de o cliente usar a Fase 9. Cada mês da `/dre` ganhou uma terceira coluna que existe sempre e troca de significado: análise vertical (AV% sobre a Receita Líquida) com o orçamento oculto, desvio sobre o orçado com ele visível. Inclui união realizado ∪ orçado (categoria orçada e não realizada aparece), seletor de versão na barra de filtros, e drill-down do orçado com edição do lançamento sem sair da tela. Decisões em `SCHEMA_DECISIONS.md` 13.14 e 13.15. Roadmap de 6 meses atualizado com a divergência real do Mês 5.
+
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-05-23*
-*Versão: 1.9*
+*Última atualização: 2026-08-18*
+*Versão: 2.1*

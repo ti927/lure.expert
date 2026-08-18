@@ -46,9 +46,11 @@ o que está documentado, PARAR e me consultar.
 6. **Tudo em português** (interface, dados, comentários de código).
 7. **Antes de gerar texto pelo expert, leia `docs/AI_VOICE.md`.** Tom é
    "especialista calmo, direto, sem firulas".
-8. **Antes de criar componente novo, verifique se já existe** em
-   `/components/ui`, `/components/financial`, `/components/states`,
-   `/components/expert`.
+8. **Antes de criar componente novo, verifique se já existe** em `/components/ui`,
+   `/components/financial`, `/components/states`, `/components/expert`,
+   `/components/transacoes-shared` e `/components/budget`. Quando duas telas
+   precisarem do mesmo componente, **mova** o existente para `/components/` e
+   atualize os imports **no mesmo commit** — nunca duplique "por enquanto".
 9. **Toda tela que carrega dado implementa os 5 estados**
    (loading/empty/error/partial/success). Nunca tela em branco carregando.
 10. **Mutações via expert (Tipo B) seguem o pattern preview+confirm:**
@@ -97,12 +99,34 @@ o que está documentado, PARAR e me consultar.
 - `/app/(authenticated)` — rotas protegidas (dashboard, transacoes, dre, fluxo, contas, configuracoes, upload)
 - `/app/(public)` — rotas públicas (login — ainda em `/app/login` por ora)
 - `/components/ui` — base shadcn/ui (Button, Card, Input, etc.)
-- `/components/financial` — CurrencyDisplay, PercentageDelta, KPICard, DataTable
+- `/components/financial` — CurrencyDisplay, PercentageDelta, KPICard, DataTable, `Num` (célula das matrizes de 12 meses)
 - `/components/states` — EmptyState, LoadingState, ErrorState, PartialDataBanner
 - `/components/layout` — AppShell, Sidebar (criados na Fase 0.5)
 - `/components/expert` — ExpertTrigger (criado); futuros: ReportCanvas, InlineChart, DiffPreview
+- `/components/transacoes-shared` — o que /transacoes, /dre, /fluxo e /balanco compartilham:
+  `DrillDownDialog`, `ColHeader`, filtros (`MultiSelectFilter`, `DescFilter`, `AmountFilter`,
+  `DirectionFilter`), `DimFilter`, `CellCombobox`, `CategoryCellCombobox`, `BatchClassifyDialog`
+- `/components/budget` — o que /orcamento e /dre compartilham: `SeriesDialog` (criar/editar
+  lançamento, com os 3 escopos), `ScopeConfirmDialog`, `BudgetDrillDownDialog`
 - `/lib` — utilitários, clientes (supabase, anthropic, inngest)
 - `/lib/parsers` — parsers via LLM: `excel-csv.ts` (Excel/CSV/TXT → Claude Haiku), `pdf.ts` (PDF → Claude Haiku document API)
+
+**Lógica que vive em `/lib` e NÃO em `/server`.** A diretiva `'use server'` só deixa exportar função
+async, e — mais importante — o que está fora dela pode ser exercitado direto contra o banco num
+script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
+
+| Arquivo | O que concentra |
+|---|---|
+| `dre-calc.ts` | `computeSubtotals` (cascata do P&L), `generateMonthRange`, `verticalShare` (AV%) |
+| `dre-layout.ts` | `LAYOUT`, `buildBlocks` genérico (árvore Tipo → Pai → Filho) |
+| `sql-dimensions.ts` | `dimensionFilters(alias, filtros)` — o único trecho que entra via `sql.raw` |
+| `format.ts` | `fmtNum`/`fmtMoney`/`fmtBRL`/`fmtPct`/`fmtPctSigned`, `monthLabel`, `parseAmount` |
+| `budget-types.ts` | constantes, Zod e tipos do orçamento (importável pelo cliente) |
+| `budget-recurrence.ts` | `expandSeries` — expansão pura, o que permite o preview ao vivo no diálogo |
+| `budget-scope.ts` | `planSeriesUpdate` (decisão pura) + `applySeriesUpdate`/`Delete` (recebem o `tx`) |
+| `budget-copy.ts` | `buildCopyDrafts`, `shapeMonthly`, `collectActuals`, `applyDraftsToBudget`, `applyDuplicateVersion` |
+| `budget-import.ts` | `parseBudgetCsv`, `buildRecurrenceCandidates`, `timesPerMonth` |
+| `budget-read.ts` | `fetchBudgetRows` — a leitura do orçado que `/dre` e `/orcamento` compartilham |
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -179,11 +203,16 @@ concluído** (9.6, 9.7, 9.8 ✅). Fases 0–7 **100% concluídas**.
 **A regra da terceira coluna:** ela existe sempre e troca de significado. Orçamento **oculto** → `Valor`
 + `AV%` (variação vertical, participação na Receita Líquida). Orçamento **visível** → `Real` + `Orç` +
 `Var%` (variação horizontal, desvio sobre o orçado). A coluna Total segue a mesma regra. As duas leituras
-nunca aparecem juntas.
+nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 
-Depois disso: retomar a Fase 8 (adquirentes, 8.2–8.5), pausada. Candidata avulsa nunca comprometida:
-expert lendo o orçamento no system prompt.
-Fase 8 (adquirentes) **pausada** em 8.1 — retomada depois da 9.
+## Próximo passo
+
+**Fase 8 — Connectors de Adquirentes**, pausada em 8.1 (Stone). Faltam 8.2 (upload de extratos),
+8.3 (Cielo), 8.4 (reconciliação lote × vendas) e 8.5 (UX + MDR).
+
+Candidatas avulsas, nunca comprometidas:
+- Expert lendo o orçamento no system prompt ("você está 18% acima do orçado em SG&A")
+- Orçado no `/fluxo`, por data de caixa — a mecânica da DRE serve, mudando o regime
 
 **Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
 9 (Agente Proativo) e 10 (Onboarding/Billing) passam a **10** e **11**.
@@ -257,6 +286,10 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Orçado dentro da DRE (concluído)** | |
+| 9.8 | Drill-down do orçado com edição. `components/budget/budget-drilldown-dialog.tsx` extraído da `comparacao-tab`, com botão de edição por ocorrência; `series-dialog` e `scope-confirm-dialog` **movidos** de `app/(authenticated)/orcamento/` para `components/budget/` — importar de dentro da pasta de outra rota acoplaria as duas telas. `getBudgetSeries(seriesId)` carrega uma linha só. Edição é opcional no componente (sem a prop `edit`, é somente leitura); versão arquivada mostra o motivo em vez de botão morto. Verificado: **282 células conferidas somando as 470 ocorrências que as compõem**, nenhuma divergente |
+| 9.7 | Orçado lado a lado. `lib/budget-read.ts` (`fetchBudgetRows`) extraída de `getBudgetVsActual` — não por economia de linhas, mas porque a conciliação da 9.2 só vale se as duas telas lerem pela MESMA query. `getBudgetForPeriod` roda uma query em vez de cinco. Botão Orçamento + seletor de versão; união realizado ∪ orçado (categoria orçada e não realizada aparece); um caminho de código só para os dois estados. Fidelidade medida rodando a query antiga (via `git show`) contra a nova: 282 células idênticas |
+| 9.6 | Terceira coluna por mês + análise vertical. `verticalShare` em `lib/dre-calc.ts`, `tone="muted"` no `Num`, cabeçalho de duas linhas. Achado nos dados reais: um EBITDA **negativo** de −11,6% aparecia como "11,6%" — numa linha de conta a AV% é consumo (magnitude), num subtotal é margem (com sinal). Daí o parâmetro `signed` |
 | **Fase 9 — Orçamento (concluída)** | |
 | 9.5 | Aceleradores B. `lib/budget-import.ts` puro: `parseBudgetCsv` recebe o texto e os mapas de busca já carregados; `buildRecurrenceCandidates` e `recurrenceToDraft` convertem a detecção do `/fluxo`. **Planilha em grade de 12 meses** (categorias nas linhas, meses nas colunas) porque é o formato que já existe no mundo — uma linha por ocorrência explodiria 12× o que é um lançamento só. `categoria` casa por código **ou** nome, com homônimo recusado pedindo o código. Linha inválida não derruba o arquivo: aparece na prévia com o motivo e é a única de fora. **Mensalização das recorrências:** a detecção trabalha em dias (7 a 40) e o orçamento em meses — semanal de R$ 100 vira R$ 400/mês, não R$ 100. Categoria é obrigatória porque a detecção agrupa por descrição e não conhece plano de contas. `applyCopyToBudget` virou `applyDraftsToBudget(source)` e a substituição passou a apagar só o que veio da **mesma origem**. `normalizeAmount` movido de `parsers/excel-csv.ts` para `format.ts` como `parseAmount` |
 | 9.4 | Aceleradores A. `lib/budget-copy.ts` concentra o miolo fora de `'use server'` (mesmo motivo da 9.3): `buildCopyDrafts` puro, `collectActuals`/`countCopiedSeries` recebendo o executor, `applyCopyToBudget` e `applyDuplicateVersion` recebendo o `tx`. Copiar do realizado tem dois eixos separados de propósito — **formato** (mês a mês preservando sazonalidade × média mensal) e **detalhamento** (categoria × categoria+dimensões) — em vez de um "granularidade" ambíguo. Mapeamento por número do mês (jan de origem → jan do exercício), daí o teto de 12 meses: com 13, dois janeiros disputariam o mesmo alvo. Direção entra na chave de agrupamento — compensar entrada com saída produziria mês de sinal trocado, e série tem uma direção só. Valores iguais viram `fixo` em vez de `sazonal` com N campos repetidos. Prévia+commit, e a gravação recalcula do zero. Duplicação num CTE único com `mapped AS MATERIALIZED` (sem isso `gen_random_uuid()` seria reavaliado na segunda referência e as ocorrências apontariam para o nada); `make_interval(years => delta)` desloca e já apara 29/02; o prazo de caixa é preservado em DIAS, não deslocado por ano |
