@@ -377,6 +377,8 @@ export async function getDashboardCategoryDrillDown(
     business_unit_name:   string | null
     legal_entity_id:      string | null
     legal_entity_name:    string | null
+    contact_id:           string | null
+    contact_name:         string | null
     account_id:           string | null
     account_name:         string | null
     account_type:         string | null
@@ -404,6 +406,8 @@ export async function getDashboardCategoryDrillDown(
       bu.name                  AS business_unit_name,
       t.legal_entity_id::text  AS legal_entity_id,
       le.name                  AS legal_entity_name,
+      t.contact_id::text       AS contact_id,
+      ct.name                  AS contact_name,
       t.account_id             AS account_id,
       t.account_name           AS account_name,
       t.account_type           AS account_type,
@@ -416,6 +420,7 @@ export async function getDashboardCategoryDrillDown(
     LEFT JOIN cost_centers cc   ON t.cost_center_id   = cc.id
     LEFT JOIN business_units bu ON t.business_unit_id = bu.id
     LEFT JOIN legal_entities le ON t.legal_entity_id  = le.id
+    LEFT JOIN contacts ct       ON t.contact_id       = ct.id
     LEFT JOIN data_sources ds   ON t.data_source_id   = ds.id
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.category_id IN (${sql.join(categoryIds.map(id => sql`${id}::uuid`), sql`, `)})
@@ -469,6 +474,8 @@ export async function getDashboardCategoryDrillDown(
       businessUnitName:   r.business_unit_name ?? null,
       legalEntityId:      r.legal_entity_id ?? null,
       legalEntityName:    r.legal_entity_name ?? null,
+      contactId:          r.contact_id ?? null,
+      contactName:        r.contact_name ?? null,
       accountId:          r.account_id ?? null,
       accountName:        r.account_name ?? null,
       accountType:        r.account_type ?? null,

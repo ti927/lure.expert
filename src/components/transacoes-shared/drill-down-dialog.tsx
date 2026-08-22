@@ -58,9 +58,6 @@ export interface DrillDownDialogProps {
   costCenters: CostCenter[]
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
-  // Só alimenta a classificação em lote. A coluna e o filtro de contato ainda
-  // não existem aqui porque `DrillDownTransaction` não carrega a dimensão — as
-  // cinco queries de drill-down teriam de mudar juntas.
   contacts: SimpleDimensionItem[]
 }
 
@@ -80,6 +77,7 @@ export function DrillDownDialog({
   const [ccFilter, setCcFilter] = useState<string | undefined>(undefined)
   const [buFilter, setBuFilter] = useState<string | undefined>(undefined)
   const [leFilter, setLeFilter] = useState<string | undefined>(undefined)
+  const [ctFilter, setCtFilter] = useState<string | undefined>(undefined)
   const [acctFilter, setAcctFilter] = useState<string | undefined>(undefined)
 
   const [sort, setSort] = useState<string | undefined>('date_desc')
@@ -103,7 +101,8 @@ export function DrillDownDialog({
       setSearch(undefined); setDirection(undefined)
       setAmountMin(undefined); setAmountMax(undefined)
       setCatFilter(undefined); setCcFilter(undefined)
-      setBuFilter(undefined); setLeFilter(undefined); setAcctFilter(undefined)
+      setBuFilter(undefined); setLeFilter(undefined); setCtFilter(undefined)
+      setAcctFilter(undefined)
       setSelectedIds(new Set()); setSort('date_desc')
     }
   }, [open])
@@ -133,6 +132,7 @@ export function DrillDownDialog({
   const ccOptions = useMemo(() => costCenters.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name })), [costCenters])
   const buOptions = useMemo(() => businessUnits.map(b => ({ id: b.id, label: b.code ? `${b.code} – ${b.name}` : b.name })), [businessUnits])
   const leOptions = useMemo(() => legalEntities.map(l => ({ id: l.id, label: l.name })), [legalEntities])
+  const ctOptions = useMemo(() => contacts.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name })), [contacts])
 
   const filtered = useMemo(() => {
     function multiMatch(value: string | null | undefined, filter: string | undefined): boolean {
@@ -155,10 +155,11 @@ export function DrillDownDialog({
       if (ccFilter && !multiMatch(tx.costCenterId, ccFilter)) return false
       if (buFilter && !multiMatch(tx.businessUnitId, buFilter)) return false
       if (leFilter && !multiMatch(tx.legalEntityId, leFilter)) return false
+      if (ctFilter && !multiMatch(tx.contactId, ctFilter)) return false
       if (acctFilter && !multiMatch(tx.accountId, acctFilter)) return false
       return true
     })
-  }, [localData, search, direction, amountMin, amountMax, catFilter, ccFilter, buFilter, leFilter, acctFilter])
+  }, [localData, search, direction, amountMin, amountMax, catFilter, ccFilter, buFilter, leFilter, ctFilter, acctFilter])
 
   const sorted = useMemo(() => {
     const arr = [...filtered]
@@ -178,6 +179,7 @@ export function DrillDownDialog({
         case 'costcenter':   av = a.costCenterName ?? ''; bv = b.costCenterName ?? ''; break
         case 'businessunit': av = a.businessUnitName ?? ''; bv = b.businessUnitName ?? ''; break
         case 'legalentity':  av = a.legalEntityName ?? ''; bv = b.legalEntityName ?? ''; break
+        case 'contact':      av = a.contactName ?? ''; bv = b.contactName ?? ''; break
       }
       if (av < bv) return -m
       if (av > bv) return m
@@ -217,7 +219,7 @@ export function DrillDownDialog({
 
   async function handleClassify(
     txId: string,
-    field: 'categoryId' | 'costCenterId' | 'businessUnitId' | 'legalEntityId',
+    field: 'categoryId' | 'costCenterId' | 'businessUnitId' | 'legalEntityId' | 'contactId',
     newId: string | null,
   ) {
     const nameMap = {
@@ -225,6 +227,7 @@ export function DrillDownDialog({
       costCenterId:   { nameKey: 'costCenterName'   as const, list: costCenters.map(c => ({ id: c.id, name: c.name })) },
       businessUnitId: { nameKey: 'businessUnitName' as const, list: businessUnits.map(c => ({ id: c.id, name: c.name })) },
       legalEntityId:  { nameKey: 'legalEntityName'  as const, list: legalEntities.map(c => ({ id: c.id, name: c.name })) },
+      contactId:      { nameKey: 'contactName'      as const, list: contacts.map(c => ({ id: c.id, name: c.name })) },
     }
     const { nameKey, list } = nameMap[field]
     const newName = newId ? (list.find(o => o.id === newId)?.name ?? null) : null
@@ -391,6 +394,7 @@ export function DrillDownDialog({
                   <col className="w-[130px]" />
                   <col className="w-[120px]" />
                   <col className="w-[120px]" />
+                  <col className="w-[140px]" />
                   <col className="w-9" />
                 </colgroup>
                 <thead className="sticky top-0 z-10">
@@ -447,6 +451,11 @@ export function DrillDownDialog({
                     <th className="px-2 py-1">
                       <ColHeader hasValue={!!leFilter} onClear={() => setLeFilter(undefined)} sortKey="legalentity" currentSort={sort} onSort={() => toggleSort('legalentity')}>
                         <MultiSelectFilter placeholder="Entidade" value={leFilter} options={leOptions} showSpecial onUpdate={setLeFilter} />
+                      </ColHeader>
+                    </th>
+                    <th className="px-2 py-1">
+                      <ColHeader hasValue={!!ctFilter} onClear={() => setCtFilter(undefined)} sortKey="contact" currentSort={sort} onSort={() => toggleSort('contact')}>
+                        <MultiSelectFilter placeholder="Contato" value={ctFilter} options={ctOptions} showSpecial onUpdate={setCtFilter} width="w-72" />
                       </ColHeader>
                     </th>
                     <th className="w-9" />
@@ -529,6 +538,14 @@ export function DrillDownDialog({
                             value={tx.legalEntityId}
                             options={legalEntities.map(c => ({ id: c.id, name: c.name }))}
                             onValueChange={v => handleClassify(tx.id, 'legalEntityId', v)}
+                            disabled={isClassifying}
+                          />
+                        </td>
+                        <td className="px-1 py-1">
+                          <CellCombobox
+                            value={tx.contactId}
+                            options={contacts}
+                            onValueChange={v => handleClassify(tx.id, 'contactId', v)}
                             disabled={isClassifying}
                           />
                         </td>

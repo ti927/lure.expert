@@ -116,6 +116,8 @@ export interface DrillDownTransaction {
   businessUnitName:    string | null
   legalEntityId:       string | null
   legalEntityName:     string | null
+  contactId:           string | null
+  contactName:         string | null
   // Contexto da conta bancária (Sessão drill-down v2)
   accountId:           string | null
   accountName:         string | null
