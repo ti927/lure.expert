@@ -27,6 +27,7 @@ import { MultiSelectFilter, DescFilter, AmountFilter, DirectionFilter } from './
 import { CellCombobox, CategoryCellCombobox } from './cell-combobox'
 import { BatchClassifyDialog } from './batch-classify-dialog'
 import { ACCT_LABELS } from './types'
+import type { SimpleDimensionItem } from './types'
 
 // Mapeamento unificado tipo → label (cobre DRE e BP).
 function getTypeLabel(type: string | null): string {
@@ -57,12 +58,16 @@ export interface DrillDownDialogProps {
   costCenters: CostCenter[]
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
+  // Só alimenta a classificação em lote. A coluna e o filtro de contato ainda
+  // não existem aqui porque `DrillDownTransaction` não carrega a dimensão — as
+  // cinco queries de drill-down teriam de mudar juntas.
+  contacts: SimpleDimensionItem[]
 }
 
 export function DrillDownDialog({
   open, onOpenChange, title, subtitle,
   data, loading, onDataChange,
-  leafCategories, costCenters, businessUnits, legalEntities,
+  leafCategories, costCenters, businessUnits, legalEntities, contacts,
 }: DrillDownDialogProps) {
   const [localData, setLocalData] = useState<DrillDownTransaction[]>([])
 
@@ -565,6 +570,7 @@ export function DrillDownDialog({
           costCenters={costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
           businessUnits={businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
           legalEntities={legalEntities.map(c => ({ id: c.id, name: c.name }))}
+          contacts={contacts}
           onSuccess={() => { setSelectedIds(new Set()) }}
         />
 

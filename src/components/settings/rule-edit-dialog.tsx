@@ -19,6 +19,7 @@ export interface RuleInitialValues {
   targetCostCenterId: string | null
   targetBusinessUnitId: string | null
   targetLegalEntityId: string | null
+  targetContactId: string | null
 }
 
 export interface AccountOption {
@@ -35,13 +36,14 @@ interface Props {
   costCenters: SimpleDimensionItem[]
   businessUnits: SimpleDimensionItem[]
   legalEntities: SimpleDimensionItem[]
+  contacts: SimpleDimensionItem[]
   accounts: AccountOption[]
   onSaved: () => void
 }
 
 export function RuleEditDialog({
   open, onOpenChange, mode, initial,
-  categories, costCenters, businessUnits, legalEntities, accounts,
+  categories, costCenters, businessUnits, legalEntities, contacts, accounts,
   onSaved,
 }: Props) {
   const [description, setDescription] = useState(initial.description)
@@ -50,6 +52,7 @@ export function RuleEditDialog({
   const [targetCostCenterId, setTargetCostCenterId] = useState<string | null>(initial.targetCostCenterId)
   const [targetBusinessUnitId, setTargetBusinessUnitId] = useState<string | null>(initial.targetBusinessUnitId)
   const [targetLegalEntityId, setTargetLegalEntityId] = useState<string | null>(initial.targetLegalEntityId)
+  const [targetContactId, setTargetContactId] = useState<string | null>(initial.targetContactId)
   const [isSaving, startTransition] = useTransition()
 
   useEffect(() => {
@@ -60,12 +63,13 @@ export function RuleEditDialog({
       setTargetCostCenterId(initial.targetCostCenterId)
       setTargetBusinessUnitId(initial.targetBusinessUnitId)
       setTargetLegalEntityId(initial.targetLegalEntityId)
+      setTargetContactId(initial.targetContactId)
     }
   }, [open, initial])
 
   const accountOptions: SimpleDimensionItem[] = accounts.map(a => ({ id: a.accountId, name: a.label }))
 
-  const hasTarget = !!(targetCategoryId || targetCostCenterId || targetBusinessUnitId || targetLegalEntityId)
+  const hasTarget = !!(targetCategoryId || targetCostCenterId || targetBusinessUnitId || targetLegalEntityId || targetContactId)
   const trimmedDesc = description.trim()
   const canSubmit = trimmedDesc.length > 0 && hasTarget
 
@@ -79,6 +83,7 @@ export function RuleEditDialog({
       targetCostCenterId,
       targetBusinessUnitId,
       targetLegalEntityId,
+      targetContactId,
     }
 
     startTransition(async () => {
@@ -168,12 +173,21 @@ export function RuleEditDialog({
               />
             </div>
 
-            <div className="space-y-2 col-span-2">
+            <div className="space-y-2">
               <Label className="text-xs">Entidade jurídica</Label>
               <CellCombobox
                 value={targetLegalEntityId}
                 options={legalEntities}
                 onValueChange={setTargetLegalEntityId}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Contato</Label>
+              <CellCombobox
+                value={targetContactId}
+                options={contacts}
+                onValueChange={setTargetContactId}
               />
             </div>
           </div>

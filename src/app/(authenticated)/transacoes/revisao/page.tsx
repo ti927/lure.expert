@@ -16,6 +16,7 @@ interface Props {
     costCenter?: string
     businessUnit?: string
     legalEntity?: string
+    contact?: string
   }
 }
 
@@ -30,6 +31,7 @@ export default async function RevisaoPage({ searchParams }: Props) {
     costCenter: searchParams.costCenter,
     businessUnit: searchParams.businessUnit,
     legalEntity: searchParams.legalEntity,
+    contact: searchParams.contact,
   })
 
   return (

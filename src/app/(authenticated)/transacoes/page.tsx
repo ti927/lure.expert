@@ -4,7 +4,7 @@ export const metadata: Metadata = { title: 'Transações' }
 import { ArrowLeftRight } from 'lucide-react'
 import { getTransactions } from '@/server/transactions'
 import { getCategories } from '@/server/categories'
-import { getCostCenters, getBusinessUnits, getLegalEntities } from '@/server/dimensions'
+import { getCostCenters, getBusinessUnits, getLegalEntities, getContactOptions } from '@/server/dimensions'
 import { getDataSourcesWithTransactions } from '@/server/connections'
 import { getReviewCount } from '@/server/review'
 import { EmptyState } from '@/components/states/empty-state'
@@ -21,6 +21,7 @@ interface SearchParams {
   costCenter?: string
   businessUnit?: string
   legalEntity?: string
+  contact?: string
   documentId?: string
   accountId?: string
   sort?: string
@@ -37,7 +38,7 @@ export default async function TransacoesPage({ searchParams }: Props) {
   const page = Math.max(1, Number(searchParams.page) || 1)
   const pageSize = Number(searchParams.pageSize) || undefined
 
-  const [txData, cats, ccs, bus, les, dataSrcs, reviewCount] = await Promise.all([
+  const [txData, cats, ccs, bus, les, cts, dataSrcs, reviewCount] = await Promise.all([
     getTransactions({
       page,
       pageSize,
@@ -49,6 +50,7 @@ export default async function TransacoesPage({ searchParams }: Props) {
       costCenter: searchParams.costCenter,
       businessUnit: searchParams.businessUnit,
       legalEntity: searchParams.legalEntity,
+      contact: searchParams.contact,
       documentId: searchParams.documentId,
       accountId: searchParams.accountId,
       sort: searchParams.sort,
@@ -60,13 +62,15 @@ export default async function TransacoesPage({ searchParams }: Props) {
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
+    getContactOptions(),
     getDataSourcesWithTransactions(),
     getReviewCount(),
   ])
 
   const hasAnyFilter = !!(searchParams.q || searchParams.from || searchParams.to ||
     searchParams.direction || searchParams.category || searchParams.costCenter ||
-    searchParams.businessUnit || searchParams.legalEntity || searchParams.documentId ||
+    searchParams.businessUnit || searchParams.legalEntity || searchParams.contact ||
+    searchParams.documentId ||
     searchParams.accountId || searchParams.reportType || searchParams.amountMin || searchParams.amountMax)
 
   if (txData.total === 0 && !hasAnyFilter) {
@@ -91,6 +95,9 @@ export default async function TransacoesPage({ searchParams }: Props) {
           costCenters: ccs.filter(c => c.isActive),
           businessUnits: bus.filter(c => c.isActive),
           legalEntities: les.filter(c => c.isActive),
+          // getContactOptions já devolve só os ativos, no formato do CellCombobox
+          // (o código curto cai para o documento quando não existe).
+          contacts: cts,
         }}
         dataSources={dataSrcs}
         searchParams={searchParams}

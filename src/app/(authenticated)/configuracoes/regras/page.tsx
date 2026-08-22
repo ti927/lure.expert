@@ -4,7 +4,7 @@ export const metadata: Metadata = { title: 'Regras de categorização' }
 
 import { listRules } from '@/server/categorization-rules'
 import { getCategories } from '@/server/categories'
-import { getCostCenters, getBusinessUnits, getLegalEntities } from '@/server/dimensions'
+import { getCostCenters, getBusinessUnits, getLegalEntities, getContactOptions } from '@/server/dimensions'
 import { getDataSourcesWithTransactions } from '@/server/connections'
 import { RulesManager } from '@/components/settings/rules-manager'
 import type { CategoryItem, SimpleDimensionItem } from '@/components/transacoes-shared/types'
@@ -23,7 +23,7 @@ interface Props {
 export default async function RegrasPage({ searchParams }: Props) {
   const page = Math.max(1, Number(searchParams.page) || 1)
 
-  const [data, cats, ccs, bus, les, accounts] = await Promise.all([
+  const [data, cats, ccs, bus, les, cts, accounts] = await Promise.all([
     listRules({
       page,
       q: searchParams.q,
@@ -34,6 +34,7 @@ export default async function RegrasPage({ searchParams }: Props) {
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
+    getContactOptions(),
     getDataSourcesWithTransactions(),
   ])
 
@@ -61,6 +62,7 @@ export default async function RegrasPage({ searchParams }: Props) {
         costCenters={ccItems}
         businessUnits={buItems}
         legalEntities={leItems}
+        contacts={cts}
         accounts={accounts.map(a => ({ accountId: a.accountId, label: a.label }))}
         searchParams={searchParams}
       />

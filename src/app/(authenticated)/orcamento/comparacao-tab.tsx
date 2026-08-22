@@ -588,6 +588,7 @@ export function ComparacaoTab({
           costCenters={costCenters}
           businessUnits={businessUnits}
           legalEntities={legalEntities}
+          contacts={contactOptions}
         />
       )}
 

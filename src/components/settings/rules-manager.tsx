@@ -33,6 +33,7 @@ interface Props {
   costCenters: SimpleDimensionItem[]
   businessUnits: SimpleDimensionItem[]
   legalEntities: SimpleDimensionItem[]
+  contacts: SimpleDimensionItem[]
   accounts: AccountOption[]
   searchParams: SearchParams
 }
@@ -46,10 +47,11 @@ const EMPTY_INITIAL: RuleInitialValues = {
   targetCostCenterId: null,
   targetBusinessUnitId: null,
   targetLegalEntityId: null,
+  targetContactId: null,
 }
 
 export function RulesManager({
-  data, categories, costCenters, businessUnits, legalEntities, accounts, searchParams,
+  data, categories, costCenters, businessUnits, legalEntities, contacts, accounts, searchParams,
 }: Props) {
   const router = useRouter()
   const [, startNav] = useTransition()
@@ -112,6 +114,7 @@ export function RulesManager({
       targetCostCenterId: rule.targetCostCenterId,
       targetBusinessUnitId: rule.targetBusinessUnitId,
       targetLegalEntityId: rule.targetLegalEntityId,
+      targetContactId: rule.targetContactId,
     })
     setDialogOpen(true)
   }
@@ -214,6 +217,7 @@ export function RulesManager({
                 <th className="px-2 py-1 text-left text-muted-foreground font-medium w-[140px]">C. custo</th>
                 <th className="px-2 py-1 text-left text-muted-foreground font-medium w-[140px]">Un. negócio</th>
                 <th className="px-2 py-1 text-left text-muted-foreground font-medium w-[140px]">Entidade</th>
+                <th className="px-2 py-1 text-left text-muted-foreground font-medium w-[140px]">Contato</th>
                 <th className="w-20" />
               </tr>
             </thead>
@@ -261,6 +265,9 @@ export function RulesManager({
                     </td>
                     <td className="px-2 py-2 text-xs">
                       {rule.targetLegalEntityName ?? <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-2 py-2 text-xs">
+                      {rule.targetContactName ?? <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
@@ -319,6 +326,7 @@ export function RulesManager({
         costCenters={costCenters}
         businessUnits={businessUnits}
         legalEntities={legalEntities}
+        contacts={contacts}
         accounts={accounts}
         onSaved={onDialogSaved}
       />

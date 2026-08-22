@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { getBpAllDates } from '@/server/balance-sheet'
 import { getCategories } from '@/server/categories'
-import { getCostCenters, getBusinessUnits, getLegalEntities } from '@/server/dimensions'
+import { getCostCenters, getBusinessUnits, getLegalEntities, getContactOptions } from '@/server/dimensions'
 import { BalancoClient } from './balanco-client'
 import type { LeafCategory } from '@/lib/dre-types'
 
@@ -32,12 +32,13 @@ export default async function BalancoPage({
   const fromDate = `${fromYM}-01`
   const toDate   = lastDayOfMonth(toYM)
 
-  const [data, allCats, ccs, bus, les] = await Promise.all([
+  const [data, allCats, ccs, bus, les, cts] = await Promise.all([
     getBpAllDates(fromDate, toDate),
     getCategories(),
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
+    getContactOptions(),
   ])
 
   // Leaf categories (sem filhos) — usadas pelo DrillDownDialog para edição inline
@@ -64,6 +65,7 @@ export default async function BalancoPage({
         costCenters={ccs.filter(c => c.isActive)}
         businessUnits={bus.filter(b => b.isActive)}
         legalEntities={les.filter(l => l.isActive)}
+        contactOptions={cts}
       />
     </div>
   )

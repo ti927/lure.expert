@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { getFluxoData } from '@/server/fluxo'
 import { getFluxoMensalData } from '@/server/fluxo-mensal'
-import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories } from '@/server/dimensions'
+import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories, getContactOptions } from '@/server/dimensions'
 import { FluxoClient } from './fluxo-client'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -28,7 +28,7 @@ export default async function FluxoPage() {
   const { from, to } = defaultMensalRange()
   const mesAtual = format(new Date(), 'MMMM yyyy', { locale: ptBR })
 
-  const [data, mensalData, costCenters, businessUnits, legalEntities, leafCategories] =
+  const [data, mensalData, costCenters, businessUnits, legalEntities, leafCategories, contactOptions] =
     await Promise.all([
       getFluxoData(),
       getFluxoMensalData({ from, to }),
@@ -36,6 +36,7 @@ export default async function FluxoPage() {
       getBusinessUnits(),
       getLegalEntities(),
       getLeafCategories(),
+      getContactOptions(),
     ])
 
   return (
@@ -55,6 +56,7 @@ export default async function FluxoPage() {
         businessUnits={businessUnits.filter(b => b.isActive)}
         legalEntities={legalEntities.filter(l => l.isActive)}
         leafCategories={leafCategories}
+        contactOptions={contactOptions}
       />
     </div>
   )

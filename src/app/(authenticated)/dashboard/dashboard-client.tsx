@@ -27,6 +27,7 @@ import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 
 type DashboardAlert = {
   id:       string
@@ -265,6 +266,7 @@ interface DashboardClientProps {
   costCenters:    CostCenter[]
   businessUnits:  BusinessUnit[]
   legalEntities:  LegalEntity[]
+  contactOptions: SimpleDimensionItem[]
 }
 
 interface DrillState {
@@ -277,6 +279,7 @@ interface DrillState {
 export function DashboardClient({
   kpis, cashFlow, indicators,
   topExpenses, monthRange, selectedMonth, leafCategories, costCenters, businessUnits, legalEntities,
+  contactOptions,
 }: DashboardClientProps) {
   const router = useRouter()
   const [isNavPending, startNavTransition] = useTransition()
@@ -716,6 +719,7 @@ export function DashboardClient({
           costCenters={costCenters}
           businessUnits={businessUnits}
           legalEntities={legalEntities}
+          contacts={contactOptions}
         />
       )}
     </div>

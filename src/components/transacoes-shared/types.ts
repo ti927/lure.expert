@@ -54,4 +54,5 @@ export interface BatchFormState {
   costCenterId: string
   businessUnitId: string
   legalEntityId: string
+  contactId: string
 }

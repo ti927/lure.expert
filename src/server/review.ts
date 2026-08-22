@@ -12,6 +12,7 @@ import {
   costCenters,
   businessUnits,
   legalEntities,
+  contacts,
 } from '@/db/schema'
 import { eq, and, isNotNull, desc, count, inArray, sql, ilike, gte, lte, or, isNull } from 'drizzle-orm'
 
@@ -42,6 +43,7 @@ export interface ReviewFilters {
   costCenter?: string
   businessUnit?: string
   legalEntity?: string
+  contact?: string
 }
 
 export async function getReviewQueue(filters: ReviewFilters = {}) {
@@ -110,12 +112,23 @@ export async function getReviewQueue(filters: ReviewFilters = {}) {
         conditions.push(inArray(transactions.legalEntityId, ids))
       }
     }
+    if (filters.contact) {
+      const ids = filters.contact.split(',').filter(Boolean)
+      if (ids.includes('__none__')) {
+        const rest = ids.filter(id => id !== '__none__')
+        conditions.push(rest.length > 0
+          ? or(isNull(transactions.contactId), inArray(transactions.contactId, rest))!
+          : isNull(transactions.contactId))
+      } else {
+        conditions.push(inArray(transactions.contactId, ids))
+      }
+    }
     return and(...conditions)
   }
 
   const whereClause = buildWhere()
 
-  const [rows, [{ total }], cats, ccs, bus, les] = await Promise.all([
+  const [rows, [{ total }], cats, ccs, bus, les, cts] = await Promise.all([
     db.select({
       id: transactions.id,
       date: transactions.date,
@@ -128,6 +141,7 @@ export async function getReviewQueue(filters: ReviewFilters = {}) {
       costCenterId: transactions.costCenterId,
       businessUnitId: transactions.businessUnitId,
       legalEntityId: transactions.legalEntityId,
+      contactId: transactions.contactId,
     })
       .from(transactions)
       .where(whereClause)
@@ -154,12 +168,19 @@ export async function getReviewQueue(filters: ReviewFilters = {}) {
     db.select({ id: legalEntities.id, name: legalEntities.name })
       .from(legalEntities)
       .where(eq(legalEntities.organizationId, organizationId)),
+
+    // Inclui inativo de propósito: a fila mostra o que já está gravado, e
+    // contato desativado depois da classificação ainda precisa de nome.
+    db.select({ id: contacts.id, name: contacts.name })
+      .from(contacts)
+      .where(eq(contacts.organizationId, organizationId)),
   ])
 
   const catMap = Object.fromEntries(cats.map(c => [c.id, `${c.code} – ${c.name}`]))
   const ccMap = Object.fromEntries(ccs.map(c => [c.id, c.name]))
   const buMap = Object.fromEntries(bus.map(b => [b.id, b.name]))
   const leMap = Object.fromEntries(les.map(l => [l.id, l.name]))
+  const ctMap = Object.fromEntries(cts.map(c => [c.id, c.name]))
 
   return {
     rows: rows.map(r => ({
@@ -168,12 +189,14 @@ export async function getReviewQueue(filters: ReviewFilters = {}) {
       costCenterName: r.costCenterId ? (ccMap[r.costCenterId] ?? null) : null,
       businessUnitName: r.businessUnitId ? (buMap[r.businessUnitId] ?? null) : null,
       legalEntityName: r.legalEntityId ? (leMap[r.legalEntityId] ?? null) : null,
+      contactName: r.contactId ? (ctMap[r.contactId] ?? null) : null,
     })),
     options: {
       categories: cats,
       costCenters: ccs,
       businessUnits: bus,
       legalEntities: les,
+      contacts: cts,
     },
     total,
     pages: Math.ceil(total / PAGE_SIZE),
@@ -210,6 +233,7 @@ export async function confirmSuggestions(ids: string[]) {
       costCenterId: transactions.costCenterId,
       businessUnitId: transactions.businessUnitId,
       legalEntityId: transactions.legalEntityId,
+      contactId: transactions.contactId,
     })
     .from(transactions)
     .where(and(
@@ -235,6 +259,7 @@ export async function confirmSuggestions(ids: string[]) {
       costCenterId: tx.costCenterId ?? null,
       businessUnitId: tx.businessUnitId ?? null,
       legalEntityId: tx.legalEntityId ?? null,
+      contactId: tx.contactId ?? null,
     })
   }
 
@@ -256,6 +281,7 @@ export async function skipSuggestions(ids: string[]) {
       costCenterId: null,
       businessUnitId: null,
       legalEntityId: null,
+      contactId: null,
       categorizationConfidence: null,
       categorizationMethod: null,
       needsReview: false,
@@ -280,6 +306,7 @@ async function upsertRuleFromConfirmation(
     costCenterId: string | null
     businessUnitId: string | null
     legalEntityId: string | null
+    contactId: string | null
   },
 ) {
   const trimmed = description.slice(0, 200)
@@ -305,6 +332,7 @@ async function upsertRuleFromConfirmation(
         targetCostCenterId: data.costCenterId,
         targetBusinessUnitId: data.businessUnitId,
         targetLegalEntityId: data.legalEntityId,
+        targetContactId: data.contactId,
         confirmedAt: new Date(),
         updatedAt: new Date(),
       })
@@ -321,6 +349,7 @@ async function upsertRuleFromConfirmation(
       targetCostCenterId: data.costCenterId,
       targetBusinessUnitId: data.businessUnitId,
       targetLegalEntityId: data.legalEntityId,
+      targetContactId: data.contactId,
       autoGenerated: true,
       confirmedAt: new Date(),
       priority: 0,

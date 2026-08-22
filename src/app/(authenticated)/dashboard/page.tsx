@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: 'Visão Geral' }
 import { PartialDataBanner } from "@/components/states/partial-data-banner";
 import { Button } from "@/components/ui/button";
 import { getDashboardKPIs, getCashFlowChart, getFinancialIndicators, getTopExpenseCategories } from "@/server/dashboard";
-import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories } from "@/server/dimensions";
+import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories, getContactOptions } from "@/server/dimensions";
 import { DashboardClient } from "./dashboard-client";
 import { signOut } from "./actions";
 import { format, startOfMonth, endOfMonth } from "date-fns";
@@ -27,7 +27,7 @@ export default async function DashboardPage({
 
   const monthParam = isValidMonth(searchParams.month) ? searchParams.month : undefined;
 
-  const [kpis, cashFlow, indicators, topExpenses, costCenters, businessUnits, legalEntities, leafCategories] = await Promise.all([
+  const [kpis, cashFlow, indicators, topExpenses, costCenters, businessUnits, legalEntities, leafCategories, contactOptions] = await Promise.all([
     getDashboardKPIs(monthParam),
     getCashFlowChart(monthParam),
     getFinancialIndicators(monthParam),
@@ -36,6 +36,7 @@ export default async function DashboardPage({
     getBusinessUnits(),
     getLegalEntities(),
     getLeafCategories(),
+    getContactOptions(),
   ]);
 
   // Base do mês de referência — selecionado pelo usuário ou mês atual.
@@ -82,6 +83,7 @@ export default async function DashboardPage({
         costCenters={costCenters.filter(c => c.isActive)}
         businessUnits={businessUnits.filter(b => b.isActive)}
         legalEntities={legalEntities.filter(l => l.isActive)}
+        contactOptions={contactOptions}
       />
     </div>
   );

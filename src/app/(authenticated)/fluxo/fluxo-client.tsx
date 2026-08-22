@@ -28,6 +28,7 @@ import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 
 // ─── Tipos internos ───────────────────────────────────────────────────────────
 
@@ -91,11 +92,12 @@ interface CaixaCategoriaProps {
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
   leafCategories: LeafCategory[]
+  contactOptions: SimpleDimensionItem[]
 }
 
 function FluxoCaixaCategoria({
   initialData, initialFrom, initialTo,
-  costCenters, businessUnits, legalEntities, leafCategories,
+  costCenters, businessUnits, legalEntities, leafCategories, contactOptions,
 }: CaixaCategoriaProps) {
   const [data,       setData]       = useState<FluxoMensalData>(initialData)
   const [isPending,  startTransition]      = useTransition()
@@ -570,6 +572,7 @@ function FluxoCaixaCategoria({
           costCenters={costCenters}
           businessUnits={businessUnits}
           legalEntities={legalEntities}
+          contacts={contactOptions}
         />
       )}
     </Card>
@@ -618,11 +621,12 @@ interface FluxoClientProps {
   businessUnits:  BusinessUnit[]
   legalEntities:  LegalEntity[]
   leafCategories: LeafCategory[]
+  contactOptions: SimpleDimensionItem[]
 }
 
 export function FluxoClient({
   data, initialMensal, initialFrom, initialTo,
-  costCenters, businessUnits, legalEntities, leafCategories,
+  costCenters, businessUnits, legalEntities, leafCategories, contactOptions,
 }: FluxoClientProps) {
   const hasHistorico  = data.semanas.some(s => s.inflowReal > 0 || s.outflowReal > 0)
   const hasProjecao   = data.recorrencias.length > 0
@@ -640,6 +644,7 @@ export function FluxoClient({
         businessUnits={businessUnits}
         legalEntities={legalEntities}
         leafCategories={leafCategories}
+        contactOptions={contactOptions}
       />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

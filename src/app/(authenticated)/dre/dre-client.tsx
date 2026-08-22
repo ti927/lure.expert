@@ -796,6 +796,7 @@ export function DreClient({
           costCenters={costCenters}
           businessUnits={businessUnits}
           legalEntities={legalEntities}
+          contacts={contactOptions}
         />
       )}
     </div>

@@ -357,7 +357,8 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
 
   const hasFilters = !!(filters.q || filters.from || filters.to ||
     (filters.direction && filters.direction !== 'all') ||
-    filters.category || filters.costCenter || filters.businessUnit || filters.legalEntity)
+    filters.category || filters.costCenter || filters.businessUnit || filters.legalEntity ||
+    filters.contact)
 
   function buildUrl(overrides: Partial<ReviewFilters & { page: number }>) {
     const p = {
@@ -369,6 +370,7 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
       costCenter: filters.costCenter,
       businessUnit: filters.businessUnit,
       legalEntity: filters.legalEntity,
+      contact: filters.contact,
       page: 1,
       ...overrides,
     }
@@ -381,6 +383,7 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
     if (p.costCenter) params.set('costCenter', p.costCenter)
     if (p.businessUnit) params.set('businessUnit', p.businessUnit)
     if (p.legalEntity) params.set('legalEntity', p.legalEntity)
+    if (p.contact) params.set('contact', p.contact)
     if ((p.page ?? 1) > 1) params.set('page', String(p.page))
     const qs = params.toString()
     return `/transacoes/revisao${qs ? `?${qs}` : ''}`
@@ -448,6 +451,7 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
   const ccOptions = options.costCenters.map(c => ({ id: c.id, label: c.name }))
   const buOptions = options.businessUnits.map(b => ({ id: b.id, label: b.name }))
   const leOptions = options.legalEntities.map(l => ({ id: l.id, label: l.name }))
+  const ctOptions = options.contacts.map(c => ({ id: c.id, label: c.name }))
 
   if (rows.length === 0 && page === 1 && !hasFilters) {
     return (
@@ -557,6 +561,12 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
           options={leOptions}
           onUpdate={v => updateFilter({ legalEntity: v })}
         />
+        <MultiSelectFilter
+          label="Contato"
+          value={filters.contact}
+          options={ctOptions}
+          onUpdate={v => updateFilter({ contact: v })}
+        />
       </div>
 
       {/* Bulk toolbar */}
@@ -612,6 +622,7 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
                 <th className="px-4 py-3 text-right">Valor</th>
                 <th className="px-4 py-3 text-left">Categoria sugerida</th>
                 <th className="px-4 py-3 text-left">Centro de custo</th>
+                <th className="px-4 py-3 text-left">Contato</th>
                 <th className="px-4 py-3 text-center">Confiança</th>
                 <th className="px-4 py-3 text-center">Método</th>
                 <th className="px-4 py-3 text-right">Ações</th>
@@ -665,6 +676,10 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
 
                     <td className="px-4 py-3">
                       <DimensionChip label={row.costCenterName} />
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <DimensionChip label={row.contactName} />
                     </td>
 
                     <td className="px-4 py-3 text-center">

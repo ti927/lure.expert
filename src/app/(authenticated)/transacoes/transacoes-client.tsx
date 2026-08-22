@@ -23,6 +23,7 @@ import {
 import { CellCombobox, CategoryCellCombobox } from '@/components/transacoes-shared/cell-combobox'
 import { BatchClassifyDialog } from '@/components/transacoes-shared/batch-classify-dialog'
 import { ACCT_LABELS } from '@/components/transacoes-shared/types'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import type { DataSourceOption } from '@/server/connections'
 import type { Transaction } from '@/db/schema/transactions'
 import type { Category } from '@/db/schema/categories'
@@ -41,6 +42,7 @@ interface SearchParams {
   costCenter?: string
   businessUnit?: string
   legalEntity?: string
+  contact?: string
   documentId?: string
   accountId?: string
   sort?: string
@@ -54,6 +56,10 @@ interface DimensionOptions {
   costCenters: CostCenter[]
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
+  // Chega já filtrado e enxuto de getContactOptions — a carteira de contatos é
+  // ordem de grandeza maior que as outras três dimensões e não vale trazer a
+  // linha inteira só para o combobox.
+  contacts: SimpleDimensionItem[]
 }
 
 type TxRow = Transaction & {
@@ -71,7 +77,7 @@ interface Props {
   hasAnyFilter: boolean
 }
 
-type DimensionField = 'categoryId' | 'costCenterId' | 'businessUnitId' | 'legalEntityId'
+type DimensionField = 'categoryId' | 'costCenterId' | 'businessUnitId' | 'legalEntityId' | 'contactId'
 
 function formatDate(iso: string): string {
   const p = iso.split('-')
@@ -91,7 +97,7 @@ function formatBRL(amount: string | number): string {
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
 const LS_FILTERS_KEY = 'lure:transacoes:filters'
-const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'documentId', 'accountId', 'sort', 'reportType', 'amountMin', 'amountMax', 'pageSize'] as const
+const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'contact', 'documentId', 'accountId', 'sort', 'reportType', 'amountMin', 'amountMax', 'pageSize'] as const
 
 function saveFiltersToStorage(sp: SearchParams) {
   try {
@@ -219,6 +225,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
   const ccOptions  = options.costCenters.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name }))
   const buOptions  = options.businessUnits.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name }))
   const leOptions  = options.legalEntities.map(c => ({ id: c.id, label: c.name }))
+  const ctOptions  = options.contacts.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name }))
   const acctOptions = dataSources.map(s => ({ id: s.accountId, label: `${s.label} (${s.txCount})` }))
 
   const inflow  = Number(data.totals.inflow)
@@ -335,7 +342,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
       {/* ── Tabela (scroll interno) ────────────────────────────────────────── */}
       <div className="flex-1 min-h-0 overflow-hidden px-6 pb-0">
         <div className="h-full overflow-auto border rounded-lg">
-            <table className="w-full text-sm table-fixed min-w-[1320px] [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0">
+            <table className="w-full text-sm table-fixed min-w-[1470px] [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0">
               <colgroup>
                 <col className="w-9" />
                 <col className="w-[90px]" />
@@ -348,6 +355,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                 <col className="w-[130px]" />
                 <col className="w-[120px]" />
                 <col className="w-[120px]" />
+                <col className="w-[150px]" />
                 <col className="w-9" />
               </colgroup>
               <thead className="sticky top-0 z-10">
@@ -414,6 +422,12 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                   <th className="px-2 py-1">
                     <ColHeader hasValue={!!searchParams.legalEntity} onClear={() => updateFilters({ legalEntity: undefined, page: undefined })} sortKey="legalentity" currentSort={searchParams.sort} onSort={() => toggleSort('legalentity')}>
                       <MultiSelectFilter placeholder="Entidade" value={searchParams.legalEntity} options={leOptions} showSpecial onUpdate={v => updateFilters({ legalEntity: v, page: undefined })} />
+                    </ColHeader>
+                  </th>
+                  {/* Contato */}
+                  <th className="px-2 py-1">
+                    <ColHeader hasValue={!!searchParams.contact} onClear={() => updateFilters({ contact: undefined, page: undefined })} sortKey="contact" currentSort={searchParams.sort} onSort={() => toggleSort('contact')}>
+                      <MultiSelectFilter placeholder="Contato" value={searchParams.contact} options={ctOptions} showSpecial onUpdate={v => updateFilters({ contact: v, page: undefined })} width="w-72" />
                     </ColHeader>
                   </th>
                   {/* ações */}
@@ -486,6 +500,9 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                       </td>
                       <td className="px-1 py-1">
                         <CellCombobox value={tx.legalEntityId ?? null} options={options.legalEntities} onValueChange={v => handleClassify(tx.id, 'legalEntityId', v)} disabled={isClassifying} />
+                      </td>
+                      <td className="px-1 py-1">
+                        <CellCombobox value={tx.contactId ?? null} options={options.contacts} onValueChange={v => handleClassify(tx.id, 'contactId', v)} disabled={isClassifying} />
                       </td>
                       <td className="px-1 py-1 text-center">
                         <button onClick={() => setDeleteTargetIds([tx.id])} className="h-7 w-7 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/5" title="Apagar lançamento">
@@ -573,6 +590,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
         costCenters={options.costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
         businessUnits={options.businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
         legalEntities={options.legalEntities.map(c => ({ id: c.id, name: c.name }))}
+        contacts={options.contacts}
         onSuccess={() => { setSelectedIds(new Set()); router.refresh() }}
       />
     </div>

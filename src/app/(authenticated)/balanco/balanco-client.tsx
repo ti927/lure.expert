@@ -12,6 +12,7 @@ import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
+import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 
 const LABEL_W = 260
 const COL_W = 96
@@ -45,6 +46,7 @@ interface Props {
   costCenters: CostCenter[]
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
+  contactOptions: SimpleDimensionItem[]
 }
 
 interface DrillState {
@@ -56,7 +58,7 @@ interface DrillState {
 
 export function BalancoClient({
   data, defaultFrom, defaultTo, hasUrlParams,
-  leafCategories, costCenters, businessUnits, legalEntities,
+  leafCategories, costCenters, businessUnits, legalEntities, contactOptions,
 }: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -396,6 +398,7 @@ export function BalancoClient({
           costCenters={costCenters}
           businessUnits={businessUnits}
           legalEntities={legalEntities}
+          contacts={contactOptions}
         />
       )}
     </div>

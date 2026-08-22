@@ -19,6 +19,7 @@ interface BatchClassifyDialogProps {
   costCenters: SimpleDimensionItem[]
   businessUnits: SimpleDimensionItem[]
   legalEntities: SimpleDimensionItem[]
+  contacts: SimpleDimensionItem[]
   onSuccess?: (updated: number) => void
 }
 
@@ -30,10 +31,11 @@ export function BatchClassifyDialog({
   costCenters,
   businessUnits,
   legalEntities,
+  contacts,
   onSuccess,
 }: BatchClassifyDialogProps) {
   const [batchForm, setBatchForm] = useState<BatchFormState>({
-    categoryId: '', costCenterId: '', businessUnitId: '', legalEntityId: '',
+    categoryId: '', costCenterId: '', businessUnitId: '', legalEntityId: '', contactId: '',
   })
   const [isBatching, setIsBatching] = useState(false)
 
@@ -65,6 +67,7 @@ export function BatchClassifyDialog({
       costCenterId:   resolveField(batchForm.costCenterId),
       businessUnitId: resolveField(batchForm.businessUnitId),
       legalEntityId:  resolveField(batchForm.legalEntityId),
+      contactId:      resolveField(batchForm.contactId),
     }
     if (Object.values(payload).every(v => v === undefined)) {
       toast.error('Selecione ao menos uma dimensão.')
@@ -78,7 +81,7 @@ export function BatchClassifyDialog({
       } else if (result?.updated !== undefined) {
         toast.success(`${result.updated} transaç${result.updated !== 1 ? 'ões' : 'ão'} classificada${result.updated !== 1 ? 's' : ''}.`)
         onOpenChange(false)
-        setBatchForm({ categoryId: '', costCenterId: '', businessUnitId: '', legalEntityId: '' })
+        setBatchForm({ categoryId: '', costCenterId: '', businessUnitId: '', legalEntityId: '', contactId: '' })
         onSuccess?.(result.updated)
       }
     } catch {
@@ -114,6 +117,10 @@ export function BatchClassifyDialog({
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">Entidade jurídica</p>
             <BatchCombobox value={batchForm.legalEntityId} options={legalEntities.map(c => ({ id: c.id, label: c.name }))} placeholder="Não alterar" onValueChange={v => setBatchForm(prev => ({ ...prev, legalEntityId: v }))} />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">Contato</p>
+            <BatchCombobox value={batchForm.contactId} options={contacts.map(c => ({ id: c.id, label: c.code ? `${c.code} – ${c.name}` : c.name }))} placeholder="Não alterar" onValueChange={v => setBatchForm(prev => ({ ...prev, contactId: v }))} />
           </div>
         </div>
         <DialogFooter>
