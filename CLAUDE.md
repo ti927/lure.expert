@@ -211,7 +211,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 
 ## Próximo passo
 
-**Fase 10 — Dimensões: cliente/fornecedor e rateio.** Em andamento; 10.0 concluída.
+**Fase 10 — Dimensões: cliente/fornecedor e rateio.** Em andamento; 10.0 a 10.4 concluídas.
 
 | Sessão | Entrega | Status |
 |---|---|---|
@@ -219,7 +219,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 10.1 | Contato como 4ª dimensão nas telas: filtro, coluna, batch, regras, Haiku | ✅ |
 | 10.2 | Schema do rateio: `transaction_allocations` + view `transaction_lines` | ✅ |
 | 10.3 | As leituras que filtram/agrupam por dimensão passam a respeitar o rateio | ✅ |
-| 10.4 | UI do rateio: diálogo por lançamento, linha expansível, rateio em lote | 🔲 |
+| 10.4 | UI do rateio: diálogo por lançamento, linha expansível, rateio em lote | ✅ (aguardando confirmação na tela) |
 | 10.5 | Modelos de rateio reutilizáveis | 🔲 |
 
 **Modelo do rateio (revisto na 10.2 — ver `docs/SCHEMA_DECISIONS.md` Decisão 16):** rateio é
