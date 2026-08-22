@@ -192,8 +192,12 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.5 ✅). **Orçado dentro da DRE
-concluído** (9.6, 9.7, 9.8 ✅). Fases 0–7 **100% concluídas**.
+**Status:** Fase 10 — Dimensões (cliente/fornecedor + rateio) **em andamento**, 10.0 concluída.
+Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.8 ✅). Fases 0–7 **100% concluídas**.
+Fase 8 (Adquirentes) pausada em 8.1.
+
+**Renumeração:** a Fase 10 passou a ser Dimensões; Agente Proativo vira **11** e
+Onboarding/Billing vira **12**.
 
 **Sessões — orçado na DRE:**
 - ✅ 9.6: Terceira coluna por mês + análise vertical (AV% sobre a Receita Líquida). Cabeçalho de duas linhas, `verticalShare` em `lib/dre-calc.ts`, `tone="muted"` no `Num`
@@ -207,12 +211,31 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 
 ## Próximo passo
 
+**Fase 10 — Dimensões: cliente/fornecedor e rateio.** Em andamento; 10.0 concluída.
+
+| Sessão | Entrega | Status |
+|---|---|---|
+| 10.0 | Cadastro de contatos (migration 0025, CRUD, rota, CSV) + conserto do `__null__` | ✅ |
+| 10.1 | Contato como 4ª dimensão nas telas: filtro, coluna, batch, regras, Haiku | 🔲 |
+| 10.2 | Schema do rateio: `transaction_allocations` + view `transaction_lines` | 🔲 |
+| 10.3 | As 7 leituras que filtram/agrupam por dimensão passam a respeitar o rateio | 🔲 |
+| 10.4 | UI do rateio: diálogo por lançamento, linha expansível, rateio em lote | 🔲 |
+| 10.5 | Modelos de rateio reutilizáveis | 🔲 |
+
+**Modelo do rateio (decidido, ver plano da fase):** rateio **independente por dimensão**; a
+**natureza NÃO é rateada** (um lançamento tem uma categoria só, então nenhuma linha da DRE se
+parte); `/transacoes` mostra **uma linha por lançamento, expansível**; **só o realizado** — o
+orçamento segue com uma dimensão por lançamento. Armazenamento: tabela `transaction_allocations`
+normalizada (peso por dimensão, Σ=1) + view `transaction_lines` que faz o cruzamento com
+`security_invoker = true`. Sem rateio a view devolve exatamente a linha de hoje.
+
 **Fase 8 — Connectors de Adquirentes**, pausada em 8.1 (Stone). Faltam 8.2 (upload de extratos),
 8.3 (Cielo), 8.4 (reconciliação lote × vendas) e 8.5 (UX + MDR).
 
 Candidatas avulsas, nunca comprometidas:
 - Expert lendo o orçamento no system prompt ("você está 18% acima do orçado em SG&A")
 - Orçado no `/fluxo`, por data de caixa — a mecânica da DRE serve, mudando o regime
+- Contato preenchido automaticamente pela NF-e (`invoices.contact_id` existe e nunca foi escrito)
 
 **Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
 9 (Agente Proativo) e 10 (Onboarding/Billing) passam a **10** e **11**.
@@ -257,6 +280,7 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
 - ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
+- 🔲 `db/migrations/rls/0025_contacts_dimension.sql` — `contacts` ganha `is_active`, `code`, `is_customer`, `is_supplier` + policy de DELETE (faltava) + `ON DELETE SET NULL` nas FKs de `transactions.contact_id` e `categorization_rules.target_contact_id`. **PENDENTE de aplicação — sem ela `/dre` e `/orcamento` quebram** (`getContactOptions` lê as colunas novas)
 
 **Scripts de teste RLS (`db/migrations/rls/`):**
 - `test_rls_budget.sql` — migration 0024: estrutura, CHECKs, triggers e isolamento das 3 tabelas de orçamento
@@ -286,6 +310,8 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Fase 10 — Dimensões (em andamento)** | |
+| 10.0 | Contatos viram cadastro. `contacts` existia desde a Fase 1 com FK em 5 tabelas e **nunca teve uma linha escrita** fora do orçamento — a sessão fechou a lacuna, não criou a dimensão. Migration 0025: `is_active`, `code`, `is_customer`/`is_supplier` (papel duplo — o mesmo CNPJ é cliente e fornecedor com frequência), **policy de DELETE que faltava** desde a 0002, e `ON DELETE SET NULL` nas duas FKs que ainda eram `no action`. `DimensionManager` **estendido** com `extraFields`/`roleFields` em vez de um segundo gerenciador. Import de CSV próprio (o `previewFlatImport` já é um `withCnpj ? … : …` em cada consulta; um terceiro ramo prejudicaria as duas dimensões existentes). **Conserto do `'__null__'::uuid`**: "Sem centro de custo" lançava erro de sintaxe no Postgres — agora vira `IS NULL`, e combinado com valores concretos vira disjunção. Verificado sobre 10.329 lançamentos reais |
 | **Orçado dentro da DRE (concluído)** | |
 | 9.8 | Drill-down do orçado com edição. `components/budget/budget-drilldown-dialog.tsx` extraído da `comparacao-tab`, com botão de edição por ocorrência; `series-dialog` e `scope-confirm-dialog` **movidos** de `app/(authenticated)/orcamento/` para `components/budget/` — importar de dentro da pasta de outra rota acoplaria as duas telas. `getBudgetSeries(seriesId)` carrega uma linha só. Edição é opcional no componente (sem a prop `edit`, é somente leitura); versão arquivada mostra o motivo em vez de botão morto. Verificado: **282 células conferidas somando as 470 ocorrências que as compõem**, nenhuma divergente |
 | 9.7 | Orçado lado a lado. `lib/budget-read.ts` (`fetchBudgetRows`) extraída de `getBudgetVsActual` — não por economia de linhas, mas porque a conciliação da 9.2 só vale se as duas telas lerem pela MESMA query. `getBudgetForPeriod` roda uma query em vez de cinco. Botão Orçamento + seletor de versão; união realizado ∪ orçado (categoria orçada e não realizada aparece); um caminho de código só para os dois estados. Fidelidade medida rodando a query antiga (via `git show`) contra a nova: 282 células idênticas |

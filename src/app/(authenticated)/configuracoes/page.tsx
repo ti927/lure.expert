@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { OrgForm } from '@/components/settings/org-form'
 import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
 import { getAutoCategorize } from '@/server/settings'
-import { Tags, Building2, Briefcase, Landmark, ChevronRight, Zap, FileText } from 'lucide-react'
+import { Tags, Building2, Briefcase, Landmark, Users, ChevronRight, Zap, FileText } from 'lucide-react'
 
 const NAV_SECTIONS = [
   {
@@ -37,6 +37,12 @@ const NAV_SECTIONS = [
     icon: Landmark,
     title: 'Entidades jurídicas',
     description: 'Vincule lançamentos a CNPJs — matriz, filiais ou empresas do grupo.',
+  },
+  {
+    href: '/configuracoes/contatos',
+    icon: Users,
+    title: 'Clientes e fornecedores',
+    description: 'Saiba quanto foi faturado de cada cliente e comprado de cada fornecedor.',
   },
 ]
 

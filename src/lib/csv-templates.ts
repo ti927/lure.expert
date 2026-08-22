@@ -7,7 +7,12 @@
 
 const BOM = '﻿'
 
-export type DimensionKind = 'categorias' | 'centros-de-custo' | 'unidades-de-negocio' | 'entidades-juridicas'
+export type DimensionKind =
+  | 'categorias'
+  | 'centros-de-custo'
+  | 'unidades-de-negocio'
+  | 'entidades-juridicas'
+  | 'contatos'
 
 interface TemplateSpec {
   filename: string
@@ -51,12 +56,31 @@ export const TEMPLATES: Record<DimensionKind, TemplateSpec> = {
       ['EJ02', 'Filial SP Ltda', '12.345.678/0002-71'],
     ],
   },
+  // `papel` aceita cliente, fornecedor ou ambos — é o par de booleanos do
+  // cadastro expresso numa coluna só, que é como uma planilha o representa.
+  contatos: {
+    filename: 'modelo-contatos.csv',
+    headers: ['codigo', 'nome', 'documento', 'papel', 'email', 'telefone'] as const,
+    sampleRows: [
+      ['CLI01', 'Supermercado Aurora Ltda', '12.345.678/0001-90', 'cliente', 'compras@aurora.com.br', '(11) 3000-1000'],
+      ['FOR01', 'Distribuidora Sul Ltda', '98.765.432/0001-10', 'fornecedor', 'vendas@dsul.com.br', ''],
+      ['CLI02', 'Transportes ACME Ltda', '11.222.333/0001-44', 'ambos', '', '(11) 99999-0000'],
+    ],
+  },
 }
 
 export const CATEGORY_HEADERS = TEMPLATES.categorias.headers
 export const COST_CENTER_HEADERS = TEMPLATES['centros-de-custo'].headers
 export const BUSINESS_UNIT_HEADERS = TEMPLATES['unidades-de-negocio'].headers
 export const LEGAL_ENTITY_HEADERS = TEMPLATES['entidades-juridicas'].headers
+export const CONTACT_HEADERS = TEMPLATES.contatos.headers
+
+/** Valores aceitos na coluna `papel` do CSV de contatos. */
+export const CONTACT_ROLES: Record<string, { isCustomer: boolean; isSupplier: boolean }> = {
+  cliente:    { isCustomer: true,  isSupplier: false },
+  fornecedor: { isCustomer: false, isSupplier: true  },
+  ambos:      { isCustomer: true,  isSupplier: true  },
+}
 
 /**
  * Orçamento — grade de 12 meses, uma linha por lançamento.

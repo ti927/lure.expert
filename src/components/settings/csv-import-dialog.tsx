@@ -19,10 +19,11 @@ import type {
   PreviewResult,
   CategoryPreviewRow,
   FlatPreviewRow,
+  ContactPreviewRow,
   CommitResult,
 } from '@/server/imports'
 
-type PreviewRow = CategoryPreviewRow | FlatPreviewRow
+type PreviewRow = CategoryPreviewRow | FlatPreviewRow | ContactPreviewRow
 
 interface CsvImportDialogProps {
   open: boolean
@@ -50,6 +51,7 @@ export function CsvImportDialog({ open, onOpenChange, kind, preview, commit }: C
     'centros-de-custo': { title: 'Importar centros de custo', singular: 'centro de custo', plural: 'centros de custo' },
     'unidades-de-negocio': { title: 'Importar unidades de negócio', singular: 'unidade', plural: 'unidades' },
     'entidades-juridicas': { title: 'Importar entidades jurídicas', singular: 'entidade', plural: 'entidades' },
+    'contatos': { title: 'Importar clientes e fornecedores', singular: 'contato', plural: 'contatos' },
   }
   const L = labels[kind]
 
@@ -224,6 +226,12 @@ export function CsvImportDialog({ open, onOpenChange, kind, preview, commit }: C
                             {kind === 'entidades-juridicas' && (
                               <th className="px-3 py-2 text-left font-medium text-xs text-muted-foreground">CNPJ</th>
                             )}
+                            {kind === 'contatos' && (
+                              <>
+                                <th className="px-3 py-2 text-left font-medium text-xs text-muted-foreground">CNPJ / CPF</th>
+                                <th className="px-3 py-2 text-left font-medium text-xs text-muted-foreground">Papel</th>
+                              </>
+                            )}
                           </>
                         )}
                         <th className="px-3 py-2 text-left font-medium text-xs text-muted-foreground">Observação</th>
@@ -241,6 +249,8 @@ export function CsvImportDialog({ open, onOpenChange, kind, preview, commit }: C
                           </td>
                           {kind === 'categorias' ? (
                             <CategoryCells row={row as CategoryPreviewRow} />
+                          ) : kind === 'contatos' ? (
+                            <ContactCells row={row as ContactPreviewRow} />
                           ) : (
                             <FlatCells row={row as FlatPreviewRow} showCnpj={kind === 'entidades-juridicas'} />
                           )}
@@ -311,6 +321,17 @@ function FlatCells({ row, showCnpj }: { row: FlatPreviewRow; showCnpj: boolean }
       {showCnpj && (
         <td className="px-3 py-1.5 text-xs font-mono">{row.cnpj || '—'}</td>
       )}
+    </>
+  )
+}
+
+function ContactCells({ row }: { row: ContactPreviewRow }) {
+  return (
+    <>
+      <td className="px-3 py-1.5 font-mono text-xs">{row.codigo || '—'}</td>
+      <td className="px-3 py-1.5">{row.nome}</td>
+      <td className="px-3 py-1.5 text-xs font-mono">{row.documento || '—'}</td>
+      <td className="px-3 py-1.5 text-xs capitalize">{row.papel || '—'}</td>
     </>
   )
 }

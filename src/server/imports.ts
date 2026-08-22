@@ -10,6 +10,7 @@ import {
   costCenters,
   businessUnits,
   legalEntities,
+  contacts,
 } from '@/db/schema'
 import { eq, and, isNotNull } from 'drizzle-orm'
 import { parseCsv, assertHeaders, CsvParseError } from '@/lib/csv-parser'
@@ -18,6 +19,8 @@ import {
   COST_CENTER_HEADERS,
   BUSINESS_UNIT_HEADERS,
   LEGAL_ENTITY_HEADERS,
+  CONTACT_HEADERS,
+  CONTACT_ROLES,
 } from '@/lib/csv-templates'
 
 const CATEGORY_TYPES = new Set([
@@ -636,6 +639,227 @@ export async function previewLegalEntityImport(csvText: string) {
 }
 export async function commitLegalEntityImport(csvText: string) {
   return commitFlatImport(csvText, LEGAL_ENTITY_HEADERS, legalEntities, true, '/configuracoes/entidades-juridicas')
+}
+
+// ─── Contatos (clientes e fornecedores) ──────────────────────────────────────
+//
+// Não passa por `previewFlatImport`: aquela função é uma especialização de dois
+// casos (com e sem CNPJ) e já carrega um ramo `withCnpj ? … : …` em cada consulta.
+// Contato tem três colunas a mais e um par de booleanos; um terceiro ramo
+// tornaria as duas dimensões existentes ilegíveis por conveniência da terceira.
+// O que é genuinamente comum — `parseCsv`, `assertHeaders`, `emptyPreview`, os
+// tipos de resultado — continua compartilhado.
+
+export interface ContactPreviewRow {
+  line: number
+  codigo: string
+  nome: string
+  documento?: string
+  papel: string
+  status: 'insert' | 'update' | 'invalid'
+  message?: string
+  changeHint?: string
+}
+
+interface ContactExisting {
+  id: string
+  name: string
+  code: string | null
+  document: string | null
+  isCustomer: boolean
+  isSupplier: boolean
+}
+
+async function loadContacts(organizationId: string) {
+  const rows: ContactExisting[] = await db
+    .select({
+      id: contacts.id,
+      name: contacts.name,
+      code: contacts.code,
+      document: contacts.document,
+      isCustomer: contacts.isCustomer,
+      isSupplier: contacts.isSupplier,
+    })
+    .from(contacts)
+    .where(eq(contacts.organizationId, organizationId))
+
+  const byCode = new Map<string, ContactExisting>()
+  const byDoc = new Map<string, ContactExisting>()
+  const byName = new Map<string, ContactExisting>()
+  for (const c of rows) {
+    if (c.code) byCode.set(c.code, c)
+    if (c.document) byDoc.set(c.document, c)
+    byName.set(c.name.trim().toLowerCase(), c)
+  }
+  return { byCode, byDoc, byName }
+}
+
+/** Mesma ordem do import das outras dimensões: código, depois documento, depois nome. */
+function matchContact(
+  maps: Awaited<ReturnType<typeof loadContacts>>,
+  codigo: string,
+  documento: string,
+  nome: string,
+): ContactExisting | undefined {
+  return (
+    (codigo ? maps.byCode.get(codigo) : undefined) ??
+    (documento ? maps.byDoc.get(documento) : undefined) ??
+    maps.byName.get(nome.toLowerCase())
+  )
+}
+
+export async function previewContactImport(csvText: string): Promise<PreviewResult<ContactPreviewRow>> {
+  const { organizationId } = await getAuthContext()
+
+  let parsed
+  try {
+    parsed = parseCsv(csvText)
+    assertHeaders(parsed.headers, CONTACT_HEADERS)
+  } catch (err) {
+    if (err instanceof CsvParseError) return emptyPreview(err.message)
+    throw err
+  }
+
+  const maps = await loadContacts(organizationId)
+  const codesInFile = new Map<string, number>()
+  const docsInFile = new Map<string, number>()
+
+  const rows: ContactPreviewRow[] = []
+  const errors: ImportRowError[] = []
+
+  parsed.rows.forEach((row, idx) => {
+    const line = idx + 2
+    const codigo = (row['codigo'] || '').trim()
+    const nome = (row['nome'] || '').trim()
+    const docRaw = (row['documento'] || '').trim()
+    const documento = normalizeCnpj(docRaw)
+    const papelRaw = (row['papel'] || '').trim().toLowerCase()
+    const email = (row['email'] || '').trim()
+    const telefone = (row['telefone'] || '').trim()
+
+    const issues: string[] = []
+    if (!nome) issues.push('nome vazio')
+    if (nome.length > 200) issues.push('nome com mais de 200 caracteres')
+    if (codigo && codigo.length > 20) issues.push('código com mais de 20 caracteres')
+    if (!papelRaw) issues.push('papel vazio (use cliente, fornecedor ou ambos)')
+    else if (!CONTACT_ROLES[papelRaw]) issues.push(`papel "${papelRaw}" inválido (use cliente, fornecedor ou ambos)`)
+    if (docRaw && documento.length !== 11 && documento.length !== 14) {
+      issues.push('documento inválido (CPF com 11 ou CNPJ com 14 dígitos)')
+    }
+    if (codigo) {
+      const dup = codesInFile.get(codigo)
+      if (dup !== undefined) issues.push(`código duplicado no arquivo (também na linha ${dup})`)
+      else codesInFile.set(codigo, line)
+    }
+    // O índice único (organization_id, document) rejeitaria isto no meio da
+    // gravação, deixando metade do arquivo dentro. Melhor barrar na prévia.
+    if (documento) {
+      const dup = docsInFile.get(documento)
+      if (dup !== undefined) issues.push(`documento duplicado no arquivo (também na linha ${dup})`)
+      else docsInFile.set(documento, line)
+    }
+
+    if (issues.length > 0) {
+      const message = issues.join('; ')
+      errors.push({ line, message })
+      rows.push({ line, codigo, nome, documento: docRaw, papel: papelRaw, status: 'invalid', message })
+      return
+    }
+
+    const match = matchContact(maps, codigo, documento, nome)
+    if (!match) {
+      rows.push({ line, codigo, nome, documento: docRaw, papel: papelRaw, status: 'insert' })
+      return
+    }
+
+    const role = CONTACT_ROLES[papelRaw]
+    const changes: string[] = []
+    if (match.name !== nome) changes.push(`nome: "${match.name}" → "${nome}"`)
+    if ((match.code ?? '') !== codigo) changes.push(`código: "${match.code ?? '—'}" → "${codigo || '—'}"`)
+    if ((match.document ?? '') !== documento) changes.push(`documento: "${match.document ?? '—'}" → "${documento || '—'}"`)
+    if (match.isCustomer !== role.isCustomer || match.isSupplier !== role.isSupplier) {
+      changes.push(`papel → "${papelRaw}"`)
+    }
+    if (email || telefone) changes.push('contato atualizado')
+
+    rows.push({
+      line, codigo, nome, documento: docRaw, papel: papelRaw,
+      status: 'update',
+      changeHint: changes.length > 0 ? changes.join('; ') : 'sem mudanças',
+    })
+  })
+
+  return {
+    ok: errors.length === 0,
+    rows,
+    errors,
+    summary: {
+      total: rows.length,
+      valid: rows.filter((r) => r.status !== 'invalid').length,
+      invalid: rows.filter((r) => r.status === 'invalid').length,
+      willInsert: rows.filter((r) => r.status === 'insert').length,
+      willUpdate: rows.filter((r) => r.status === 'update').length,
+    },
+  }
+}
+
+export async function commitContactImport(csvText: string): Promise<CommitResult> {
+  const { organizationId } = await getAuthContext()
+  const preview = await previewContactImport(csvText)
+  if (!preview.ok) {
+    return { error: preview.fileError ?? 'O arquivo contém linhas inválidas — corrija e tente novamente.' }
+  }
+
+  // Reparse para recuperar e-mail e telefone: a prévia não os carrega (não são
+  // critério de decisão), mas a gravação precisa deles.
+  const parsed = parseCsv(csvText)
+  const extras = new Map<number, { email: string | null; phone: string | null }>()
+  parsed.rows.forEach((row, idx) => {
+    extras.set(idx + 2, {
+      email: (row['email'] || '').trim() || null,
+      phone: (row['telefone'] || '').trim() || null,
+    })
+  })
+
+  // Recarregado após a prévia: entre uma e outra alguém pode ter cadastrado.
+  const maps = await loadContacts(organizationId)
+
+  let inserted = 0
+  let updated = 0
+
+  for (const row of preview.rows) {
+    if (row.status === 'invalid') continue
+
+    const documento = normalizeCnpj(row.documento ?? '')
+    const role = CONTACT_ROLES[row.papel]
+    const extra = extras.get(row.line) ?? { email: null, phone: null }
+
+    const values = {
+      name: row.nome,
+      code: row.codigo || null,
+      document: documento || null,
+      isCustomer: role.isCustomer,
+      isSupplier: role.isSupplier,
+      type: role.isCustomer && role.isSupplier ? 'both' : role.isCustomer ? 'customer' : 'supplier',
+      email: extra.email,
+      phone: extra.phone,
+    }
+
+    const match = matchContact(maps, row.codigo, documento, row.nome)
+    if (match) {
+      await db
+        .update(contacts)
+        .set(values)
+        .where(and(eq(contacts.id, match.id), eq(contacts.organizationId, organizationId)))
+      updated++
+    } else {
+      await db.insert(contacts).values({ organizationId, ...values })
+      inserted++
+    }
+  }
+
+  revalidatePath('/configuracoes/contatos')
+  return { success: true, inserted, updated }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

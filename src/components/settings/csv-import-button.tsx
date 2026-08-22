@@ -13,6 +13,8 @@ import {
   commitBusinessUnitImport,
   previewLegalEntityImport,
   commitLegalEntityImport,
+  previewContactImport,
+  commitContactImport,
 } from '@/server/imports'
 import type { DimensionKind } from '@/lib/csv-templates'
 
@@ -25,6 +27,7 @@ const ACTIONS = {
   'centros-de-custo': { preview: previewCostCenterImport, commit: commitCostCenterImport },
   'unidades-de-negocio': { preview: previewBusinessUnitImport, commit: commitBusinessUnitImport },
   'entidades-juridicas': { preview: previewLegalEntityImport, commit: commitLegalEntityImport },
+  contatos: { preview: previewContactImport, commit: commitContactImport },
 } as const
 
 export function CsvImportButton({ kind }: CsvImportButtonProps) {

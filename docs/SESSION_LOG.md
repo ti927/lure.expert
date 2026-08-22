@@ -6,6 +6,48 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 10.0 — Contatos viram cadastro (4a dimensão), parte 1
+
+Primeira sessão da Fase 10. `contacts` existia desde a Fase 1 e **nunca teve uma linha escrita por
+código algum** fora do orçamento. A tarefa era fechar a lacuna, não criar a dimensão.
+
+**Entregue:**
+- [db/migrations/rls/0025_contacts_dimension.sql](db/migrations/rls/0025_contacts_dimension.sql) — `is_active`, `code`, `is_customer`, `is_supplier`; backfill do papel a partir de `type`; `DEFAULT 'other'` em `type`; índice `idx_contacts_org_active`; **policy de DELETE** (não existia); `ON DELETE SET NULL` nas FKs de `transactions.contact_id` e `categorization_rules.target_contact_id` (eram `no action`).
+- [src/server/dimensions.ts](src/server/dimensions.ts) — CRUD completo de contatos no mesmo formato das outras três, `getContactLinkedCount`, e `getContactOptions` agora filtra `is_active` e usa `code` com fallback para `document`.
+- [src/lib/sql-dimensions.ts](src/lib/sql-dimensions.ts) — quarta dimensão + conserto do sentinela `__null__` (ver Decisão 15).
+- [src/app/(authenticated)/configuracoes/contatos/page.tsx](src/app/(authenticated)/configuracoes/contatos/page.tsx) — rota nova + entrada em `NAV_SECTIONS`.
+- [src/components/settings/dimension-manager.tsx](src/components/settings/dimension-manager.tsx) — ganhou `extraFields` e `roleFields`. **Estendido, não duplicado**: contato precisa de documento, e-mail, telefone e o par de papeis, e um segundo gerenciador seria a quinta cópia do mesmo formulário.
+- [src/server/imports.ts](src/server/imports.ts) — `previewContactImport` / `commitContactImport` + template `contatos` em `csv-templates.ts`.
+
+**Decisões de desenho:**
+
+**O import de contatos NÃO passa por `previewFlatImport`.** Aquela função é uma especialização de
+dois casos (com e sem CNPJ) e já carrega um ramo `withCnpj ? … : …` em cada consulta. Contato tem
+três colunas a mais e um par de booleanos; um terceiro ramo tornaria as duas dimensões existentes
+ilegiveis por conveniência da terceira. O que é genuinamente comum — `parseCsv`, `assertHeaders`,
+`emptyPreview`, os tipos de resultado — continua compartilhado. Efeito colateral bom: a versão de
+contatos carrega os existentes em mapas **uma vez**, em vez das três consultas por linha que a flat faz.
+
+**Documento duplicado é barrado na prévia, não na gravação.** O índice único `(organization_id,
+document)` rejeitaria a linha no meio do loop de commit, deixando metade do arquivo dentro e metade
+fora. A prévia detecta duplicata **dentro do próprio arquivo** e o CRUD traduz a violação 23505 em
+mensagem legível.
+
+**`get*LinkedCount` contava dois destinos e devia contar quatro.** Ignorava `budget_series` e
+`budget_entries` — subestimava o estrago exatamente na tela que existe para avisar sobre ele.
+Unificado em `countLinked`, e o texto do diálogo deixou de dizer "transação(ões)" para dizer
+"registro(s) entre lançamentos, regras de categorização e orçamento".
+
+**Verificado contra o banco real** (10.329 lançamentos, 3 organizações): "Sem centro de custo"
+executa em vez de lançar; bate com `IS NULL` cru; `com CC + sem CC = total` em contagem e em valor;
+`"sem CC" + todos os CCs` devolve o conjunto inteiro (prova de que é disjunção e não conjunção);
+filtro vazio não muda nada (sem regressão); a quarta dimensão entra na query sem quebrar.
+
+**NÃO verificado automaticamente:** todo o CRUD de contatos, o papel duplo, a recusa de CNPJ
+duplicado e o import de CSV — dependem da migration 0025, que é aplicada à mão no Supabase Studio.
+
+---
+
 ### ✅ Sessão 9.8 — Drill-down do orçado e edição pela DRE
 
 Fecha o ciclo: quem vê o desvio na DRE corrige a previsão ali mesmo, sem trocar de tela.

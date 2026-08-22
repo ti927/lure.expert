@@ -8,14 +8,16 @@ import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from '@/components/ui/command'
 import { cn } from '@/lib/utils'
+import { DIM_NONE } from '@/lib/dre-types'
 
 // Filtro multi-select de dimensão em barra de filtros (não em header de coluna —
 // para isso use `MultiSelectFilter`). Usado por /dre, /fluxo e /orcamento.
 
 export type DimOption = { id: string; name: string; code?: string | null }
 
-/** Sentinela para "sem essa dimensão preenchida". */
-export const DIM_NONE = '__null__'
+// A definição canônica está em `lib/dre-types.ts`: o SQL precisa do mesmo valor
+// para traduzi-lo em `IS NULL`. Reexportado para não quebrar quem importa daqui.
+export { DIM_NONE }
 
 interface DimFilterProps {
   label: string

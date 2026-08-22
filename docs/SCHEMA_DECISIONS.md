@@ -644,3 +644,67 @@ verificada na 9.2 — o orçado da aba bate célula a célula com a DRE — só 
 telas lerem pela mesma query. Uma segunda query "parecida" divergiria no primeiro filtro que alguém
 esquecesse de replicar. Pelo mesmo motivo os filtros de dimensão vão **idênticos** para os dois
 lados: filtrar só o orçado é o que faz a variação parecer melhor do que é.
+
+---
+
+## Decisão 14 — Contato como quarta dimensão analítica (Sessão 10.0)
+
+**Contexto:** a Decisão 6 fixou três dimensões (centro de custo, unidade de negócio, entidade
+jurídica) e registrou, três vezes em documentos diferentes, que não haveria rateio. A Fase 10
+revisita as duas coisas. Esta sessão trata da primeira: o cadastro de cliente/fornecedor.
+
+**O que já existia.** `contacts` nasceu na Fase 1 completa — `type`, nome, fantasia, documento,
+e-mail, telefone, CNAE, RLS, trigger `updated_at`, índice GIN trigram em `name` e índice único
+parcial em `(organization_id, document)`. `transactions.contact_id` existe desde a migration 0003,
+com FK e índice `idx_tx_org_contact` cujo comentário diz *"relatório de fornecedor/cliente"*.
+`categorization_rules.target_contact_id`, `invoices.contact_id`, `budget_series.contact_id` e
+`budget_entries.contact_id` também existem.
+
+**Nada disso jamais foi escrito por código algum**, exceto no orçamento — o `SeriesDialog` associa
+contato ao lançamento desde a 9.1. Em `transactions`, a coluna trafega no payload de `/transacoes`
+(via `getTableColumns`) e é sempre nula. Era infraestrutura dormente, não uma tabela a criar.
+
+**Papel duplo em vez de `type` textual.** O mesmo CNPJ é cliente e fornecedor com frequência — a
+transportadora que a empresa contrata também compra dela. Um `type` de valor único obrigaria a
+escolher um lado ou a duplicar a ficha, e duplicar quebraria o índice único `(org, document)`, que
+é justamente o que impede o mesmo CNPJ de entrar duas vezes. Daí o par `is_customer` / `is_supplier`.
+
+`type` **continua NOT NULL** porque é assim que `docs/SCHEMA_INICIAL.md` o define, e aquele
+documento se declara definitivo. Passa a ser **derivado** dos booleanos na escrita
+(`both` / `customer` / `supplier` / `other`), com `DEFAULT 'other'` no banco para que um INSERT que
+só informe os papéis não quebre. É redundância deliberada: a alternativa era mudar uma coluna
+declarada definitiva para ganhar nada — ninguém lê `type`.
+
+**`is_active` e `code` alinham contacts com as outras três.** O `DimensionManager` e o import de CSV
+dependem dos dois; sem eles contato seria a única dimensão sem arquivamento.
+
+**Faltavam duas coisas no banco, e são defeitos, não escolhas:**
+- `contacts` tinha policy de SELECT, INSERT e UPDATE, e **nenhuma de DELETE** (migration 0002). Com
+  RLS ativa isso torna a exclusão impossível pela sessão do usuário. As outras três dimensões têm as
+  quatro desde a 0008.
+- `transactions.contact_id` e `categorization_rules.target_contact_id` usavam `ON DELETE no action`,
+  o que bloquearia apagar um contato em uso. Passam a `SET NULL`, pelo mesmo motivo registrado na
+  Decisão 6: histórico não deve quebrar, só perder aquela classificação.
+
+**Migration:** `db/migrations/rls/0025_contacts_dimension.sql`
+
+---
+
+## Decisão 15 — O sentinela `__null__` nos filtros de dimensão (Sessão 10.0)
+
+**Defeito encontrado ao mapear o sistema.** `DimFilter` oferece a opção "Sem centro de custo" e
+emite o sentinela `DIM_NONE = '__null__'` dentro do array de ids. A aba Orçado × Realizado repassa
+esse array cru como `costCenterIds`, e `dimensionFilters` fazia `${id}::uuid` em cada elemento —
+`'__null__'::uuid` é erro de sintaxe no Postgres. Não havia sanitização em ponto algum do caminho, e
+`getBudgetVsActual` não valida a entrada com Zod. Confirmado contra o banco real: a chamada lançava.
+
+**A tradução certa é `IS NULL`, e a combinação é uma disjunção.** Marcar "Sem centro de custo"
+*junto com* centros concretos tem de devolver a união dos dois conjuntos — como `AND`, devolveria
+vazio sempre. Verificado sobre 10.329 lançamentos reais: `com CC + sem CC = total`, e
+`1 CC + sem CC` é exatamente a soma dos dois.
+
+**Onde o sentinela mora.** Foi promovido para `src/lib/dre-types.ts`, que não importa nada e se
+declara importável por cliente e servidor. `dim-filter.tsx` (client) o reexporta para não quebrar
+quem já importava de lá; `sql-dimensions.ts` (server-only, importa drizzle) o consome. Nenhum dos
+dois pode importar do outro — o cliente puxaria drizzle para o bundle, e o servidor puxaria a árvore
+de componentes.

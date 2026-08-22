@@ -38,12 +38,22 @@ export const BP_TYPES = [
   'patrimonio_liquido',
 ] as const
 
+/**
+ * Sentinela de "sem esta dimensão preenchida" nos filtros de dimensão.
+ *
+ * Mora aqui, e não em `dim-filter.tsx` (client) nem em `sql-dimensions.ts`
+ * (server-only, importa drizzle), porque os dois lados precisam do MESMO valor:
+ * o cliente o emite e o SQL o traduz para `IS NULL`.
+ */
+export const DIM_NONE = '__null__'
+
 export interface DreFilters {
   from: string               // YYYY-MM-DD
   to: string                 // YYYY-MM-DD
   costCenterIds?: string[]
   businessUnitIds?: string[]
   legalEntityIds?: string[]
+  contactIds?: string[]
 }
 
 export interface DreCategoryRow {

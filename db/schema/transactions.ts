@@ -53,7 +53,7 @@ export const transactions = pgTable(
     direction: text('direction').notNull(),
     description: text('description').notNull(),
     cleanedDescription: text('cleaned_description'),
-    contactId: uuid('contact_id').references(() => contacts.id),
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     categoryId: uuid('category_id').references(() => categories.id),
     // 0.00 a 1.00
     categorizationConfidence: numeric('categorization_confidence', { precision: 3, scale: 2 }),

@@ -21,7 +21,7 @@ export const categorizationRules = pgTable(
     conditions: jsonb('conditions').notNull(),
     // nullable: uma regra pode focar só em dimensões sem alterar a categoria
     targetCategoryId: uuid('target_category_id').references(() => categories.id),
-    targetContactId: uuid('target_contact_id').references(() => contacts.id),
+    targetContactId: uuid('target_contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     targetCostCenterId: uuid('target_cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
     targetBusinessUnitId: uuid('target_business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
     targetLegalEntityId: uuid('target_legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),

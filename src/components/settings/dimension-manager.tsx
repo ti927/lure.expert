@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,18 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 
+/** Campo de texto adicional além de nome/código/CNPJ (ex: documento, e-mail). */
+export type ExtraField = {
+  name: string
+  label: string
+  placeholder?: string
+  /** Classe de largura no formulário. Default: `w-40`. */
+  width?: string
+}
+
+/** Papel booleano marcável (ex: cliente / fornecedor). */
+export type RoleField = { name: string; label: string }
+
 export type DimensionItem = {
   id: string
   name: string
@@ -27,6 +40,10 @@ export type DimensionItem = {
   isActive: boolean
   createdAt: Date
   cnpj?: string | null
+  /** Valores dos `extraFields`, indexados pelo `name` do campo. */
+  extra?: Record<string, string | null>
+  /** Papéis marcados, indexados pelo `name` do papel. */
+  roles?: Record<string, boolean>
 }
 
 interface DimensionManagerProps {
@@ -35,6 +52,10 @@ interface DimensionManagerProps {
   description?: string
   singularLabel: string
   showCnpj?: boolean
+  /** Campos de texto extras. O formulário quebra em linhas conforme precisa. */
+  extraFields?: ExtraField[]
+  /** Papéis; ao menos um marcado costuma ser exigido pela server action. */
+  roleFields?: RoleField[]
   onCreate: (formData: FormData) => Promise<{ success?: boolean; error?: string }>
   onUpdate: (id: string, formData: FormData) => Promise<{ success?: boolean; error?: string }>
   onToggleActive: (id: string, isActive: boolean) => Promise<{ success?: boolean; error?: string }>
@@ -46,6 +67,8 @@ export function DimensionManager({
   items,
   singularLabel,
   showCnpj,
+  extraFields,
+  roleFields,
   onCreate,
   onUpdate,
   onToggleActive,
@@ -153,9 +176,9 @@ export function DimensionManager({
         <form
           ref={createFormRef}
           action={handleCreate}
-          className="flex gap-2 items-end p-3 border rounded-lg bg-muted/30"
+          className="flex flex-wrap gap-2 items-end p-3 border rounded-lg bg-muted/30"
         >
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-[180px]">
             <Label htmlFor="new-name" className="text-xs mb-1 block">Nome</Label>
             <Input id="new-name" name="name" placeholder={`Nome do ${singularLabel.toLowerCase()}`} required autoFocus />
           </div>
@@ -167,6 +190,25 @@ export function DimensionManager({
             <div className="w-36">
               <Label htmlFor="new-cnpj" className="text-xs mb-1 block">CNPJ (opcional)</Label>
               <Input id="new-cnpj" name="cnpj" placeholder="00.000.000/0001-00" />
+            </div>
+          )}
+          {extraFields?.map((f) => (
+            <div key={f.name} className={f.width ?? 'w-40'}>
+              <Label htmlFor={`new-${f.name}`} className="text-xs mb-1 block">{f.label}</Label>
+              <Input id={`new-${f.name}`} name={f.name} placeholder={f.placeholder} />
+            </div>
+          ))}
+          {roleFields && roleFields.length > 0 && (
+            <div>
+              <Label className="text-xs mb-1 block">Papel</Label>
+              <div className="flex items-center gap-3 h-9">
+                {roleFields.map((r) => (
+                  <label key={r.name} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <Checkbox name={r.name} />
+                    {r.label}
+                  </label>
+                ))}
+              </div>
             </div>
           )}
           <Button type="submit" size="sm" disabled={isPending}>
@@ -197,6 +239,8 @@ export function DimensionManager({
               key={item.id}
               item={item}
               showCnpj={showCnpj}
+              extraFields={extraFields}
+              roleFields={roleFields}
               isEditing={editingId === item.id}
               isPending={isPending}
               onEdit={() => setEditingId(item.id)}
@@ -218,8 +262,9 @@ export function DimensionManager({
               {deleteTarget?.linkedCount && deleteTarget.linkedCount > 0 ? (
                 <>
                   <strong>{deleteTarget.name}</strong> está vinculado a{' '}
-                  <strong>{deleteTarget.linkedCount} transação(ões)</strong>. Ao deletar, essas
-                  transações perderão esta classificação. Esta ação não pode ser desfeita.
+                  <strong>{deleteTarget.linkedCount} registro(s)</strong> entre lançamentos, regras
+                  de categorização e orçamento. Ao deletar, todos perderão esta classificação —
+                  os valores continuam, sem a classificação. Esta ação não pode ser desfeita.
                 </>
               ) : (
                 <>
@@ -249,6 +294,8 @@ export function DimensionManager({
 interface RowProps {
   item: DimensionItem
   showCnpj?: boolean
+  extraFields?: ExtraField[]
+  roleFields?: RoleField[]
   isEditing: boolean
   isPending: boolean
   onEdit: () => void
@@ -261,6 +308,8 @@ interface RowProps {
 function DimensionRow({
   item,
   showCnpj,
+  extraFields,
+  roleFields,
   isEditing,
   isPending,
   onEdit,
@@ -273,12 +322,12 @@ function DimensionRow({
     return (
       <form
         action={onUpdate}
-        className="flex gap-2 items-center px-3 py-2 bg-muted/20"
+        className="flex flex-wrap gap-2 items-center px-3 py-2 bg-muted/20"
       >
         <Input
           name="name"
           defaultValue={item.name}
-          className="h-8 flex-1"
+          className="h-8 flex-1 min-w-[160px]"
           autoFocus
           required
         />
@@ -296,6 +345,21 @@ function DimensionRow({
             placeholder="CNPJ"
           />
         )}
+        {extraFields?.map((f) => (
+          <Input
+            key={f.name}
+            name={f.name}
+            defaultValue={item.extra?.[f.name] ?? ''}
+            className={`h-8 ${f.width ?? 'w-40'}`}
+            placeholder={f.label}
+          />
+        ))}
+        {roleFields?.map((r) => (
+          <label key={r.name} className="flex items-center gap-1.5 text-sm cursor-pointer">
+            <Checkbox name={r.name} defaultChecked={item.roles?.[r.name] ?? false} />
+            {r.label}
+          </label>
+        ))}
         <Button type="submit" size="sm" variant="ghost" disabled={isPending}>
           <Check className="h-4 w-4 text-emerald-600" />
         </Button>
@@ -310,14 +374,27 @@ function DimensionRow({
     <div className={`flex items-center gap-3 px-3 py-2.5 ${!item.isActive ? 'opacity-60' : ''}`}>
       <div className="flex-1 min-w-0">
         <span className="text-sm font-medium text-foreground truncate">{item.name}</span>
-        <div className="flex gap-2 mt-0.5">
+        <div className="flex flex-wrap gap-2 mt-0.5">
           {item.code && (
             <span className="text-xs text-muted-foreground font-mono">{item.code}</span>
           )}
           {showCnpj && item.cnpj && (
             <span className="text-xs text-muted-foreground">{item.cnpj}</span>
           )}
+          {extraFields?.map((f) =>
+            item.extra?.[f.name] ? (
+              <span key={f.name} className="text-xs text-muted-foreground">{item.extra[f.name]}</span>
+            ) : null
+          )}
         </div>
+      </div>
+
+      <div className="flex items-center gap-1 shrink-0">
+        {roleFields?.map((r) =>
+          item.roles?.[r.name] ? (
+            <Badge key={r.name} variant="outline" className="text-xs">{r.label}</Badge>
+          ) : null
+        )}
       </div>
 
       {!item.isActive && (
