@@ -48,6 +48,7 @@ export interface BudgetCsvLookups {
   costCenters:   Map<string, string>
   businessUnits: Map<string, string>
   legalEntities: Map<string, string>
+  contacts:      Map<string, string>
 }
 
 const MONTH_COLUMNS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun',
@@ -185,6 +186,7 @@ export function parseBudgetCsv(
       ['costCenters',   'centro de custo',    'Centro de custo'],
       ['businessUnits', 'unidade de negocio', 'Unidade de negócio'],
       ['legalEntities', 'entidade juridica',  'Entidade jurídica'],
+      ['contacts',      'contato',            'Contato'],
     ]
     const resolved: Record<string, string | null> = {}
     const labels: string[] = []
@@ -237,6 +239,7 @@ export function parseBudgetCsv(
       costCenterId:   resolved['centro de custo'] ?? null,
       businessUnitId: resolved['unidade de negocio'] ?? null,
       legalEntityId:  resolved['entidade juridica'] ?? null,
+      contactId:      resolved['contato'] ?? null,
       dimensionLabel,
       intervalMonths: 1,
       dayOfMonth:     1,
@@ -355,7 +358,16 @@ export function buildRecurrenceCandidates(
 /** O lançamento que uma recorrência aceita vira. */
 export function recurrenceToDraft(
   candidate: RecurrenceCandidate,
-  choice: { categoryId: string; categoryName: string; categoryCode: string | null; costCenterId: string | null; amount: number },
+  choice: {
+    categoryId: string
+    categoryName: string
+    categoryCode: string | null
+    costCenterId: string | null
+    businessUnitId: string | null
+    legalEntityId: string | null
+    contactId: string | null
+    amount: number
+  },
 ): CopiedSeriesDraft {
   const startMonthNumber = Number(candidate.startMonth.slice(5, 7))
   const occurrences = 13 - startMonthNumber
@@ -368,8 +380,9 @@ export function recurrenceToDraft(
     categoryName:    choice.categoryName,
     categoryCode:    choice.categoryCode,
     costCenterId:    choice.costCenterId,
-    businessUnitId:  null,
-    legalEntityId:   null,
+    businessUnitId:  choice.businessUnitId,
+    legalEntityId:   choice.legalEntityId,
+    contactId:       choice.contactId,
     dimensionLabel:  null,
     startMonth:      candidate.startMonth,
     occurrences,

@@ -16,10 +16,13 @@ import type { RecurrenceCandidate } from '@/lib/budget-import'
 import { acceptDetectedRecurrences, getRecurrenceCandidates } from '@/server/budget'
 
 interface RowState {
-  selected:     boolean
-  categoryId:   string | null
-  costCenterId: string | null
-  amount:       string
+  selected:       boolean
+  categoryId:     string | null
+  costCenterId:   string | null
+  businessUnitId: string | null
+  legalEntityId:  string | null
+  contactId:      string | null
+  amount:         string
 }
 
 interface Props {
@@ -28,11 +31,15 @@ interface Props {
   version:        BudgetVersionListItem
   leafCategories: CategoryItem[]
   costCenters:    SimpleDimensionItem[]
+  businessUnits:  SimpleDimensionItem[]
+  legalEntities:  SimpleDimensionItem[]
+  contacts:       SimpleDimensionItem[]
   onSaved:        () => void
 }
 
 export function RecurrencesDialog({
-  open, onOpenChange, version, leafCategories, costCenters, onSaved,
+  open, onOpenChange, version, leafCategories,
+  costCenters, businessUnits, legalEntities, contacts, onSaved,
 }: Props) {
   const [candidates, setCandidates] = useState<RecurrenceCandidate[] | null>(null)
   const [state, setState] = useState<Record<string, RowState>>({})
@@ -46,9 +53,12 @@ export function RecurrencesDialog({
       if ('error' in result) { toast.error(result.error); onOpenChange(false); return }
       setCandidates(result.candidates)
       setState(Object.fromEntries(result.candidates.map(c => [c.key, {
-        selected:     false,
-        categoryId:   null,
-        costCenterId: null,
+        selected:       false,
+        categoryId:     null,
+        costCenterId:   null,
+        businessUnitId: null,
+        legalEntityId:  null,
+        contactId:      null,
         // Já mensalizado: uma recorrência de 7 dias entra como 4× o valor médio.
         amount:       String(c.valorMensal),
       }])))
@@ -71,7 +81,15 @@ export function RecurrencesDialog({
       const amount = Number(s.amount.replace(',', '.'))
       if (!s.categoryId) { toast.error(`Escolha a categoria de "${c.descricao}".`); return }
       if (!Number.isFinite(amount) || amount <= 0) { toast.error(`Valor inválido em "${c.descricao}".`); return }
-      choices.push({ key: c.key, categoryId: s.categoryId, costCenterId: s.costCenterId, amount })
+      choices.push({
+        key: c.key,
+        categoryId:     s.categoryId,
+        costCenterId:   s.costCenterId,
+        businessUnitId: s.businessUnitId,
+        legalEntityId:  s.legalEntityId,
+        contactId:      s.contactId,
+        amount,
+      })
     }
     if (choices.length === 0) { toast.error('Escolha ao menos uma recorrência.'); return }
 
@@ -121,6 +139,9 @@ export function RecurrencesDialog({
                   <th className="text-right px-2 py-1.5 font-medium w-28">Valor mensal</th>
                   <th className="text-left px-2 py-1.5 font-medium w-56">Categoria</th>
                   <th className="text-left px-2 py-1.5 font-medium w-40">Centro de custo</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-40">Un. de negócio</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-40">Entidade jurídica</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-40">Contato</th>
                 </tr>
               </thead>
               <tbody>
@@ -183,6 +204,33 @@ export function RecurrencesDialog({
                             value={s?.costCenterId ?? null}
                             options={costCenters}
                             onValueChange={v => patch(c.key, { costCenterId: v })}
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 align-top">
+                        {!disabled && (
+                          <CellCombobox
+                            value={s?.businessUnitId ?? null}
+                            options={businessUnits}
+                            onValueChange={v => patch(c.key, { businessUnitId: v })}
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 align-top">
+                        {!disabled && (
+                          <CellCombobox
+                            value={s?.legalEntityId ?? null}
+                            options={legalEntities}
+                            onValueChange={v => patch(c.key, { legalEntityId: v })}
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 align-top">
+                        {!disabled && (
+                          <CellCombobox
+                            value={s?.contactId ?? null}
+                            options={contacts}
+                            onValueChange={v => patch(c.key, { contactId: v })}
                           />
                         )}
                       </td>

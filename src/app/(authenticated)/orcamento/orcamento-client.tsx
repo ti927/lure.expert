@@ -318,6 +318,9 @@ export function OrcamentoClient({
             version={selectedVersion}
             leafCategories={leafCategories}
             costCenters={costCenters}
+            businessUnits={businessUnits}
+            legalEntities={legalEntities}
+            contacts={contactOptions}
             onSaved={() => refresh()}
           />
         </>

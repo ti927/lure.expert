@@ -68,6 +68,7 @@ export interface CopiedSeriesDraft {
   costCenterId:    string | null
   businessUnitId:  string | null
   legalEntityId:   string | null
+  contactId:       string | null
   dimensionLabel:  string | null
   startMonth:      string           // 'YYYY-MM'
   occurrences:     number
@@ -210,6 +211,10 @@ export function buildCopyDrafts(rows: ActualMonthRow[], opts: CopyShapeOptions):
       costCenterId:   g.costCenterId,
       businessUnitId: g.businessUnitId,
       legalEntityId:  g.legalEntityId,
+      // A cópia do realizado não agrupa por contato de propósito: a carteira é
+      // ordem de grandeza maior que as outras dimensões, e entrar na chave
+      // dividiria uma categoria em uma série por contraparte.
+      contactId:      null,
       dimensionLabel: g.dimensionLabel,
       intervalMonths: 1,
       dayOfMonth:     1,
@@ -489,7 +494,7 @@ export async function applyDraftsToBudget(
       costCenterId:   draft.costCenterId,
       businessUnitId: draft.businessUnitId,
       legalEntityId:  draft.legalEntityId,
-      contactId:      null,
+      contactId:      draft.contactId,
       competenceDate: e.competenceDate,
       cashDate:       e.cashDate,
       amount:         money(e.amount),
@@ -507,7 +512,7 @@ export async function applyDraftsToBudget(
       costCenterId:    draft.costCenterId,
       businessUnitId:  draft.businessUnitId,
       legalEntityId:   draft.legalEntityId,
-      contactId:       null,
+      contactId:       draft.contactId,
       startMonth:      `${draft.startMonth}-01`,
       occurrences:     draft.occurrences,
       intervalMonths:  draft.intervalMonths,

@@ -1434,7 +1434,7 @@ export async function duplicateBudgetVersion(sourceId: string, input: DuplicateV
 
 /** Os cadastros da organização, indexados como o parser precisa. */
 async function loadCsvLookups(organizationId: string): Promise<BudgetCsvLookups> {
-  const [cats, ccs, bus, les] = await Promise.all([
+  const [cats, ccs, bus, les, cts] = await Promise.all([
     db.select({
       id: categories.id, name: categories.name, code: categories.code,
       type: categories.type, isActive: categories.isActive, parentId: categories.parentId,
@@ -1445,6 +1445,8 @@ async function loadCsvLookups(organizationId: string): Promise<BudgetCsvLookups>
       .from(businessUnits).where(eq(businessUnits.organizationId, organizationId)),
     db.select({ id: legalEntities.id, name: legalEntities.name })
       .from(legalEntities).where(eq(legalEntities.organizationId, organizationId)),
+    db.select({ id: contacts.id, name: contacts.name })
+      .from(contacts).where(eq(contacts.organizationId, organizationId)),
   ])
 
   const byCode = new Map<string, LeafCategoryInfo>()
@@ -1469,6 +1471,7 @@ async function loadCsvLookups(organizationId: string): Promise<BudgetCsvLookups>
     costCenters:   flat(ccs),
     businessUnits: flat(bus),
     legalEntities: flat(les),
+    contacts:      flat(cts),
   }
 }
 
@@ -1599,7 +1602,9 @@ export async function acceptDetectedRecurrences(
     const targetError = await validateTargetsBelongToOrg(organizationId, {
       categoryId:     choice.categoryId,
       costCenterId:   choice.costCenterId,
-      businessUnitId: null, legalEntityId: null, contactId: null,
+      businessUnitId: choice.businessUnitId,
+      legalEntityId:  choice.legalEntityId,
+      contactId:      choice.contactId,
     })
     if (targetError) return { error: `"${candidate.descricao}": ${targetError}` }
 
@@ -1613,8 +1618,11 @@ export async function acceptDetectedRecurrences(
       categoryId:   choice.categoryId,
       categoryName: cat?.name ?? '',
       categoryCode: cat?.code ?? null,
-      costCenterId: choice.costCenterId,
-      amount:       choice.amount,
+      costCenterId:   choice.costCenterId,
+      businessUnitId: choice.businessUnitId,
+      legalEntityId:  choice.legalEntityId,
+      contactId:      choice.contactId,
+      amount:         choice.amount,
     }))
   }
 

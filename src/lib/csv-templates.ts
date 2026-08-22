@@ -97,13 +97,13 @@ export const BUDGET_CSV = {
   required: ['categoria', 'jan', 'fev', 'mar', 'abr', 'mai', 'jun',
              'jul', 'ago', 'set', 'out', 'nov', 'dez'] as const,
   optional: ['descricao', 'tipo', 'centro de custo', 'unidade de negocio',
-             'entidade juridica', 'observacao'] as const,
+             'entidade juridica', 'contato', 'observacao'] as const,
   sampleRows: [
-    ['Receita de vendas', 'Faturamento previsto', 'entrada', '', '', '', '',
+    ['Receita de vendas', 'Faturamento previsto', 'entrada', '', '', '', '', '',
      '120000', '120000', '120000', '135000', '135000', '135000', '140000', '140000', '150000', '160000', '190000', '210000'],
-    ['Aluguel', 'Aluguel da matriz', 'saida', 'Administrativo', '', '', '',
+    ['Aluguel', 'Aluguel da matriz', 'saida', 'Administrativo', '', '', '', '',
      '8500', '8500', '8500', '8500', '8900', '8900', '8900', '8900', '8900', '8900', '8900', '8900'],
-    ['13º salário', '', 'saida', '', '', '', 'metade em nov, metade em dez',
+    ['13º salário', '', 'saida', '', '', '', '', 'metade em nov, metade em dez',
      '', '', '', '', '', '', '', '', '', '', '42000', '42000'],
   ],
 } as const
@@ -111,7 +111,7 @@ export const BUDGET_CSV = {
 /** Ordem das colunas no modelo baixado: as opcionais antes da grade de meses. */
 const BUDGET_TEMPLATE_HEADERS = [
   'categoria', 'descricao', 'tipo', 'centro de custo', 'unidade de negocio',
-  'entidade juridica', 'observacao',
+  'entidade juridica', 'contato', 'observacao',
   'jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez',
 ] as const
 
