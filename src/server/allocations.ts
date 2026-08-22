@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { db } from '@/db'
-import { transactions, transactionAllocations, costCenters, businessUnits, legalEntities, contacts } from '@/db/schema'
+import { transactions, transactionAllocations, allocationTemplates, costCenters, businessUnits, legalEntities, contacts } from '@/db/schema'
 import { eq, and, inArray, asc, sql } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth-context'
 import { toCents, applyProportion } from '@/lib/allocation-math'
@@ -27,6 +27,8 @@ export type AllocationPart = z.infer<typeof parteSchema>
 export interface AllocationRow extends AllocationPart {
   id:       string
   sequence: number
+  /** Modelo de origem, se este rateio nasceu de um e não foi editado depois. */
+  allocationTemplateId: string | null
 }
 
 /** As partes de um lançamento, em ordem. Vazio = lançamento sem rateio. */
@@ -41,6 +43,7 @@ export async function getAllocations(transactionId: string): Promise<AllocationR
       businessUnitId: transactionAllocations.businessUnitId,
       legalEntityId:  transactionAllocations.legalEntityId,
       contactId:      transactionAllocations.contactId,
+      allocationTemplateId: transactionAllocations.allocationTemplateId,
       notes:          transactionAllocations.notes,
     })
     .from(transactionAllocations)
@@ -102,8 +105,16 @@ async function validarDimensoes(organizationId: string, partes: AllocationPart[]
  * Lista vazia remove o rateio e devolve o lançamento ao estado simples. A soma
  * é conferida aqui em centavos para dar mensagem boa, e conferida de novo pelo
  * banco no commit (migration 0026) — a do banco é a que vale, esta é cortesia.
+ *
+ * `templateId` é o carimbo de origem (10.5). Quem chama só o envia quando o
+ * rateio veio de um modelo E não foi editado depois — a contagem de uso na
+ * tela de modelos precisa contar a menos, nunca a mais.
  */
-export async function saveAllocations(transactionId: string, partes: AllocationPart[]) {
+export async function saveAllocations(
+  transactionId: string,
+  partes: AllocationPart[],
+  templateId?: string | null,
+) {
   const { organizationId } = await getAuthContext()
 
   const parsed = z.array(parteSchema).max(MAX_PARTES, `Máximo de ${MAX_PARTES} partes.`).safeParse(partes)
@@ -129,6 +140,19 @@ export async function saveAllocations(transactionId: string, partes: AllocationP
     }
     const dimErro = await validarDimensoes(organizationId, parsed.data)
     if (dimErro) return { error: dimErro }
+  }
+
+  // O carimbo é conferido, não confiado: um id de outra organização derrubaria
+  // a gravação inteira pela FK. Como o carimbo é etiqueta e o rateio é o que o
+  // usuário pediu, um id inválido vira null e o rateio segue.
+  let templateValido: string | null = null
+  if (templateId && parsed.data.length > 0) {
+    const [tpl] = await db
+      .select({ id: allocationTemplates.id })
+      .from(allocationTemplates)
+      .where(and(eq(allocationTemplates.id, templateId), eq(allocationTemplates.organizationId, organizationId)))
+      .limit(1)
+    templateValido = tpl?.id ?? null
   }
 
   // Catch loud: sem isto, uma recusa do gatilho do banco sobe como exceção
@@ -163,6 +187,7 @@ export async function saveAllocations(transactionId: string, partes: AllocationP
         businessUnitId: p.businessUnitId,
         legalEntityId:  p.legalEntityId,
         contactId:      p.contactId,
+        allocationTemplateId: templateValido,
         notes:          p.notes ?? null,
       })))
     }
@@ -254,7 +279,11 @@ export async function previewBatchAllocation(ids: string[], pesos: AllocationWei
 }
 
 /** Aplica o lote. Recalcula do zero em vez de confiar na prévia que veio do cliente. */
-export async function applyBatchAllocation(ids: string[], pesos: AllocationWeight[]) {
+export async function applyBatchAllocation(
+  ids: string[],
+  pesos: AllocationWeight[],
+  templateId?: string | null,
+) {
   const preview = await previewBatchAllocation(ids, pesos)
   if ('error' in preview) return preview
 
@@ -270,7 +299,7 @@ export async function applyBatchAllocation(ids: string[], pesos: AllocationWeigh
     })).filter(p => p.amount > 0)   // peso minúsculo sobre valor pequeno pode zerar
 
     if (partes.length === 0) continue
-    const r = await saveAllocations(row.transactionId, partes)
+    const r = await saveAllocations(row.transactionId, partes, templateId)
     if ('error' in r) return { error: `"${row.description}": ${r.error}` }
     aplicados++
   }

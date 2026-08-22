@@ -96,3 +96,50 @@ export function pctOf(partCents: number, totalCents: number): number {
 export function centsFromPct(pct: number, totalCents: number): number {
   return Math.round((totalCents * pct) / 100)
 }
+
+// ─── Modelos de rateio (10.5) ────────────────────────────────────────────────
+//
+// O modelo guarda PESO RELATIVO, não percentual fechado: 60:40, 6:4 e 7200:4800
+// são a mesma divisão. Guardar assim é o que deixa "Salvar como modelo" partir
+// de um rateio já feito em reais sem arredondar nada. Quem normaliza é a
+// exibição — e só ela.
+
+/**
+ * Reduz pesos inteiros pelo MDC, preservando a proporção exatamente.
+ *
+ * "Salvar como modelo" a partir do diálogo individual usa os centavos do rateio
+ * como peso: 7.200 : 4.800 descreve a mesma divisão que 3 : 2, e guardar os
+ * centavos não arredonda nada. Mas quem abrir esse modelo no editor veria os
+ * campos de peso com "720000" e "480000", que não diz nada a ninguém.
+ *
+ * Reduzir pelo MDC é a única simplificação que não perde precisão — dividir por
+ * 100 ou converter em percentual perderia. Pesos não inteiros (33,3333 digitado
+ * à mão) passam intactos: não existe MDC útil ali.
+ */
+export function reduceWeights(weights: number[]): number[] {
+  if (weights.length === 0) return weights
+  if (!weights.every(w => Number.isInteger(w) && w > 0)) return weights
+
+  const mdc = (a: number, b: number): number => (b === 0 ? a : mdc(b, a % b))
+  const divisor = weights.reduce((a, w) => mdc(a, w))
+  return divisor > 1 ? weights.map(w => w / divisor) : weights
+}
+
+/** Pesos → percentuais que somam 100, com 2 casas. Só para leitura humana. */
+export function normalizeWeights(weights: number[]): number[] {
+  const soma = weights.reduce((a, w) => a + w, 0)
+  if (soma <= 0) return weights.map(() => 0)
+  return weights.map(w => Math.round((w / soma) * 10000) / 100)
+}
+
+/**
+ * Proporção legível de um modelo: `[7200, 4800]` → `"60 : 40"`.
+ *
+ * Corta o zero decimal inútil (60 em vez de 60,00) mas preserva o que importa
+ * (33,33), porque é isso que distingue um modelo de três partes de um de duas.
+ */
+export function formatProportion(weights: number[]): string {
+  return normalizeWeights(weights)
+    .map(p => (Number.isInteger(p) ? String(p) : p.toFixed(2).replace('.', ',')))
+    .join(' : ')
+}

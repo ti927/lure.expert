@@ -1,20 +1,18 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState, useTransition, useMemo } from 'react'
 import { toast } from 'sonner'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { CellCombobox } from './cell-combobox'
 import type { SimpleDimensionItem } from './types'
+import { WeightRowsEditor, novaLinhaPeso, type WeightRow } from './weight-rows-editor'
+import { AllocationTemplateBar } from './allocation-template-bar'
 import {
-  previewBatchAllocation, applyBatchAllocation,
-  type AllocationWeight, type BatchPreviewRow,
+  previewBatchAllocation, applyBatchAllocation, type BatchPreviewRow,
 } from '@/server/allocations'
-
-interface Peso extends AllocationWeight { key: string; texto: string }
+import type { TemplateRow, TemplateLineInput } from '@/server/allocation-templates'
 
 interface Props {
   open:         boolean
@@ -29,40 +27,60 @@ interface Props {
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-let seq = 0
-const novoPeso = (weight = 50): Peso => ({
-  key: `w${++seq}`, weight, texto: String(weight),
-  costCenterId: null, businessUnitId: null, legalEntityId: null, contactId: null,
-})
-
 export function BatchAllocationDialog({
   open, onOpenChange, selectedIds,
   costCenters, businessUnits, legalEntities, contacts, onSaved,
 }: Props) {
-  const [pesos, setPesos] = useState<Peso[]>([])
+  const [pesos, setPesos] = useState<WeightRow[]>([])
   const [preview, setPreview] = useState<BatchPreviewRow[] | null>(null)
   const [jaRateados, setJaRateados] = useState(0)
+  // Modelo de origem; cai na primeira edição, como no diálogo individual.
+  const [modelo, setModelo] = useState<string | null>(null)
   const [isBusy, startBusy] = useTransition()
 
   useEffect(() => {
-    if (!open) { setPesos([]); setPreview(null); setJaRateados(0); return }
-    setPesos([novoPeso(60), novoPeso(40)])
+    if (!open) { setPesos([]); setPreview(null); setJaRateados(0); setModelo(null); return }
+    setPesos([novaLinhaPeso(60), novaLinhaPeso(40)])
     setPreview(null)
+    setModelo(null)
   }, [open])
 
   const somaPesos = pesos.reduce((a, p) => a + (Number.isFinite(p.weight) ? p.weight : 0), 0)
 
-  function patch(key: string, next: Partial<Peso>) {
-    setPesos(prev => prev.map(p => p.key === key ? { ...p, ...next } : p))
+  /** Qualquer mexida invalida a prévia e o carimbo do modelo. */
+  function mudouPesos(rows: WeightRow[]) {
+    setPesos(rows)
     setPreview(null)
+    setModelo(null)
   }
+
+  function aplicarModelo(t: TemplateRow) {
+    setPesos(t.lines.map(l => ({
+      ...novaLinhaPeso(l.weight),
+      costCenterId: l.costCenterId, businessUnitId: l.businessUnitId,
+      legalEntityId: l.legalEntityId, contactId: l.contactId,
+    })))
+    setPreview(null)
+    setModelo(t.id)
+  }
+
+  const linhasParaModelo: TemplateLineInput[] | null = useMemo(() => {
+    if (pesos.length < 2 || pesos.some(p => !(p.weight > 0))) return null
+    return pesos.map(p => ({
+      weight: p.weight,
+      costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
+      legalEntityId: p.legalEntityId, contactId: p.contactId,
+    }))
+  }, [pesos])
+
+  const paraServidor = () => pesos.map(p => ({
+    weight: p.weight, costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
+    legalEntityId: p.legalEntityId, contactId: p.contactId,
+  }))
 
   function gerarPrevia() {
     startBusy(async () => {
-      const r = await previewBatchAllocation(selectedIds, pesos.map(p => ({
-        weight: p.weight, costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
-        legalEntityId: p.legalEntityId, contactId: p.contactId,
-      })))
+      const r = await previewBatchAllocation(selectedIds, paraServidor())
       if ('error' in r) { toast.error(r.error); return }
       setPreview(r.rows)
       setJaRateados(r.jaRateados)
@@ -71,10 +89,7 @@ export function BatchAllocationDialog({
 
   function aplicar() {
     startBusy(async () => {
-      const r = await applyBatchAllocation(selectedIds, pesos.map(p => ({
-        weight: p.weight, costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
-        legalEntityId: p.legalEntityId, contactId: p.contactId,
-      })))
+      const r = await applyBatchAllocation(selectedIds, paraServidor(), modelo)
       if ('error' in r && r.error) { toast.error(r.error); return }
       toast.success(`Rateio aplicado a ${'aplicados' in r ? r.aplicados : 0} lançamentos.`)
       onOpenChange(false)
@@ -93,73 +108,20 @@ export function BatchAllocationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b text-left text-muted-foreground">
-                <th className="px-2 py-1.5 font-medium w-20">Peso</th>
-                <th className="px-2 py-1.5 font-medium">Centro de custo</th>
-                <th className="px-2 py-1.5 font-medium">Un. de negócio</th>
-                <th className="px-2 py-1.5 font-medium">Entidade</th>
-                <th className="px-2 py-1.5 font-medium">Contato</th>
-                <th className="w-8" />
-              </tr>
-            </thead>
-            <tbody>
-              {pesos.map(p => (
-                <tr key={p.key} className="border-b last:border-0">
-                  <td className="px-2 py-1">
-                    <input
-                      value={p.texto}
-                      onChange={e => {
-                        const n = Number(e.target.value.replace(',', '.'))
-                        patch(p.key, { texto: e.target.value, weight: Number.isFinite(n) ? n : 0 })
-                      }}
-                      inputMode="decimal"
-                      className="w-full h-7 rounded border border-input px-1.5 text-right tabular-nums bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
-                  </td>
-                  <td className="px-1 py-1">
-                    <CellCombobox value={p.costCenterId} options={costCenters}
-                      onValueChange={v => patch(p.key, { costCenterId: v })} />
-                  </td>
-                  <td className="px-1 py-1">
-                    <CellCombobox value={p.businessUnitId} options={businessUnits}
-                      onValueChange={v => patch(p.key, { businessUnitId: v })} />
-                  </td>
-                  <td className="px-1 py-1">
-                    <CellCombobox value={p.legalEntityId} options={legalEntities}
-                      onValueChange={v => patch(p.key, { legalEntityId: v })} />
-                  </td>
-                  <td className="px-1 py-1">
-                    <CellCombobox value={p.contactId} options={contacts}
-                      onValueChange={v => patch(p.key, { contactId: v })} />
-                  </td>
-                  <td className="px-1 py-1 text-center">
-                    <button
-                      onClick={() => { setPesos(prev => prev.filter(x => x.key !== p.key)); setPreview(null) }}
-                      disabled={pesos.length <= 1}
-                      className="h-6 w-6 rounded flex items-center justify-center text-muted-foreground hover:text-destructive disabled:opacity-30"
-                      aria-label="Remover"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <AllocationTemplateBar
+          applied={modelo}
+          onApply={aplicarModelo}
+          currentLines={linhasParaModelo}
+        />
 
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => { setPesos(prev => [...prev, novoPeso(0)]); setPreview(null) }}>
-              <Plus className="h-3.5 w-3.5 mr-1" />Adicionar parte
-            </Button>
-            <span className="text-xs text-muted-foreground ml-auto">
-              Os pesos são relativos — {pesos.map(p => p.weight).join(' : ')} soma {somaPesos}
-              {somaPesos !== 100 && ' (não precisa dar 100)'}
-            </span>
-          </div>
-        </div>
+        <WeightRowsEditor
+          rows={pesos}
+          onChange={mudouPesos}
+          costCenters={costCenters}
+          businessUnits={businessUnits}
+          legalEntities={legalEntities}
+          contacts={contacts}
+        />
 
         {preview && (
           <div className="border-t pt-2 space-y-2">

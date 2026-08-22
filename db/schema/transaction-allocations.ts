@@ -6,6 +6,7 @@ import { costCenters } from './cost-centers'
 import { businessUnits } from './business-units'
 import { legalEntities } from './legal-entities'
 import { contacts } from './contacts'
+import { allocationTemplates } from './allocation-templates'
 
 const tz = { withTimezone: true }
 
@@ -39,6 +40,12 @@ export const transactionAllocations = pgTable(
     businessUnitId: uuid('business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
     legalEntityId: uuid('legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
     contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+    // De qual modelo esta parte nasceu (migration 0027). Só é gravado quando o
+    // rateio veio de um modelo E não foi editado depois — a contagem de uso
+    // precisa contar a menos, nunca a mais. `set null`: apagar o modelo não
+    // desfaz rateio nenhum, só remove a etiqueta.
+    allocationTemplateId: uuid('allocation_template_id')
+      .references(() => allocationTemplates.id, { onDelete: 'set null' }),
     notes: text('notes'),
     createdAt: timestamp('created_at', tz).notNull().default(sql`now()`),
     updatedAt: timestamp('updated_at', tz).notNull().default(sql`now()`),

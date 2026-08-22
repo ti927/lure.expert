@@ -9,13 +9,15 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { CellCombobox } from './cell-combobox'
+import { AllocationTemplateBar } from './allocation-template-bar'
 import type { SimpleDimensionItem } from './types'
 import {
-  toCents, splitEqually, remainingCents, pctOf, centsFromPct,
+  toCents, splitEqually, remainingCents, pctOf, centsFromPct, applyProportion, reduceWeights,
 } from '@/lib/allocation-math'
 import {
   getAllocations, saveAllocations, removeAllocations, type AllocationPart,
 } from '@/server/allocations'
+import type { TemplateRow, TemplateLineInput } from '@/server/allocation-templates'
 
 interface Parte {
   /** Chave estável de renderização — as partes não têm id até serem salvas. */
@@ -62,6 +64,10 @@ export function AllocationDialog({
 }: Props) {
   const [partes, setPartes] = useState<Parte[]>([])
   const [tinhaRateio, setTinhaRateio] = useState(false)
+  // Modelo de origem. Cai para null na primeira edição manual: o carimbo tem de
+  // significar "saiu deste modelo como está", senão a contagem de uso da tela
+  // de modelos vira um número que não quer dizer nada.
+  const [modelo, setModelo] = useState<string | null>(null)
   const [isLoading, startLoading] = useTransition()
   const [isSaving, startSaving]   = useTransition()
 
@@ -70,11 +76,12 @@ export function AllocationDialog({
   const faltam     = remainingCents(totalCents, partes.map(p => p.cents))
 
   useEffect(() => {
-    if (!open || !transaction) { setPartes([]); setTinhaRateio(false); return }
+    if (!open || !transaction) { setPartes([]); setTinhaRateio(false); setModelo(null); return }
     startLoading(async () => {
       const existentes = await getAllocations(transaction.id)
       if (existentes.length > 0) {
         setTinhaRateio(true)
+        setModelo(existentes[0].allocationTemplateId)
         setPartes(existentes.map(a => {
           const cents = toCents(a.amount)
           return {
@@ -88,14 +95,37 @@ export function AllocationDialog({
       } else {
         // Duas partes vazias é o começo mais comum, e já mostra a mecânica.
         setTinhaRateio(false)
+        setModelo(null)
         setPartes([parteVazia(), parteVazia()])
       }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, transaction?.id])
 
+  /** Toda edição manual passa por aqui — e derruba o carimbo do modelo. */
   function patch(key: string, next: Partial<Parte>) {
+    setModelo(null)
     setPartes(prev => prev.map(p => p.key === key ? { ...p, ...next } : p))
+  }
+
+  /**
+   * Aplica um modelo: a proporção salva vira valores fechados no centavo para
+   * ESTE lançamento. É `applyProportion` (maior resto) quem distribui a sobra,
+   * o mesmo caminho do rateio em lote — nenhum centavo se perde no meio.
+   */
+  function aplicarModelo(t: TemplateRow) {
+    const valores = applyProportion(totalCents, t.lines.map(l => l.weight))
+    setPartes(t.lines.map((l, i) => {
+      const cents = valores[i] ?? 0
+      return {
+        key: novaKey(), cents,
+        valorTexto: fmt(cents),
+        pctTexto: totalCents ? String(pctOf(cents, totalCents)).replace('.', ',') : '',
+        costCenterId: l.costCenterId, businessUnitId: l.businessUnitId,
+        legalEntityId: l.legalEntityId, contactId: l.contactId,
+      }
+    }))
+    setModelo(t.id)
   }
 
   /** Digitou em reais: o valor manda, o percentual acompanha. */
@@ -117,6 +147,7 @@ export function AllocationDialog({
   }
 
   function dividirIgualmente() {
+    setModelo(null)
     const valores = splitEqually(totalCents, partes.length || 1)
     setPartes(prev => prev.map((p, i) => ({
       ...p,
@@ -144,6 +175,29 @@ export function AllocationDialog({
   )
   const podeSalvar = partes.length > 0 && faltam === 0 && partes.every(p => p.cents > 0)
 
+  /**
+   * As partes de agora em formato de modelo — os valores em centavos viram os
+   * pesos. 7.200 : 4.800 e 60 : 40 descrevem a mesma divisão, então guardar os
+   * centavos crus não perde nada e não arredonda nada; quem normaliza para
+   * percentual é só a exibição.
+   *
+   * Menos de 2 partes ou soma que não fecha não descrevem divisão nenhuma, e
+   * salvar isso como modelo daria um modelo que nunca aplica direito.
+   */
+  const linhasParaModelo: TemplateLineInput[] | null = useMemo(() => {
+    if (partes.length < 2 || faltam !== 0 || partes.some(p => p.cents <= 0)) return null
+    // Reduzido pelo MDC: 720000 : 480000 vira 3 : 2 sem perder nada, e é isso
+    // que aparece no editor de modelos depois.
+    const pesos = reduceWeights(partes.map(p => p.cents))
+    return partes.map((p, i) => ({
+      weight:         pesos[i],
+      costCenterId:   p.costCenterId,
+      businessUnitId: p.businessUnitId,
+      legalEntityId:  p.legalEntityId,
+      contactId:      p.contactId,
+    }))
+  }, [partes, faltam])
+
   function salvar() {
     if (!transaction) return
     const payload: AllocationPart[] = partes.map(p => ({
@@ -155,7 +209,7 @@ export function AllocationDialog({
       notes:          null,
     }))
     startSaving(async () => {
-      const r = await saveAllocations(transaction.id, payload)
+      const r = await saveAllocations(transaction.id, payload, modelo)
       if ('error' in r && r.error) { toast.error(r.error); return }
       toast.success(`Rateio salvo em ${payload.length} partes.`)
       onOpenChange(false)
@@ -184,6 +238,12 @@ export function AllocationDialog({
             divide — só as dimensões.
           </DialogDescription>
         </DialogHeader>
+
+        <AllocationTemplateBar
+          applied={modelo}
+          onApply={aplicarModelo}
+          currentLines={linhasParaModelo}
+        />
 
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
@@ -244,7 +304,7 @@ export function AllocationDialog({
                     </td>
                     <td className="px-1 py-1 text-center">
                       <button
-                        onClick={() => setPartes(prev => prev.filter(x => x.key !== p.key))}
+                        onClick={() => { setModelo(null); setPartes(prev => prev.filter(x => x.key !== p.key)) }}
                         disabled={partes.length <= 1}
                         className="h-6 w-6 rounded flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/5 disabled:opacity-30"
                         aria-label="Remover parte"
@@ -260,7 +320,8 @@ export function AllocationDialog({
         )}
 
         <div className="flex items-center gap-2 pt-1">
-          <Button variant="outline" size="sm" onClick={() => setPartes(prev => [...prev, parteVazia()])}
+          <Button variant="outline" size="sm"
+            onClick={() => { setModelo(null); setPartes(prev => [...prev, parteVazia()]) }}
             disabled={partes.length >= 50}>
             <Plus className="h-3.5 w-3.5 mr-1" />Adicionar parte
           </Button>

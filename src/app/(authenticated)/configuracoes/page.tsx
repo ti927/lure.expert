@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { OrgForm } from '@/components/settings/org-form'
 import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
 import { getAutoCategorize } from '@/server/settings'
-import { Tags, Building2, Briefcase, Landmark, Users, ChevronRight, Zap, FileText } from 'lucide-react'
+import { Tags, Building2, Briefcase, Landmark, Users, ChevronRight, Zap, FileText, Split } from 'lucide-react'
 
 const NAV_SECTIONS = [
   {
@@ -43,6 +43,12 @@ const NAV_SECTIONS = [
     icon: Users,
     title: 'Clientes e fornecedores',
     description: 'Saiba quanto foi faturado de cada cliente e comprado de cada fornecedor.',
+  },
+  {
+    href: '/configuracoes/modelos-de-rateio',
+    icon: Split,
+    title: 'Modelos de rateio',
+    description: 'Divisões que você repete — 60% Comercial, 40% Administrativo — salvas para reaplicar em um clique.',
   },
 ]
 

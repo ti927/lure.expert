@@ -105,7 +105,9 @@ o que está documentado, PARAR e me consultar.
 - `/components/expert` — ExpertTrigger (criado); futuros: ReportCanvas, InlineChart, DiffPreview
 - `/components/transacoes-shared` — o que /transacoes, /dre, /fluxo e /balanco compartilham:
   `DrillDownDialog`, `ColHeader`, filtros (`MultiSelectFilter`, `DescFilter`, `AmountFilter`,
-  `DirectionFilter`), `DimFilter`, `CellCombobox`, `CategoryCellCombobox`, `BatchClassifyDialog`
+  `DirectionFilter`), `DimFilter`, `CellCombobox`, `CategoryCellCombobox`, `BatchClassifyDialog`,
+  e o rateio: `AllocationDialog`, `BatchAllocationDialog`, `WeightRowsEditor` (a tabela peso +
+  4 dimensões, do lote e do editor de modelos), `AllocationTemplateBar`
 - `/components/budget` — o que /orcamento e /dre compartilham: `SeriesDialog` (criar/editar
   lançamento, com os 3 escopos), `ScopeConfirmDialog`, `BudgetDrillDownDialog`
 - `/lib` — utilitários, clientes (supabase, anthropic, inngest)
@@ -127,6 +129,7 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `budget-copy.ts` | `buildCopyDrafts`, `shapeMonthly`, `collectActuals`, `applyDraftsToBudget`, `applyDuplicateVersion` |
 | `budget-import.ts` | `parseBudgetCsv`, `buildRecurrenceCandidates`, `timesPerMonth` |
 | `budget-read.ts` | `fetchBudgetRows` — a leitura do orçado que `/dre` e `/orcamento` compartilham |
+| `allocation-math.ts` | aritmética do rateio em centavos inteiros: `toCents`, `splitEqually`, `applyProportion` (maior resto), `reduceWeights` (MDC), `normalizeWeights`/`formatProportion` |
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -192,7 +195,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 10 — Dimensões (cliente/fornecedor + rateio) **em andamento**, 10.0 e 10.1 concluídas.
+**Status:** Fase 10 — Dimensões (cliente/fornecedor + rateio) **em andamento**, 10.0 a 10.5 concluídas.
 Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.8 ✅). Fases 0–7 **100% concluídas**.
 Fase 8 (Adquirentes) pausada em 8.1.
 
@@ -211,7 +214,8 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 
 ## Próximo passo
 
-**Fase 10 — Dimensões: cliente/fornecedor e rateio.** Em andamento; 10.0 a 10.4 concluídas.
+**Fase 10 — Dimensões: cliente/fornecedor e rateio.** Código todo entregue (10.0 a 10.5).
+Falta **aplicar a migration 0027** no Supabase Studio e confirmar 10.4/10.5 na tela.
 
 | Sessão | Entrega | Status |
 |---|---|---|
@@ -220,7 +224,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 10.2 | Schema do rateio: `transaction_allocations` + view `transaction_lines` | ✅ |
 | 10.3 | As leituras que filtram/agrupam por dimensão passam a respeitar o rateio | ✅ |
 | 10.4 | UI do rateio: diálogo por lançamento, linha expansível, rateio em lote | ✅ (aguardando confirmação na tela) |
-| 10.5 | Modelos de rateio reutilizáveis | 🔲 |
+| 10.5 | Modelos de rateio reutilizáveis | ✅ (migration 0027 **pendente de aplicação**) |
 
 **Modelo do rateio (revisto na 10.2 — ver `docs/SCHEMA_DECISIONS.md` Decisão 16):** rateio é
 **sub-lançamento**, não percentual por dimensão. Um lançamento de R$ 999 vira N partes com valor
@@ -290,6 +294,7 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
 - ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
 - ✅ `db/migrations/rls/0026_transaction_allocations.sql` — `transaction_allocations` + view `transaction_lines` + RLS + os gatilhos da invariante do rateio. Aplicação conferida contra o banco (22/22): 12 colunas, 2 CHECKs, 6 índices, RLS com as 4 policies, os 2 gatilhos com `tgdeferrable` e `tginitdeferred` verdadeiros, `security_invoker=true` na view, e as regras exercitadas de verdade — soma que não fecha, dimensão no pai, edição do valor e 51 partes recusadas, tudo revertido ao fim
+- 🔲 `db/migrations/rls/0027_allocation_templates.sql` — `allocation_templates` + `allocation_template_lines` + `transaction_allocations.allocation_template_id` + 5 índices + RLS (8 policies) + 2 triggers `updated_at`. **Validada mas ainda NÃO aplicada:** rodada inteira dentro de uma transação com ROLLBACK, 19/19
 - ✅ `db/migrations/rls/0025_contacts_dimension.sql` — `contacts` ganha `is_active`, `code`, `is_customer`, `is_supplier` + policy de DELETE (faltava desde a 0002) + `ON DELETE SET NULL` nas FKs de `transactions.contact_id` e `categorization_rules.target_contact_id` (eram `no action`). Aplicação conferida contra o banco: colunas, defaults, índice, 4 policies e `confdeltype = 'n'` nas duas FKs
 
 **Scripts de teste RLS (`db/migrations/rls/`):**
@@ -321,6 +326,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Fase 10 — Dimensões (em andamento)** | |
+| 10.5 | Modelos de rateio. Um modelo guarda **proporção**, nunca valor — o mesmo serve ao aluguel de R$ 12.000 e à luz de R$ 340. Os pesos **não somam 100** de propósito: `60:40`, `6:4` e `7200:4800` são a mesma divisão, e é isso que deixa **"Salvar como modelo" partir de um rateio já feito em reais** sem arredondar; quem normaliza é só a exibição. Ao salvar do diálogo individual os centavos passam por `reduceWeights` (MDC) — `[720000, 480000] → [3, 2]`, a única simplificação que preserva a proporção exata e a única que deixa o editor legível. **Defeito achado escrevendo o teste:** `weight numeric(12,4)` comporta 8 dígitos inteiros, e um lançamento de R$ 1 milhão vira peso 100.000.000 — estourava; virou `(18,6)`. **O carimbo de origem conta a menos de propósito:** `allocation_template_id` só é gravado quando o rateio veio do modelo E não foi editado depois, porque a tela existe para decidir se dá para apagar o modelo e um número inflado mentiria justamente aí; contagem é `COUNT(DISTINCT transaction_id)`. `ON DELETE SET NULL` — apagar modelo nunca desfaz rateio nem mexe em DRE. `WeightRowsEditor` **extraído** do diálogo de lote e reusado pelo editor de modelos. Nova rota `/configuracoes/modelos-de-rateio`. Verificado: migration 19/19 com ROLLBACK, aritmética 19/19 incluindo **2.500 aplicações sobre 500 valores reais fechando o centavo exato** e o ciclo rateio→modelo→rateio devolvendo as mesmas partes nos 500 |
 | 10.3 | As leituras passam a respeitar o rateio. Eram **nove**, não sete, e de duas naturezas. **Analíticas** (DRE, drill-down da DRE, fluxo mensal, drill-down do balanço, drill-down do dashboard, realizado do Orçado × Realizado, `collectActuals`) trocam `transactions` por `transaction_lines`. **Operacionais** (`/transacoes`, fila de revisão) **não** podem ler a view — listam um lançamento por linha e a view as multiplicaria; nelas o filtro vira `dimensionExistsFilter`, um EXISTS sobre a view. Isso conserta dois defeitos que a coluna direta criaria: filtrar "Comercial" **esconderia** o lançamento rateado para Comercial (coluna do pai é nula com rateio), e "Sem centro de custo" pegaria **todo** rateado, inclusive os 100% classificados. A cobertura de dimensão do orçamento também passou pela view, senão passaria a acusar como "sem CC" justamente quem rateou. Contagem virou `COUNT(DISTINCT transaction_id)` — o campo promete lançamentos. UI: linha rateada não oferece edição direta de dimensão (o banco recusaria) e sai da seleção em lote; no drill-down a chave do React e a seleção passam a ser da parte. Verificado: **297 células da DRE idênticas** entre a query velha e a nova, e com rateio 600/400 o total da categoria não muda. Custo medido: DRE 0%, filtro +8% |
 | 10.2 | Schema do rateio. **Mudança de modelo:** o CLAUDE.md registrava rateio "independente por dimensão", com uma view cruzando as divisões — ao explicar o desenho para decidir o schema, dois defeitos apareceram: cruzar 60/40 de centro de custo com 70/30 de contato **inventa** a célula "Admin + Cliente B", que ninguém afirmou, e a multiplicação das proporções reintroduz fração de centavo mesmo com cada dimensão fechando exata. Virou **sub-lançamento**: cada parte tem valor próprio e carrega as quatro dimensões. Soma exata é regra do banco, num `CONSTRAINT TRIGGER` **deferido até o commit** — `CHECK` enxerga uma linha por vez e a soma é propriedade do conjunto; deferido, dá para inserir as três partes de 333 uma a uma. O mesmo gatilho cobre apagar parte, editar parte e editar o valor do pai. Com rateio as dimensões do pai ficam **vazias**, e o gatilho recusa o contrário: preenchidas, toda leitura ainda não migrada atribuiria o valor **integral** a uma das partes. Validado antes de aplicar rodando a migration numa transação com ROLLBACK (15/15) e conferido depois contra o banco (22/22). Decisão 16 em SCHEMA_DECISIONS |
 | 10.1 | Contato vira a 4ª dimensão da classificação. **Backend:** lista de contatos no system prompt do Haiku com nome fantasia, documento e papel — o extrato traz o fantasia muito mais que a razão social; teto de 400 com o corte declarado ao modelo. Piso de confiança de 70 **só** no contato, a única dimensão que casa contra a descrição do extrato. **Papel desempata, não veta** — a primeira versão mandava recusar papel divergente, o Haiku ignorou e com razão (estorno e devolução a cliente são saídas). Dois defeitos que tornavam o resto inerte: `catConf === 0` **descartava o resultado inteiro**, jogando fora contato de 95%, e o `set` fixo do job **apagava com null** toda dimensão não reconhecida na passada — inclusive classificação manual, porque "Categorizar agora" reprocessa. **Telas:** coluna, filtro e ordenação em `/transacoes`; quinto campo no batch; filtro + coluna em `/transacoes/revisao` (a coluna entra porque o expert agora sugere contato); alvo de contato nas regras; drill-down recebe `contacts` só para o batch — a coluna exigiria mudar as 5 queries de leitura. Verificado: 7/7 casos de classificação contra o banco com Haiku real, `next build` de 24 rotas |

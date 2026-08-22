@@ -764,3 +764,63 @@ há rateio. `amount` e as quatro dimensões vêm da parte; natureza, data e cont
 valores, dimensão no pai recusada, edição do valor do pai recusada, 51 partes recusadas e 50
 aceitas, e a view devolvendo exatamente as 2.272 linhas e o mesmo total de `transactions` enquanto
 não há rateio nenhum.
+
+---
+
+## Decisão 17 — Modelo de rateio guarda proporção, e o carimbo de origem conta a menos (Sessão 10.5)
+
+**Contexto:** o rateio da 10.2–10.4 exige redigitar a divisão a cada lançamento. Um modelo salvo
+resolve — mas o que exatamente ele guarda?
+
+**Peso relativo, nunca valor.** O mesmo modelo tem de servir ao aluguel de R$ 12.000 e à conta de
+luz de R$ 340. Guardar valor amarraria o modelo a um lançamento só. Os centavos são resolvidos na
+aplicação, por `applyProportion` (maior resto) — o mesmo caminho do rateio em lote, que é o que
+garante a soma exata que a migration 0026 cobra.
+
+**Os pesos não precisam somar 100.** `60:40`, `6:4` e `7200:4800` descrevem a mesma divisão, e só a
+razão entre eles é lida. Isso é o que permite **"Salvar como modelo" a partir de um rateio já feito
+em reais**: os centavos das partes viram os pesos, sem arredondar nada no caminho. Normalizar para
+percentual na gravação perderia precisão em divisões como 1/3; quem normaliza é só a exibição
+(`normalizeWeights` / `formatProportion`).
+
+**Redução pelo MDC ao salvar do diálogo individual.** Guardar os centavos crus funciona, mas quem
+abrisse o modelo no editor veria campos de peso com `720000` e `480000`. `reduceWeights` divide
+pelo MDC quando todos são inteiros — `[720000, 480000] → [3, 2]` — a única simplificação que
+preserva a proporção exatamente. Pesos decimais digitados à mão (33,3333) passam intactos.
+
+**`weight numeric(18,6)`, não `(12,4)`.** Consequência direta do acima: o peso pode ser um valor em
+centavos. `(12,4)` comporta 8 dígitos inteiros e um lançamento de R$ 1 milhão vira peso
+100.000.000 — estouro. `(18,6)` chega à casa dos bilhões. Defeito encontrado escrevendo os testes,
+antes de a migration ser aplicada.
+
+**Mínimo de 2 partes.** Um modelo de uma parte só não descreve divisão nenhuma — é classificação
+direta, que o combobox da tela já faz.
+
+**`transaction_allocations.allocation_template_id` — o carimbo.** É o que responde "quantos
+lançamentos usam este modelo?" antes de apagá-lo. `ON DELETE SET NULL`: apagar um modelo **nunca**
+desfaz rateio nem muda número de DRE, só remove a etiqueta.
+
+**O carimbo conta a menos, de propósito.** Ele é gravado apenas quando o rateio veio do modelo **e
+não foi editado depois** — qualquer mexida em valor, percentual, dimensão ou número de partes o
+derruba para `null` no cliente. Contar a mais seria pior: a tela existe para decidir se dá para
+apagar o modelo, e um número inflado por rateios que já divergiram dele mentiria exatamente na
+pergunta que a tela responde. A contagem é `COUNT(DISTINCT transaction_id)`, não de partes — o
+número promete lançamentos.
+
+**Teto de 50 linhas fora do banco.** Diferente da soma exata da 0026, esta regra não precisa de
+gatilho: um modelo grande demais só falha ao ser aplicado, e ali o Zod de `saveAllocations` e o
+gatilho da 0026 já recusam com mensagem boa. Um gatilho a mais seria uma segunda fonte da mesma
+regra.
+
+**Arquivar convive com apagar.** Arquivado some do seletor e preserva o carimbo; apagado perde o
+rastro. O diálogo de exclusão diz qual dos dois o usuário está escolhendo.
+
+**Migration:** `db/migrations/rls/0027_allocation_templates.sql`
+**Schema Drizzle:** `db/schema/allocation-templates.ts`
+
+**Verificado antes de aplicar:** migration inteira dentro de uma transação com ROLLBACK, 19/19 —
+estrutura, 5 índices, 8 policies, RLS, 2 triggers, nome duplicado recusado por caixa e espaço, nome
+em branco recusado, peso zero e negativo recusados, peso de 9 dígitos aceito, contagem contando
+lançamentos e não partes, e apagar o modelo zerando o carimbo sem tocar nas partes. Aritmética:
+19/19, incluindo 2.500 aplicações sobre 500 valores reais fechando o centavo exato e o ciclo
+rateio → modelo → rateio devolvendo as mesmas partes nos 500.
