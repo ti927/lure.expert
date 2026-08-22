@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ChevronLeft, ChevronRight, Layers, Trash2, Bot, X,
+  ChevronLeft, ChevronRight, ChevronDown, Layers, Trash2, Bot, X, Split,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -22,6 +22,9 @@ import {
 } from '@/components/transacoes-shared/filters'
 import { CellCombobox, CategoryCellCombobox } from '@/components/transacoes-shared/cell-combobox'
 import { BatchClassifyDialog } from '@/components/transacoes-shared/batch-classify-dialog'
+import { AllocationDialog } from '@/components/transacoes-shared/allocation-dialog'
+import { BatchAllocationDialog } from '@/components/transacoes-shared/batch-allocation-dialog'
+import { getAllocations, type AllocationRow } from '@/server/allocations'
 import { ACCT_LABELS } from '@/components/transacoes-shared/types'
 import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import type { DataSourceOption } from '@/server/connections'
@@ -126,6 +129,24 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [classifyingId, setClassifyingId] = useState<string | null>(null)
   const [batchOpen, setBatchOpen] = useState(false)
+  const [allocTarget, setAllocTarget] = useState<TxRow | null>(null)
+  const [batchAllocOpen, setBatchAllocOpen] = useState(false)
+  // Partes carregadas sob demanda ao expandir — trazer o rateio de todos os
+  // lançamentos numa página de 1.000 seria pagar por informação que quase
+  // ninguém abre.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [partsCache, setPartsCache] = useState<Record<string, AllocationRow[]>>({})
+  const [loadingParts, setLoadingParts] = useState(false)
+
+  async function toggleExpand(id: string) {
+    if (expandedId === id) { setExpandedId(null); return }
+    setExpandedId(id)
+    if (partsCache[id]) return
+    setLoadingParts(true)
+    const partes = await getAllocations(id)
+    setPartsCache(prev => ({ ...prev, [id]: partes }))
+    setLoadingParts(false)
+  }
   const [deleteTargetIds, setDeleteTargetIds] = useState<string[]>([])
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCategorizing, setIsCategorizing] = useState(false)
@@ -334,6 +355,9 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
         <div className="shrink-0 flex items-center gap-3 bg-primary/5 border-y border-primary/20 px-6 py-2">
           <span className="text-sm font-medium">{selectedIds.size} selecionada{selectedIds.size !== 1 ? 's' : ''}</span>
           <Button size="sm" onClick={() => setBatchOpen(true)}>Classificar em lote</Button>
+          <Button variant="outline" size="sm" onClick={() => setBatchAllocOpen(true)}>
+            <Split className="h-3.5 w-3.5 mr-1.5" />Ratear em lote
+          </Button>
           <Button variant="outline" size="sm" className="text-destructive border-destructive/40 hover:bg-destructive/5" onClick={() => setDeleteTargetIds(Array.from(selectedIds))}>
             <Trash2 className="h-3.5 w-3.5 mr-1.5" />Apagar selecionados
           </Button>
@@ -450,7 +474,8 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                     : null
 
                   return (
-                    <tr key={tx.id} className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
+                    <Fragment key={tx.id}>
+                    <tr className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
                       <td className="px-2 py-1.5">
                         <input type="checkbox" className="rounded border-input" checked={selectedIds.has(tx.id)} onChange={() => toggleRow(tx.id)} />
                       </td>
@@ -501,9 +526,16 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                       </td>
                       {dimLocked ? (
                         <td className="px-2 py-1.5 text-xs text-muted-foreground" colSpan={4}>
-                          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-violet-100 text-violet-700">
+                          <button
+                            onClick={() => toggleExpand(tx.id)}
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
+                            title="Ver as partes do rateio"
+                          >
+                            {expandedId === tx.id
+                              ? <ChevronDown className="h-3 w-3" />
+                              : <ChevronRight className="h-3 w-3" />}
                             Rateado
-                          </span>
+                          </button>
                           <span className="ml-2">a classificação está nas partes</span>
                         </td>
                       ) : (
@@ -523,11 +555,44 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                         </>
                       )}
                       <td className="px-1 py-1 text-center">
-                        <button onClick={() => setDeleteTargetIds([tx.id])} className="h-7 w-7 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/5" title="Apagar lançamento">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => setAllocTarget(tx)} className="h-7 w-7 rounded flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5" title={dimLocked ? 'Editar rateio' : 'Ratear entre dimensões'}>
+                            <Split className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => setDeleteTargetIds([tx.id])} className="h-7 w-7 rounded flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/5" title="Apagar lançamento">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
+                    {expandedId === tx.id && (
+                      <tr className="bg-violet-50/40 border-b">
+                        <td />
+                        <td colSpan={12} className="px-2 py-2">
+                          {loadingParts && !partsCache[tx.id] ? (
+                            <span className="text-xs text-muted-foreground">Carregando partes…</span>
+                          ) : (
+                            <div className="space-y-1">
+                              {(partsCache[tx.id] ?? []).map(p => (
+                                <div key={p.id} className="flex items-center gap-3 text-xs">
+                                  <span className="text-muted-foreground">└</span>
+                                  <span className="tabular-nums font-medium w-24 text-right">{formatBRL(p.amount)}</span>
+                                  <span className="text-muted-foreground">
+                                    {[
+                                      options.costCenters.find(c => c.id === p.costCenterId)?.name,
+                                      options.businessUnits.find(c => c.id === p.businessUnitId)?.name,
+                                      options.legalEntities.find(c => c.id === p.legalEntityId)?.name,
+                                      options.contacts.find(c => c.id === p.contactId)?.name,
+                                    ].filter(Boolean).join(' · ') || 'sem dimensão'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   )
                 })}
               </tbody>
@@ -610,6 +675,32 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
         legalEntities={options.legalEntities.map(c => ({ id: c.id, name: c.name }))}
         contacts={options.contacts}
         onSuccess={() => { setSelectedIds(new Set()); router.refresh() }}
+      />
+
+      <AllocationDialog
+        open={allocTarget !== null}
+        onOpenChange={o => { if (!o) setAllocTarget(null) }}
+        transaction={allocTarget}
+        costCenters={options.costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+        businessUnits={options.businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+        legalEntities={options.legalEntities.map(c => ({ id: c.id, name: c.name }))}
+        contacts={options.contacts}
+        onSaved={() => {
+          // O cache de partes fica velho depois de salvar.
+          if (allocTarget) setPartsCache(prev => { const n = { ...prev }; delete n[allocTarget.id]; return n })
+          router.refresh()
+        }}
+      />
+
+      <BatchAllocationDialog
+        open={batchAllocOpen}
+        onOpenChange={setBatchAllocOpen}
+        selectedIds={Array.from(selectedIds)}
+        costCenters={options.costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+        businessUnits={options.businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+        legalEntities={options.legalEntities.map(c => ({ id: c.id, name: c.name }))}
+        contacts={options.contacts}
+        onSaved={() => { setSelectedIds(new Set()); setPartsCache({}); router.refresh() }}
       />
     </div>
   )
