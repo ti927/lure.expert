@@ -131,7 +131,12 @@ export async function saveAllocations(transactionId: string, partes: AllocationP
     if (dimErro) return { error: dimErro }
   }
 
-  await db.transaction(async (t) => {
+  // Catch loud: sem isto, uma recusa do gatilho do banco sobe como exceção
+  // crua e o cliente vê "Application error: a server-side exception has
+  // occurred" — a tela que não diz nada. A mensagem do RAISE é escrita para
+  // ser lida por gente, então vale mais repassá-la.
+  try {
+    await db.transaction(async (t) => {
     await t.delete(transactionAllocations)
       .where(and(
         eq(transactionAllocations.organizationId, organizationId),
@@ -161,7 +166,13 @@ export async function saveAllocations(transactionId: string, partes: AllocationP
         notes:          p.notes ?? null,
       })))
     }
-  })
+    })
+  } catch (e) {
+    const pg = e as { message?: string; cause?: { message?: string } }
+    const bruta = pg?.cause?.message ?? pg?.message ?? 'erro desconhecido'
+    console.error('[allocations] falha ao gravar rateio', { transactionId, partes: parsed.data.length, erro: bruta })
+    return { error: `Não foi possível gravar o rateio: ${bruta}` }
+  }
 
   revalidatePath('/transacoes')
   revalidatePath('/dre')

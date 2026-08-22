@@ -5,10 +5,28 @@
 // 1000 * 0.6 não dá 600 redondo. Como a soma das partes tem de bater com o
 // lançamento no centavo (migration 0026), a conta não pode passar por float.
 
-/** Reais (número ou texto com vírgula) → centavos inteiros. */
+/**
+ * Reais → centavos inteiros, aceitando as DUAS notações que circulam aqui.
+ *
+ * O que o usuário digita é brasileiro ("1.234,56": ponto agrupa, vírgula
+ * decide). O que `transactions.amount` devolve do Postgres é "467.62": ponto
+ * DECIMAL, sem agrupamento. Tratar tudo como brasileiro apagava esse ponto e
+ * multiplicava o valor por cem — o diálogo pedia partes que somassem R$
+ * 46.762,00 num lançamento de R$ 467,62, e o banco recusava no commit.
+ *
+ * A vírgula é o que desempata: se existe, o formato é brasileiro e o ponto só
+ * agrupa; se não existe, um ponto só pode ser decimal.
+ */
 export function toCents(v: number | string): number {
   if (typeof v === 'number') return Math.round(v * 100)
-  const limpo = v.trim().replace(/\./g, '').replace(',', '.')
+
+  const texto = v.trim()
+  if (texto === '') return 0
+
+  const limpo = texto.includes(',')
+    ? texto.replace(/\./g, '').replace(',', '.')
+    : texto
+
   const n = Number(limpo)
   return Number.isFinite(n) ? Math.round(n * 100) : 0
 }
