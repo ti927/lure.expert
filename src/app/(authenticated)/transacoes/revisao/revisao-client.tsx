@@ -622,6 +622,8 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
                 <th className="px-4 py-3 text-right">Valor</th>
                 <th className="px-4 py-3 text-left">Categoria sugerida</th>
                 <th className="px-4 py-3 text-left">Centro de custo</th>
+                <th className="px-4 py-3 text-left">Un. de negócio</th>
+                <th className="px-4 py-3 text-left">Entidade jurídica</th>
                 <th className="px-4 py-3 text-left">Contato</th>
                 <th className="px-4 py-3 text-center">Confiança</th>
                 <th className="px-4 py-3 text-center">Método</th>
@@ -676,6 +678,14 @@ export default function RevisaoClient({ rows, options, total, pages, page, filte
 
                     <td className="px-4 py-3">
                       <DimensionChip label={row.costCenterName} />
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <DimensionChip label={row.businessUnitName} />
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <DimensionChip label={row.legalEntityName} />
                     </td>
 
                     <td className="px-4 py-3">
