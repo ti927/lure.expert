@@ -280,7 +280,7 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
 - ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
-- 🔲 `db/migrations/rls/0025_contacts_dimension.sql` — `contacts` ganha `is_active`, `code`, `is_customer`, `is_supplier` + policy de DELETE (faltava) + `ON DELETE SET NULL` nas FKs de `transactions.contact_id` e `categorization_rules.target_contact_id`. **PENDENTE de aplicação — sem ela `/dre` e `/orcamento` quebram** (`getContactOptions` lê as colunas novas)
+- ✅ `db/migrations/rls/0025_contacts_dimension.sql` — `contacts` ganha `is_active`, `code`, `is_customer`, `is_supplier` + policy de DELETE (faltava desde a 0002) + `ON DELETE SET NULL` nas FKs de `transactions.contact_id` e `categorization_rules.target_contact_id` (eram `no action`). Aplicação conferida contra o banco: colunas, defaults, índice, 4 policies e `confdeltype = 'n'` nas duas FKs
 
 **Scripts de teste RLS (`db/migrations/rls/`):**
 - `test_rls_budget.sql` — migration 0024: estrutura, CHECKs, triggers e isolamento das 3 tabelas de orçamento

@@ -43,8 +43,18 @@ executa em vez de lançar; bate com `IS NULL` cru; `com CC + sem CC = total` em 
 `"sem CC" + todos os CCs` devolve o conjunto inteiro (prova de que é disjunção e não conjunção);
 filtro vazio não muda nada (sem regressão); a quarta dimensão entra na query sem quebrar.
 
-**NÃO verificado automaticamente:** todo o CRUD de contatos, o papel duplo, a recusa de CNPJ
-duplicado e o import de CSV — dependem da migration 0025, que é aplicada à mão no Supabase Studio.
+**Verificado após a migration ser aplicada** (transações revertidas, nada ficou no banco):
+as 4 colunas com seus defaults, o índice, as **4 policies** de RLS e `confdeltype = 'n'` nas duas
+FKs. E o comportamento que a migration promete: apagar um contato em uso **não é mais bloqueado** —
+o lançamento de R$ 1.000 sobrevive com `contact_id` nulo e a regra sobrevive com o alvo zerado.
+CNPJ repetido na mesma org viola o índice único com código 23505 (que é o que a action traduz em
+mensagem legível), e dois contatos **sem** documento convivem, porque o índice é parcial. O modelo
+de CSV baixado passa no próprio `assertHeaders` e todos os papéis do exemplo existem em
+`CONTACT_ROLES` — um modelo que falhasse no próprio import seria constrangedor.
+
+**NÃO verificado automaticamente:** o caminho de UI completo (formulário → server action → toast),
+porque `getAuthContext` exige sessão de navegador. O que foi exercitado é a camada de banco que
+essas actions atravessam.
 
 ---
 
