@@ -47,6 +47,8 @@ export interface ActualMonthRow {
   businessUnitName: string | null
   legalEntityId:    string | null
   legalEntityName:  string | null
+  contactId:        string | null
+  contactName:      string | null
   month:            string   // 'YYYY-MM' de ORIGEM
   total:            number   // sempre positivo — o sinal vem de `direction`
 }
@@ -55,6 +57,14 @@ export interface CopyShapeOptions {
   fiscalYear:    number
   shape:         CopyShape
   granularity:   CopyGranularity
+  /**
+   * Contato entra na chave de agrupamento. Separado de `granularity` porque a
+   * carteira é ordem de grandeza maior que as outras três dimensões: incluí-lo
+   * troca "um lançamento por categoria" por "um por contraparte". Faz sentido
+   * para quem orça cliente a cliente e vira ruído numa carteira pulverizada,
+   * então é escolha explícita e nasce desligada.
+   */
+  includeContact: boolean
   adjustmentPct: number
 }
 
@@ -92,6 +102,7 @@ interface Group {
   costCenterId:     string | null
   businessUnitId:   string | null
   legalEntityId:    string | null
+  contactId:        string | null
   dimensionLabel:   string | null
   /** número do mês (1–12) → total do realizado naquele mês */
   byMonth:          Map<number, number>
@@ -160,26 +171,31 @@ export function shapeMonthly(
 export function buildCopyDrafts(rows: ActualMonthRow[], opts: CopyShapeOptions): CopiedSeriesDraft[] {
   const factor = 1 + opts.adjustmentPct / 100
   const byDimension = opts.granularity === 'dimensoes'
+  // Independente de `granularity`: dá para querer o total da categoria aberto
+  // por cliente sem abrir por centro de custo.
+  const byContact = opts.includeContact
   const groups = new Map<string, Group>()
 
   for (const r of rows) {
     const costCenterId   = byDimension ? r.costCenterId   : null
     const businessUnitId = byDimension ? r.businessUnitId : null
     const legalEntityId  = byDimension ? r.legalEntityId  : null
+    const contactId      = byContact   ? r.contactId      : null
 
-    const key = [r.categoryId, r.direction, costCenterId ?? '', businessUnitId ?? '', legalEntityId ?? ''].join('|')
+    const key = [r.categoryId, r.direction, costCenterId ?? '', businessUnitId ?? '', legalEntityId ?? '', contactId ?? ''].join('|')
 
     let group = groups.get(key)
     if (!group) {
-      const labels = byDimension
-        ? [r.costCenterName, r.businessUnitName, r.legalEntityName].filter((v): v is string => !!v)
-        : []
+      const labels = [
+        ...(byDimension ? [r.costCenterName, r.businessUnitName, r.legalEntityName] : []),
+        ...(byContact ? [r.contactName] : []),
+      ].filter((v): v is string => !!v)
       group = {
         categoryId:     r.categoryId,
         categoryName:   r.categoryName,
         categoryCode:   r.categoryCode,
         direction:      r.direction,
-        costCenterId, businessUnitId, legalEntityId,
+        costCenterId, businessUnitId, legalEntityId, contactId,
         dimensionLabel: labels.length ? labels.join(' · ') : null,
         byMonth:        new Map(),
       }
@@ -211,10 +227,7 @@ export function buildCopyDrafts(rows: ActualMonthRow[], opts: CopyShapeOptions):
       costCenterId:   g.costCenterId,
       businessUnitId: g.businessUnitId,
       legalEntityId:  g.legalEntityId,
-      // A cópia do realizado não agrupa por contato de propósito: a carteira é
-      // ordem de grandeza maior que as outras dimensões, e entrar na chave
-      // dividiria uma categoria em uma série por contraparte.
-      contactId:      null,
+      contactId:      g.contactId,
       dimensionLabel: g.dimensionLabel,
       intervalMonths: 1,
       dayOfMonth:     1,
@@ -312,6 +325,8 @@ export async function collectActuals(
     business_unit_name: string | null
     legal_entity_id:    string | null
     legal_entity_name:  string | null
+    contact_id:         string | null
+    contact_name:       string | null
     month:              string
     total:              string
   }
@@ -330,6 +345,8 @@ export async function collectActuals(
         bu.name                  AS business_unit_name,
         t.legal_entity_id::text  AS legal_entity_id,
         le.name                  AS legal_entity_name,
+        t.contact_id::text       AS contact_id,
+        ct.name                  AS contact_name,
         TO_CHAR(DATE_TRUNC('month', ${txDate}::date), 'YYYY-MM') AS month,
         SUM(t.amount::numeric) AS total
       FROM transactions t
@@ -338,6 +355,7 @@ export async function collectActuals(
       LEFT JOIN cost_centers cc   ON t.cost_center_id   = cc.id
       LEFT JOIN business_units bu ON t.business_unit_id = bu.id
       LEFT JOIN legal_entities le ON t.legal_entity_id  = le.id
+      LEFT JOIN contacts ct       ON t.contact_id       = ct.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
         AND ${txDate}::date >= ${fromDate}::date
@@ -347,7 +365,7 @@ export async function collectActuals(
         AND c.is_active = true
       GROUP BY c.id, c.name, c.code, t.direction,
                t.cost_center_id, cc.name, t.business_unit_id, bu.name,
-               t.legal_entity_id, le.name,
+               t.legal_entity_id, le.name, t.contact_id, ct.name,
                DATE_TRUNC('month', ${txDate}::date)
     `)
 
@@ -386,6 +404,8 @@ export async function collectActuals(
     businessUnitName: r.business_unit_name,
     legalEntityId:    r.legal_entity_id,
     legalEntityName:  r.legal_entity_name,
+    contactId:        r.contact_id,
+    contactName:      r.contact_name,
     month:            r.month,
     total:            Number(r.total),
   }))

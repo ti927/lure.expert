@@ -484,6 +484,7 @@ export const copyActualsInputSchema = z.object({
   regime:          z.enum(BUDGET_REGIMES),
   shape:           z.enum(COPY_SHAPES),
   granularity:     z.enum(COPY_GRANULARITIES),
+  includeContact:  z.boolean().optional(),
   adjustmentPct:   z.number().min(-100, 'Redução máxima de 100%').max(1000, 'Aumento máximo de 1000%'),
   replaceExisting: z.boolean().optional(),
 }).superRefine((v, ctx) => {

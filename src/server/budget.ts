@@ -1269,16 +1269,19 @@ async function planCopy(organizationId: string, input: CopyActualsInput): Promis
   const { actuals, semCategoria, inativas } = await collectActuals(db, organizationId, v)
 
   const drafts = buildCopyDrafts(actuals, {
-    fiscalYear:    loaded.version.fiscalYear,
-    shape:         v.shape,
-    granularity:   v.granularity,
-    adjustmentPct: v.adjustmentPct,
+    fiscalYear:     loaded.version.fiscalYear,
+    shape:          v.shape,
+    granularity:    v.granularity,
+    includeContact: v.includeContact ?? false,
+    adjustmentPct:  v.adjustmentPct,
   })
 
   if (drafts.length > MAX_COPIED_SERIES) {
     return {
       error: `O período gera ${drafts.length} lançamentos, acima do limite de ${MAX_COPIED_SERIES}. `
-           + 'Use o detalhamento "Por categoria" ou reduza o período.',
+           + (v.includeContact
+              ? 'Desmarque "abrir por contato", use o detalhamento "Por categoria" ou reduza o período.'
+              : 'Use o detalhamento "Por categoria" ou reduza o período.'),
     }
   }
 

@@ -72,6 +72,7 @@ export function CopyActualsDialog({ open, onOpenChange, version, onSaved }: Prop
   const [regime, setRegime]           = useState<BudgetRegime>('competencia')
   const [shape, setShape]             = useState<CopyShape>('mensal')
   const [granularity, setGranularity] = useState<CopyGranularity>('categoria')
+  const [byContact, setByContact]     = useState(false)
   const [pct, setPct]                 = useState('0')
   const [replaceExisting, setReplace] = useState(false)
 
@@ -87,6 +88,7 @@ export function CopyActualsDialog({ open, onOpenChange, version, onSaved }: Prop
     setRegime('competencia')
     setShape('mensal')
     setGranularity('categoria')
+    setByContact(false)
     setPct('0')
     setReplace(false)
     setPreview(null)
@@ -99,9 +101,10 @@ export function CopyActualsDialog({ open, onOpenChange, version, onSaved }: Prop
     regime,
     shape,
     granularity,
+    includeContact: byContact,
     adjustmentPct: Number(pct.replace(',', '.')) || 0,
     replaceExisting,
-  }), [version.id, sourceFrom, sourceTo, regime, shape, granularity, pct, replaceExisting])
+  }), [version.id, sourceFrom, sourceTo, regime, shape, granularity, byContact, pct, replaceExisting])
 
   /** Qualquer mudança de parâmetro invalida a prévia. */
   function change<T>(setter: (v: T) => void) {
@@ -200,6 +203,25 @@ export function CopyActualsDialog({ open, onOpenChange, version, onSaved }: Prop
             hint={COPY_GRANULARITY_HINTS}
             onChange={change(setGranularity)}
           />
+
+          {/* Fora do "Detalhamento" de propósito: a carteira é ordem de grandeza
+              maior que as outras dimensões, e abrir por ela troca um lançamento
+              por categoria por um por contraparte. */}
+          <label className="flex items-start gap-2 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={byContact}
+              onChange={e => { setByContact(e.target.checked); setPreview(null) }}
+              className="mt-0.5 rounded border-input"
+            />
+            <span>
+              Abrir por contato
+              <span className="block text-[11px] text-muted-foreground">
+                Cria um lançamento por contraparte. Bom para orçar cliente a cliente;
+                numa carteira grande, gera muita linha.
+              </span>
+            </span>
+          </label>
 
           {preview && (
             <div className="space-y-3 border-t pt-3">
