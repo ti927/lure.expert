@@ -192,7 +192,7 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 10 — Dimensões (cliente/fornecedor + rateio) **em andamento**, 10.0 concluída.
+**Status:** Fase 10 — Dimensões (cliente/fornecedor + rateio) **em andamento**, 10.0 e 10.1 concluídas.
 Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.8 ✅). Fases 0–7 **100% concluídas**.
 Fase 8 (Adquirentes) pausada em 8.1.
 
@@ -216,7 +216,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | Sessão | Entrega | Status |
 |---|---|---|
 | 10.0 | Cadastro de contatos (migration 0025, CRUD, rota, CSV) + conserto do `__null__` | ✅ |
-| 10.1 | Contato como 4ª dimensão nas telas: filtro, coluna, batch, regras, Haiku | 🔲 |
+| 10.1 | Contato como 4ª dimensão nas telas: filtro, coluna, batch, regras, Haiku | ✅ |
 | 10.2 | Schema do rateio: `transaction_allocations` + view `transaction_lines` | 🔲 |
 | 10.3 | As 7 leituras que filtram/agrupam por dimensão passam a respeitar o rateio | 🔲 |
 | 10.4 | UI do rateio: diálogo por lançamento, linha expansível, rateio em lote | 🔲 |
@@ -311,6 +311,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Fase 10 — Dimensões (em andamento)** | |
+| 10.1 | Contato vira a 4ª dimensão da classificação. **Backend:** lista de contatos no system prompt do Haiku com nome fantasia, documento e papel — o extrato traz o fantasia muito mais que a razão social; teto de 400 com o corte declarado ao modelo. Piso de confiança de 70 **só** no contato, a única dimensão que casa contra a descrição do extrato. **Papel desempata, não veta** — a primeira versão mandava recusar papel divergente, o Haiku ignorou e com razão (estorno e devolução a cliente são saídas). Dois defeitos que tornavam o resto inerte: `catConf === 0` **descartava o resultado inteiro**, jogando fora contato de 95%, e o `set` fixo do job **apagava com null** toda dimensão não reconhecida na passada — inclusive classificação manual, porque "Categorizar agora" reprocessa. **Telas:** coluna, filtro e ordenação em `/transacoes`; quinto campo no batch; filtro + coluna em `/transacoes/revisao` (a coluna entra porque o expert agora sugere contato); alvo de contato nas regras; drill-down recebe `contacts` só para o batch — a coluna exigiria mudar as 5 queries de leitura. Verificado: 7/7 casos de classificação contra o banco com Haiku real, `next build` de 24 rotas |
 | 10.0 | Contatos viram cadastro. `contacts` existia desde a Fase 1 com FK em 5 tabelas e **nunca teve uma linha escrita** fora do orçamento — a sessão fechou a lacuna, não criou a dimensão. Migration 0025: `is_active`, `code`, `is_customer`/`is_supplier` (papel duplo — o mesmo CNPJ é cliente e fornecedor com frequência), **policy de DELETE que faltava** desde a 0002, e `ON DELETE SET NULL` nas duas FKs que ainda eram `no action`. `DimensionManager` **estendido** com `extraFields`/`roleFields` em vez de um segundo gerenciador. Import de CSV próprio (o `previewFlatImport` já é um `withCnpj ? … : …` em cada consulta; um terceiro ramo prejudicaria as duas dimensões existentes). **Conserto do `'__null__'::uuid`**: "Sem centro de custo" lançava erro de sintaxe no Postgres — agora vira `IS NULL`, e combinado com valores concretos vira disjunção. Verificado sobre 10.329 lançamentos reais |
 | **Orçado dentro da DRE (concluído)** | |
 | 9.8 | Drill-down do orçado com edição. `components/budget/budget-drilldown-dialog.tsx` extraído da `comparacao-tab`, com botão de edição por ocorrência; `series-dialog` e `scope-confirm-dialog` **movidos** de `app/(authenticated)/orcamento/` para `components/budget/` — importar de dentro da pasta de outra rota acoplaria as duas telas. `getBudgetSeries(seriesId)` carrega uma linha só. Edição é opcional no componente (sem a prop `edit`, é somente leitura); versão arquivada mostra o motivo em vez de botão morto. Verificado: **282 células conferidas somando as 470 ocorrências que as compõem**, nenhuma divergente |
