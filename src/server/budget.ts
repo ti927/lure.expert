@@ -988,7 +988,9 @@ export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise
                THEN  t.amount::numeric
                ELSE -t.amount::numeric END
         ), 0) AS value
-      FROM transactions t
+      -- A mesma troca da DRE: o realizado dos dois lados tem de repartir igual,
+      -- senão a variação contra o orçado passa a medir o rateio.
+      FROM transaction_lines t
       JOIN categories c ON t.category_id = c.id
       JOIN categories p ON c.parent_id   = p.id
       WHERE t.organization_id = ${organizationId}::uuid
@@ -1008,7 +1010,7 @@ export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise
         COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0) AS inflow,
         COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0) AS outflow,
         COUNT(*)::int AS count
-      FROM transactions t
+      FROM transaction_lines t
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
         AND t.category_id IS NULL
@@ -1026,7 +1028,11 @@ export async function getBudgetVsActual(filters: BudgetVsActualFilters): Promise
         COUNT(t.cost_center_id)::int      AS cc,
         COUNT(t.business_unit_id)::int    AS bu,
         COUNT(t.legal_entity_id)::int     AS le
-      FROM transactions t
+      -- Pela view de propósito: num lançamento rateado a dimensão vive na parte
+      -- e a coluna do pai é nula. Contando por transactions, todo lançamento
+      -- rateado entraria como "sem centro de custo" e este aviso — que existe
+      -- justamente para furar ilusão de cobertura — passaria a mentir ao contrário.
+      FROM transaction_lines t
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
         AND ${txDate}::date >= ${from}::date

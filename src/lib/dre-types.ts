@@ -118,6 +118,15 @@ export interface DrillDownTransaction {
   legalEntityName:     string | null
   contactId:           string | null
   contactName:         string | null
+  /**
+   * Preenchidos pela view `transaction_lines`. Quando `isAllocated` é true esta
+   * linha é uma PARTE de um lançamento rateado: as dimensões vieram da parte, e
+   * editá-las direto no lançamento seria recusado pelo banco (com rateio, as
+   * dimensões do pai têm de ficar vazias). A UI trata a célula como leitura até
+   * a 10.4 trazer a edição da parte.
+   */
+  allocationId:        string | null
+  isAllocated:         boolean
   // Contexto da conta bancária (Sessão drill-down v2)
   accountId:           string | null
   accountName:         string | null

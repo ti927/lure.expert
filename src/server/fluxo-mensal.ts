@@ -81,7 +81,9 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
              THEN  t.amount::numeric
              ELSE -t.amount::numeric END
       ), 0)                                                                  AS net_amount
-    FROM transactions t
+    -- Ver transaction_lines na migration 0026: com rateio, cada parte entra
+    -- com o seu valor e as suas dimensões; sem rateio, a linha de hoje.
+    FROM transaction_lines t
     JOIN categories c ON t.category_id = c.id
     JOIN categories p ON c.parent_id   = p.id
     WHERE t.organization_id = ${organizationId}::uuid

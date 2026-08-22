@@ -9,6 +9,7 @@ import { memberships, transactions, categorizationRules, categories, documents, 
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
+import { dimensionExistsFilter } from '@/lib/sql-dimensions'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -95,16 +96,19 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   const catFilter = buildMultiFilterCondition(transactions.categoryId, parseMultiFilter(category))
   if (catFilter) conditions.push(catFilter)
 
-  const ccFilter = buildMultiFilterCondition(transactions.costCenterId, parseMultiFilter(costCenter))
+  // As quatro dimensões filtram pelas LINHAS do lançamento, não pela coluna
+  // dele: com rateio a coluna do pai é nula e a classificação vive nas partes.
+  // A listagem segue sendo uma linha por lançamento — só a pergunta mudou.
+  const ccFilter = dimensionExistsFilter(transactions.id, 'cost_center_id', parseMultiFilter(costCenter))
   if (ccFilter) conditions.push(ccFilter)
 
-  const buFilter = buildMultiFilterCondition(transactions.businessUnitId, parseMultiFilter(businessUnit))
+  const buFilter = dimensionExistsFilter(transactions.id, 'business_unit_id', parseMultiFilter(businessUnit))
   if (buFilter) conditions.push(buFilter)
 
-  const leFilter = buildMultiFilterCondition(transactions.legalEntityId, parseMultiFilter(legalEntity))
+  const leFilter = dimensionExistsFilter(transactions.id, 'legal_entity_id', parseMultiFilter(legalEntity))
   if (leFilter) conditions.push(leFilter)
 
-  const ctFilter = buildMultiFilterCondition(transactions.contactId, parseMultiFilter(contact))
+  const ctFilter = dimensionExistsFilter(transactions.id, 'contact_id', parseMultiFilter(contact))
   if (ctFilter) conditions.push(ctFilter)
 
   const docFilter = parseMultiFilter(documentId)
@@ -154,6 +158,11 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
       ...getTableColumns(transactions),
       documentReportType: documents.reportType,
       dataSourceMetadata: dataSources.metadata,
+      // A tela precisa saber para não oferecer edição direta de dimensão: num
+      // lançamento rateado o banco recusa gravar dimensão no pai.
+      isAllocated: sql<boolean>`EXISTS (
+        SELECT 1 FROM transaction_allocations a WHERE a.transaction_id = ${transactions.id}
+      )`,
     })
     .from(transactions)
     .leftJoin(documents, eq(transactions.documentId, documents.id))

@@ -214,7 +214,8 @@ export function DrillDownDialog({
   const someSelected = selectedIds.size > 0 && selectedIds.size < sorted.length
 
   function toggleAll() {
-    setSelectedIds(allSelected ? new Set() : new Set(sorted.map(t => t.id)))
+    // Rateadas ficam de fora: a classificação em lote não tem onde gravar nelas.
+    setSelectedIds(allSelected ? new Set() : new Set(sorted.filter(t => !t.isAllocated).map(t => t.id)))
   }
 
   async function handleClassify(
@@ -470,9 +471,22 @@ export function DrillDownDialog({
                       : null
 
                     return (
-                      <tr key={tx.id} className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
+                      // Com rateio o mesmo lançamento vem em N linhas: a chave
+                      // do React e a seleção passam a ser da PARTE, senão as
+                      // três compartilhariam identidade.
+                      <tr key={tx.allocationId ?? tx.id} className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
                         <td className="px-2 py-1.5">
-                          <input type="checkbox" className="rounded border-input" checked={selectedIds.has(tx.id)} onChange={() => toggleRow(tx.id)} />
+                          <input
+                            type="checkbox"
+                            className="rounded border-input"
+                            checked={selectedIds.has(tx.id)}
+                            // Classificar em lote grava no lançamento, e o banco
+                            // recusa dimensão em lançamento rateado. Selecionar
+                            // uma parte não teria efeito possível.
+                            disabled={tx.isAllocated}
+                            title={tx.isAllocated ? 'Lançamento rateado: a classificação está nas partes.' : undefined}
+                            onChange={() => toggleRow(tx.id)}
+                          />
                         </td>
                         <td className="px-2 py-1.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                           {fmtDate(tx.date)}
@@ -522,7 +536,9 @@ export function DrillDownDialog({
                             value={tx.costCenterId}
                             options={costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
                             onValueChange={v => handleClassify(tx.id, 'costCenterId', v)}
-                            disabled={isClassifying}
+                            // Numa parte de rateio a dimensão pertence à parte, e
+                            // gravá-la no lançamento seria recusado pelo banco.
+                            disabled={isClassifying || tx.isAllocated}
                           />
                         </td>
                         <td className="px-1 py-1">
@@ -530,7 +546,7 @@ export function DrillDownDialog({
                             value={tx.businessUnitId}
                             options={businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
                             onValueChange={v => handleClassify(tx.id, 'businessUnitId', v)}
-                            disabled={isClassifying}
+                            disabled={isClassifying || tx.isAllocated}
                           />
                         </td>
                         <td className="px-1 py-1">
@@ -538,7 +554,7 @@ export function DrillDownDialog({
                             value={tx.legalEntityId}
                             options={legalEntities.map(c => ({ id: c.id, name: c.name }))}
                             onValueChange={v => handleClassify(tx.id, 'legalEntityId', v)}
-                            disabled={isClassifying}
+                            disabled={isClassifying || tx.isAllocated}
                           />
                         </td>
                         <td className="px-1 py-1">
@@ -546,7 +562,7 @@ export function DrillDownDialog({
                             value={tx.contactId}
                             options={contacts}
                             onValueChange={v => handleClassify(tx.id, 'contactId', v)}
-                            disabled={isClassifying}
+                            disabled={isClassifying || tx.isAllocated}
                           />
                         </td>
                         <td className="px-1 py-1 text-center">

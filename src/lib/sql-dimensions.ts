@@ -53,3 +53,51 @@ export function dimensionFilters(alias: DimensionAlias, f: DimensionFilterInput)
     ${inFilter(alias, 'contact_id',       f.contactIds)}
   `
 }
+
+/** As quatro colunas de dimensão, como union fechado — o que entra via `sql.raw`. */
+export type DimensionColumn =
+  | 'cost_center_id' | 'business_unit_id' | 'legal_entity_id' | 'contact_id'
+
+export interface MultiFilter {
+  ids: string[]
+  includeNone: boolean
+  includeClassified: boolean
+}
+
+/**
+ * Filtro de dimensão para as telas que listam **lançamentos**, não linhas:
+ * `/transacoes` e a fila de revisão. Elas continuam mostrando uma linha por
+ * lançamento, então não podem ler a view — mas o filtro precisa enxergar o
+ * rateio.
+ *
+ * Por que não basta testar a coluna do lançamento: num lançamento rateado ela é
+ * sempre nula (regra da migration 0026). Filtrar por "Comercial" pela coluna
+ * esconderia justamente o lançamento rateado para Comercial, e "Sem centro de
+ * custo" pegaria TODO lançamento rateado, inclusive os com todas as partes
+ * classificadas.
+ *
+ * A pergunta certa é sobre as linhas do lançamento: *existe alguma linha dele
+ * que satisfaz o filtro?* — e é exatamente isso que a view responde, com ou sem
+ * rateio, por um caminho só.
+ */
+export function dimensionExistsFilter(
+  txIdColumn: SQL | { name: string },
+  column: DimensionColumn,
+  f: MultiFilter,
+): SQL | null {
+  if (!f.includeNone && !f.includeClassified && f.ids.length === 0) return null
+
+  const col = sql.raw(`tl.${column}`)
+  const preds: SQL[] = []
+  if (f.includeNone)       preds.push(sql`${col} IS NULL`)
+  if (f.includeClassified) preds.push(sql`${col} IS NOT NULL`)
+  if (f.ids.length > 0) {
+    preds.push(sql`${col} IN (${sql.join(f.ids.map(id => sql`${id}::uuid`), sql`, `)})`)
+  }
+
+  return sql`EXISTS (
+    SELECT 1 FROM transaction_lines tl
+    WHERE tl.transaction_id = ${txIdColumn}
+      AND (${sql.join(preds, sql` OR `)})
+  )`
+}

@@ -15,6 +15,7 @@ import {
   contacts,
 } from '@/db/schema'
 import { eq, and, isNotNull, desc, count, inArray, sql, ilike, gte, lte, or, isNull } from 'drizzle-orm'
+import { dimensionExistsFilter } from '@/lib/sql-dimensions'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -79,49 +80,23 @@ export async function getReviewQueue(filters: ReviewFilters = {}) {
         conditions.push(inArray(transactions.categoryId, ids))
       }
     }
-    if (filters.costCenter) {
-      const ids = filters.costCenter.split(',').filter(Boolean)
-      if (ids.includes('__none__')) {
-        const rest = ids.filter(id => id !== '__none__')
-        conditions.push(rest.length > 0
-          ? or(isNull(transactions.costCenterId), inArray(transactions.costCenterId, rest))!
-          : isNull(transactions.costCenterId))
-      } else {
-        conditions.push(inArray(transactions.costCenterId, ids))
-      }
-    }
-    if (filters.businessUnit) {
-      const ids = filters.businessUnit.split(',').filter(Boolean)
-      if (ids.includes('__none__')) {
-        const rest = ids.filter(id => id !== '__none__')
-        conditions.push(rest.length > 0
-          ? or(isNull(transactions.businessUnitId), inArray(transactions.businessUnitId, rest))!
-          : isNull(transactions.businessUnitId))
-      } else {
-        conditions.push(inArray(transactions.businessUnitId, ids))
-      }
-    }
-    if (filters.legalEntity) {
-      const ids = filters.legalEntity.split(',').filter(Boolean)
-      if (ids.includes('__none__')) {
-        const rest = ids.filter(id => id !== '__none__')
-        conditions.push(rest.length > 0
-          ? or(isNull(transactions.legalEntityId), inArray(transactions.legalEntityId, rest))!
-          : isNull(transactions.legalEntityId))
-      } else {
-        conditions.push(inArray(transactions.legalEntityId, ids))
-      }
-    }
-    if (filters.contact) {
-      const ids = filters.contact.split(',').filter(Boolean)
-      if (ids.includes('__none__')) {
-        const rest = ids.filter(id => id !== '__none__')
-        conditions.push(rest.length > 0
-          ? or(isNull(transactions.contactId), inArray(transactions.contactId, rest))!
-          : isNull(transactions.contactId))
-      } else {
-        conditions.push(inArray(transactions.contactId, ids))
-      }
+    // As quatro dimensões perguntam pelas LINHAS do lançamento (ver
+    // `dimensionExistsFilter`): num lançamento rateado a coluna do pai é nula e
+    // a classificação vive nas partes. A fila continua listando lançamentos.
+    for (const [param, coluna] of [
+      [filters.costCenter,   'cost_center_id'],
+      [filters.businessUnit, 'business_unit_id'],
+      [filters.legalEntity,  'legal_entity_id'],
+      [filters.contact,      'contact_id'],
+    ] as const) {
+      if (!param) continue
+      const ids = param.split(',').filter(Boolean)
+      const cond = dimensionExistsFilter(transactions.id, coluna, {
+        ids: ids.filter(id => id !== '__none__'),
+        includeNone: ids.includes('__none__'),
+        includeClassified: false,
+      })
+      if (cond) conditions.push(cond)
     }
     return and(...conditions)
   }

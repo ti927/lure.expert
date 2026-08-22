@@ -82,8 +82,13 @@ export async function getDreData(filters: DreFilters): Promise<DreData> {
       ), 0)                                                                   AS net_amount,
       COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0) AS total_inflow,
       COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0) AS total_outflow,
-      COUNT(*)::int                                                           AS transaction_count
-    FROM transactions t
+      -- DISTINCT: a view devolve uma linha por parte, e o nome do campo promete
+      -- lançamentos. Sem isso um lançamento rateado em 3 contaria como 3.
+      COUNT(DISTINCT t.transaction_id)::int                                   AS transaction_count
+    -- transaction_lines e não transactions: com rateio, cada parte entra na
+    -- categoria com o SEU valor e as SUAS dimensões. Sem rateio a view devolve
+    -- exatamente a linha de hoje, então nenhum número muda até alguém ratear.
+    FROM transaction_lines t
     JOIN categories c ON t.category_id = c.id
     JOIN categories p ON c.parent_id   = p.id
     WHERE t.organization_id = ${organizationId}::uuid
@@ -173,6 +178,8 @@ export async function getDreDrillDown(
     legal_entity_name:  string | null
     contact_id:         string | null
     contact_name:       string | null
+    allocation_id:      string | null
+    is_allocated:       boolean
     account_id:         string | null
     account_name:       string | null
     account_type:       string | null
@@ -183,7 +190,9 @@ export async function getDreDrillDown(
 
   const result = await db.execute<TxRow>(sql`
     SELECT
-      t.id::text               AS id,
+      t.transaction_id::text   AS id,
+      t.allocation_id::text    AS allocation_id,
+      t.is_allocated           AS is_allocated,
       t.date                   AS date,
       t.description            AS description,
       t.direction              AS direction,
@@ -208,7 +217,7 @@ export async function getDreDrillDown(
       t.account_number         AS account_number,
       t.data_source_id::text   AS data_source_id,
       ds.metadata              AS ds_metadata
-    FROM transactions t
+    FROM transaction_lines t
     LEFT JOIN categories c     ON t.category_id     = c.id
     LEFT JOIN categories p     ON c.parent_id       = p.id
     LEFT JOIN cost_centers cc  ON t.cost_center_id  = cc.id
@@ -271,6 +280,8 @@ export async function getDreDrillDown(
       legalEntityName:    r.legal_entity_name ?? null,
       contactId:          r.contact_id ?? null,
       contactName:        r.contact_name ?? null,
+      allocationId:       r.allocation_id ?? null,
+      isAllocated:        r.is_allocated === true,
       accountId:          r.account_id ?? null,
       accountName:        r.account_name ?? null,
       accountType:        r.account_type ?? null,

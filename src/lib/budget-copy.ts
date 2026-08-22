@@ -349,7 +349,10 @@ export async function collectActuals(
         ct.name                  AS contact_name,
         TO_CHAR(DATE_TRUNC('month', ${txDate}::date), 'YYYY-MM') AS month,
         SUM(t.amount::numeric) AS total
-      FROM transactions t
+      -- Pela view: copiar o realizado de um lançamento rateado tem de gerar uma
+      -- linha por parte, com o valor da parte, e não o total inteiro numa
+      -- dimensão só.
+      FROM transaction_lines t
       JOIN categories c ON t.category_id = c.id
       JOIN categories p ON c.parent_id   = p.id
       LEFT JOIN cost_centers cc   ON t.cost_center_id   = cc.id

@@ -66,6 +66,8 @@ type TxRow = Transaction & {
   documentReportType?: string | null
   connectionLogoUrl?: string | null
   connectionBadge?: string | null
+  /** Tem partes de rateio: a classificação vive nelas, não neste lançamento. */
+  isAllocated?: boolean
 }
 
 interface Props {
@@ -437,6 +439,11 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
               <tbody>
                 {localRows.map(tx => {
                   const isClassifying = classifyingId === tx.id
+                  // Lançamento rateado: as dimensões vivem nas partes, e o banco
+                  // recusa gravá-las aqui. A célula vira leitura até a 10.4
+                  // trazer a edição do rateio. A categoria segue editável — ela
+                  // não se parte.
+                  const dimLocked = tx.isAllocated === true
                   const acctLabel = tx.accountType ? (ACCT_LABELS[tx.accountType] ?? tx.accountType) : null
                   const acctStr = acctLabel
                     ? (tx.accountNumber ? `${acctLabel} · ${tx.accountNumber}` : acctLabel)
@@ -492,18 +499,29 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                       <td className="px-1 py-1">
                         <CategoryCellCombobox value={tx.categoryId ?? null} categories={options.categories} onValueChange={v => handleClassify(tx.id, 'categoryId', v)} disabled={isClassifying} />
                       </td>
-                      <td className="px-1 py-1">
-                        <CellCombobox value={tx.costCenterId ?? null} options={options.costCenters} onValueChange={v => handleClassify(tx.id, 'costCenterId', v)} disabled={isClassifying} />
-                      </td>
-                      <td className="px-1 py-1">
-                        <CellCombobox value={tx.businessUnitId ?? null} options={options.businessUnits} onValueChange={v => handleClassify(tx.id, 'businessUnitId', v)} disabled={isClassifying} />
-                      </td>
-                      <td className="px-1 py-1">
-                        <CellCombobox value={tx.legalEntityId ?? null} options={options.legalEntities} onValueChange={v => handleClassify(tx.id, 'legalEntityId', v)} disabled={isClassifying} />
-                      </td>
-                      <td className="px-1 py-1">
-                        <CellCombobox value={tx.contactId ?? null} options={options.contacts} onValueChange={v => handleClassify(tx.id, 'contactId', v)} disabled={isClassifying} />
-                      </td>
+                      {dimLocked ? (
+                        <td className="px-2 py-1.5 text-xs text-muted-foreground" colSpan={4}>
+                          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-violet-100 text-violet-700">
+                            Rateado
+                          </span>
+                          <span className="ml-2">a classificação está nas partes</span>
+                        </td>
+                      ) : (
+                        <>
+                          <td className="px-1 py-1">
+                            <CellCombobox value={tx.costCenterId ?? null} options={options.costCenters} onValueChange={v => handleClassify(tx.id, 'costCenterId', v)} disabled={isClassifying} />
+                          </td>
+                          <td className="px-1 py-1">
+                            <CellCombobox value={tx.businessUnitId ?? null} options={options.businessUnits} onValueChange={v => handleClassify(tx.id, 'businessUnitId', v)} disabled={isClassifying} />
+                          </td>
+                          <td className="px-1 py-1">
+                            <CellCombobox value={tx.legalEntityId ?? null} options={options.legalEntities} onValueChange={v => handleClassify(tx.id, 'legalEntityId', v)} disabled={isClassifying} />
+                          </td>
+                          <td className="px-1 py-1">
+                            <CellCombobox value={tx.contactId ?? null} options={options.contacts} onValueChange={v => handleClassify(tx.id, 'contactId', v)} disabled={isClassifying} />
+                          </td>
+                        </>
+                      )}
                       <td className="px-1 py-1 text-center">
                         <button onClick={() => setDeleteTargetIds([tx.id])} className="h-7 w-7 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/5" title="Apagar lançamento">
                           <Trash2 className="h-3.5 w-3.5" />
