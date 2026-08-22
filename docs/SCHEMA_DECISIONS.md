@@ -708,3 +708,59 @@ declara importável por cliente e servidor. `dim-filter.tsx` (client) o reexport
 quem já importava de lá; `sql-dimensions.ts` (server-only, importa drizzle) o consome. Nenhum dos
 dois pode importar do outro — o cliente puxaria drizzle para o bundle, e o servidor puxaria a árvore
 de componentes.
+
+---
+
+## Decisão 16 — O rateio é sub-lançamento, não percentual por dimensão (Sessão 10.2)
+
+**O desenho anterior, e por que caiu.** Até esta sessão o CLAUDE.md registrava rateio como
+*"independente por dimensão"*: o cliente informaria a divisão de cada dimensão em separado
+(centro de custo 60/40, contato 70/30) e uma view cruzaria as duas. Ao explicar o modelo para
+decidir o schema, ficou claro que ele tem dois defeitos que nenhuma implementação conserta:
+
+- **Inventa dado.** Cruzar 60/40 com 70/30 produz a célula "Admin + Cliente B", uma combinação
+  que o cliente nunca afirmou ter acontecido. O sistema deduz repartição de fato econômico a
+  partir de duas marginais — que é exatamente o que não se pode fazer em contabilidade.
+- **Reintroduz a fração de centavo.** Mesmo com cada dimensão fechando exata, a multiplicação
+  das proporções não fecha: 333,33 × 50% = 166,665.
+
+**O modelo escolhido.** Um lançamento de R$ 999 vira N partes com valor próprio, e **cada parte
+carrega o conjunto completo das quatro dimensões**. Só existe o que foi escrito, e 333+333+333
+fecha 999 sem resíduo. É o que os ERPs fazem, e o custo — dividir por duas dimensões ao mesmo
+tempo exige enumerar as combinações — quase nunca aparece na prática e é mais honesto que deduzir.
+
+**A natureza não se parte.** A categoria continua sendo uma só, no lançamento pai; a parte
+reparte apenas as dimensões. Nenhuma linha da DRE se divide por causa de rateio, e por isso a
+Fase 10.3 pode migrar as sete leituras uma a uma sem que nenhum total mude.
+
+**Soma exata como regra do banco, não da aplicação.** Ou o lançamento tem **zero** partes, ou a
+soma delas é **exatamente** `transactions.amount`. Rateio que não fecha no centavo não entra —
+decisão explícita, e é o que torna R$ 100 em três partes iguais impossível (o cliente faz
+33,34 + 33,33 + 33,33).
+
+**Por que `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` e não `CHECK`.** `CHECK` enxerga
+uma linha por vez e a soma é propriedade do conjunto. Deferido até o COMMIT, dá para inserir as
+três partes de 333 uma a uma sem que a primeira seja recusada por somar 333 e não 999. O mesmo
+gatilho cobre, pela mesma porta: apagar uma parte de três, editar o valor de uma parte, e editar
+o valor do lançamento pai — todos terminam em soma divergente no commit.
+
+**As colunas de dimensão do lançamento ficam vazias quando há rateio**, e o gatilho recusa o
+contrário. Se ficassem preenchidas, toda leitura ainda não migrada atribuiria o valor **integral**
+a uma das partes — erro silencioso. Vazias, a leitura não migrada mostra "sem centro de custo",
+que é uma lacuna visível.
+
+**Teto de 50 partes.** No desenho anterior o limite existia para conter o produto cartesiano;
+sem cruzamento, sobrou como sanidade.
+
+**A view `transaction_lines`** (`security_invoker = true`, senão furaria a RLS das tabelas de
+baixo) devolve uma linha por lançamento sem rateio — idêntica à de hoje — e uma por parte quando
+há rateio. `amount` e as quatro dimensões vêm da parte; natureza, data e conta vêm do pai.
+
+**Migration:** `db/migrations/rls/0026_transaction_allocations.sql`
+**Schema Drizzle:** `db/schema/transaction-allocations.ts`
+
+**Verificado antes de aplicar:** a migration inteira roda dentro de uma transação com ROLLBACK,
+15/15 casos — soma exata aceita, soma curta e soma longa recusadas com a mensagem nomeando os
+valores, dimensão no pai recusada, edição do valor do pai recusada, 51 partes recusadas e 50
+aceitas, e a view devolvendo exatamente as 2.272 linhas e o mesmo total de `transactions` enquanto
+não há rateio nenhum.

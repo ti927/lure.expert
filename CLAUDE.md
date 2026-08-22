@@ -217,17 +217,26 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 |---|---|---|
 | 10.0 | Cadastro de contatos (migration 0025, CRUD, rota, CSV) + conserto do `__null__` | ✅ |
 | 10.1 | Contato como 4ª dimensão nas telas: filtro, coluna, batch, regras, Haiku | ✅ |
-| 10.2 | Schema do rateio: `transaction_allocations` + view `transaction_lines` | 🔲 |
+| 10.2 | Schema do rateio: `transaction_allocations` + view `transaction_lines` | ⏳ migration 0026 pronta, aguardando aplicação |
 | 10.3 | As 7 leituras que filtram/agrupam por dimensão passam a respeitar o rateio | 🔲 |
 | 10.4 | UI do rateio: diálogo por lançamento, linha expansível, rateio em lote | 🔲 |
 | 10.5 | Modelos de rateio reutilizáveis | 🔲 |
 
-**Modelo do rateio (decidido, ver plano da fase):** rateio **independente por dimensão**; a
-**natureza NÃO é rateada** (um lançamento tem uma categoria só, então nenhuma linha da DRE se
+**Modelo do rateio (revisto na 10.2 — ver `docs/SCHEMA_DECISIONS.md` Decisão 16):** rateio é
+**sub-lançamento**, não percentual por dimensão. Um lançamento de R$ 999 vira N partes com valor
+próprio, e **cada parte carrega as quatro dimensões**. O desenho anterior (divisão independente por
+dimensão, cruzada por uma view) foi descartado por inventar combinações que o cliente nunca afirmou
+e por reintroduzir fração de centavo na multiplicação das proporções.
+
+A **natureza NÃO é rateada** (um lançamento tem uma categoria só, então nenhuma linha da DRE se
 parte); `/transacoes` mostra **uma linha por lançamento, expansível**; **só o realizado** — o
-orçamento segue com uma dimensão por lançamento. Armazenamento: tabela `transaction_allocations`
-normalizada (peso por dimensão, Σ=1) + view `transaction_lines` que faz o cruzamento com
+orçamento segue com uma dimensão por lançamento. Armazenamento: `transaction_allocations` (valor
+por parte, Σ = `transactions.amount` **exato**) + view `transaction_lines` com
 `security_invoker = true`. Sem rateio a view devolve exatamente a linha de hoje.
+
+**As regras vivem no banco**, num `CONSTRAINT TRIGGER` deferido até o commit: ou zero partes, ou
+soma exata; com rateio as dimensões do lançamento pai ficam vazias; teto de 50 partes. Editar o
+valor de um lançamento rateado é recusado até as partes fecharem o novo total.
 
 **Fase 8 — Connectors de Adquirentes**, pausada em 8.1 (Stone). Faltam 8.2 (upload de extratos),
 8.3 (Cielo), 8.4 (reconciliação lote × vendas) e 8.5 (UX + MDR).
@@ -280,6 +289,7 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0022_sefaz_invoices.sql` — tabelas `sefaz_connections` e `invoices` + coluna `invoice_id` em `transactions` + RLS em ambas
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
 - ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
+- ⏳ `db/migrations/rls/0026_transaction_allocations.sql` — `transaction_allocations` + view `transaction_lines` + RLS + os gatilhos da invariante do rateio. **Ainda não aplicada.** Validada rodando a migration inteira dentro de uma transação com ROLLBACK (15/15 casos)
 - ✅ `db/migrations/rls/0025_contacts_dimension.sql` — `contacts` ganha `is_active`, `code`, `is_customer`, `is_supplier` + policy de DELETE (faltava desde a 0002) + `ON DELETE SET NULL` nas FKs de `transactions.contact_id` e `categorization_rules.target_contact_id` (eram `no action`). Aplicação conferida contra o banco: colunas, defaults, índice, 4 policies e `confdeltype = 'n'` nas duas FKs
 
 **Scripts de teste RLS (`db/migrations/rls/`):**
