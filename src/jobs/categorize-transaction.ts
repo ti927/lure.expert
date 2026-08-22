@@ -122,7 +122,8 @@ async function processChunk(
 
     const hasAnyDimension = result && (
       result.categoryId || result.costCenterId ||
-      result.businessUnitId || result.legalEntityId
+      result.businessUnitId || result.legalEntityId ||
+      result.contactId
     )
 
     if (!hasAnyDimension) {
@@ -130,18 +131,30 @@ async function processChunk(
       continue
     }
 
+    // Escreve só o que veio preenchido. O job também roda por "Categorizar
+    // agora", sobre lançamento que já tem classificação — e o `set` fixo
+    // apagava com null toda dimensão que o LLM não reconhecesse nesta passada,
+    // inclusive a que o cliente tinha posto à mão. Com a categoria deixando de
+    // ser obrigatória para o resultado existir, isso passaria a zerar a
+    // natureza também.
+    const updates: Partial<typeof transactions.$inferInsert> = { updatedAt: new Date() }
+
+    // Confiança, método e revisão descrevem a escolha da natureza — só se
+    // movem junto com ela.
+    if (result!.categoryId) {
+      updates.categoryId = result!.categoryId
+      updates.categorizationConfidence = String(result!.confidence)
+      updates.categorizationMethod = result!.method
+      updates.needsReview = result!.needsReview
+    }
+    if (result!.costCenterId) updates.costCenterId = result!.costCenterId
+    if (result!.businessUnitId) updates.businessUnitId = result!.businessUnitId
+    if (result!.legalEntityId) updates.legalEntityId = result!.legalEntityId
+    if (result!.contactId) updates.contactId = result!.contactId
+
     await db
       .update(transactions)
-      .set({
-        categoryId: result!.categoryId,
-        costCenterId: result!.costCenterId,
-        businessUnitId: result!.businessUnitId,
-        legalEntityId: result!.legalEntityId,
-        categorizationConfidence: String(result!.confidence),
-        categorizationMethod: result!.method,
-        needsReview: result!.needsReview,
-        updatedAt: new Date(),
-      })
+      .set(updates)
       .where(and(
         eq(transactions.id, tx.id),
         eq(transactions.organizationId, organizationId),
@@ -158,7 +171,9 @@ async function processChunk(
       )
     }
 
-    if (result!.needsReview) needsReview++
+    // Ganhar só dimensão não é estar categorizado: sem natureza o lançamento
+    // continua fora da DRE e precisa de gente.
+    if (!result!.categoryId || result!.needsReview) needsReview++
     else categorized++
   }
 

@@ -6,9 +6,10 @@ import {
   costCenters,
   businessUnits,
   legalEntities,
+  contacts,
   agentEvents,
 } from '@/db/schema'
-import { eq, and, ne, ilike, desc, inArray } from 'drizzle-orm'
+import { eq, and, ne, ilike, asc, desc, inArray } from 'drizzle-orm'
 import { anthropic } from '@/lib/anthropic'
 import { BP_TYPES } from '@/lib/bp-types'
 
@@ -29,6 +30,7 @@ export interface CategorizationResult {
   costCenterId: string | null
   businessUnitId: string | null
   legalEntityId: string | null
+  contactId: string | null
   confidence: number
   method: 'csv_match' | 'rule' | 'recurrence' | 'embedding' | 'llm'
   needsReview: boolean
@@ -51,15 +53,24 @@ export interface OrgContext {
     targetCostCenterId: string | null
     targetBusinessUnitId: string | null
     targetLegalEntityId: string | null
+    targetContactId: string | null
   }>
   categories: LeafCategory[]
   costCenters: Array<{ id: string; name: string; code: string | null }>
   businessUnits: Array<{ id: string; name: string; code: string | null }>
   legalEntities: Array<{ id: string; name: string; cnpj: string | null }>
+  contacts: Array<{
+    id: string
+    name: string
+    tradeName: string | null
+    document: string | null
+    isCustomer: boolean
+    isSupplier: boolean
+  }>
 }
 
 export async function loadOrgContext(organizationId: string): Promise<OrgContext> {
-  const [rules, allCats, ccs, bus, les] = await Promise.all([
+  const [rules, allCats, ccs, bus, les, cts] = await Promise.all([
     db.select({
       id: categorizationRules.id,
       conditions: categorizationRules.conditions,
@@ -67,6 +78,7 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
       targetCostCenterId: categorizationRules.targetCostCenterId,
       targetBusinessUnitId: categorizationRules.targetBusinessUnitId,
       targetLegalEntityId: categorizationRules.targetLegalEntityId,
+      targetContactId: categorizationRules.targetContactId,
     })
       .from(categorizationRules)
       .where(and(
@@ -100,6 +112,22 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
     db.select({ id: legalEntities.id, name: legalEntities.name, cnpj: legalEntities.cnpj })
       .from(legalEntities)
       .where(and(eq(legalEntities.organizationId, organizationId), eq(legalEntities.isActive, true))),
+
+    // Nome fantasia e papel entram porque o extrato traz o fantasia com muito
+    // mais frequência que a razão social, e o papel desempata contato que é
+    // cliente e fornecedor ao mesmo tempo. Ordem alfabética torna determinístico
+    // o corte de CONTACTS_NO_PROMPT lá no system prompt.
+    db.select({
+      id: contacts.id,
+      name: contacts.name,
+      tradeName: contacts.tradeName,
+      document: contacts.document,
+      isCustomer: contacts.isCustomer,
+      isSupplier: contacts.isSupplier,
+    })
+      .from(contacts)
+      .where(and(eq(contacts.organizationId, organizationId), eq(contacts.isActive, true)))
+      .orderBy(asc(contacts.name)),
   ])
 
   // Nós folha = categorias cujo id não aparece como parentId de nenhuma outra categoria.
@@ -123,6 +151,7 @@ export async function loadOrgContext(organizationId: string): Promise<OrgContext
     costCenters: ccs,
     businessUnits: bus,
     legalEntities: les,
+    contacts: cts,
   }
 }
 
@@ -264,6 +293,7 @@ function applyRules(
       costCenterId: rule.targetCostCenterId,
       businessUnitId: rule.targetBusinessUnitId,
       legalEntityId: rule.targetLegalEntityId,
+      contactId: rule.targetContactId,
       confidence: 1.0,
       method: 'rule',
       needsReview: false,
@@ -289,6 +319,7 @@ async function checkRecurrence(
       costCenterId: transactions.costCenterId,
       businessUnitId: transactions.businessUnitId,
       legalEntityId: transactions.legalEntityId,
+      contactId: transactions.contactId,
     })
     .from(transactions)
     .where(and(
@@ -307,6 +338,7 @@ async function checkRecurrence(
     costCenterId: prev.costCenterId ?? null,
     businessUnitId: prev.businessUnitId ?? null,
     legalEntityId: prev.legalEntityId ?? null,
+    contactId: prev.contactId ?? null,
     confidence: 0.93,
     method: 'recurrence',
     needsReview: false,
@@ -316,6 +348,34 @@ async function checkRecurrence(
 // ─── Camada 3: Embedding similarity (não implementado ainda) ─────────────────
 
 // ─── Camada 4: Claude Haiku ──────────────────────────────────────────────────
+
+// As outras três dimensões têm dezenas de itens; a carteira de contatos de uma
+// PME tem milhares. O system prompt é cacheado (`cache_control` na chamada), mas
+// listar tudo ainda infla cada requisição — daí o teto, com o corte declarado ao
+// modelo pra ele devolver null em vez de inventar quem ficou de fora.
+const CONTACTS_NO_PROMPT = 400
+
+function buildContactList(ctxContacts: OrgContext['contacts']): string {
+  if (ctxContacts.length === 0) return '\nContatos: nenhum cadastrado — retorne null'
+
+  const shown = ctxContacts.slice(0, CONTACTS_NO_PROMPT)
+  const linhas = shown.map(ct => {
+    const fantasia = ct.tradeName && ct.tradeName !== ct.name ? ` (${ct.tradeName})` : ''
+    const doc = ct.document ? ` [${ct.document}]` : ''
+    const papel = ct.isCustomer && ct.isSupplier
+      ? ' — cliente/fornecedor'
+      : ct.isCustomer ? ' — cliente'
+      : ct.isSupplier ? ' — fornecedor'
+      : ''
+    return `${ct.id}: ${ct.name}${fantasia}${doc}${papel}`
+  })
+
+  const corte = ctxContacts.length > CONTACTS_NO_PROMPT
+    ? `\n(lista truncada nos primeiros ${CONTACTS_NO_PROMPT} de ${ctxContacts.length} contatos ativos — se a contraparte não estiver acima, retorne null)`
+    : ''
+
+  return `\nContatos (id: nome (fantasia) [documento] — papel):\n${linhas.join('\n')}${corte}`
+}
 
 function buildSystemPrompt(ctx: OrgContext, domain: DocumentDomain): string {
   const domainNote = domain === 'bp'
@@ -338,14 +398,22 @@ function buildSystemPrompt(ctx: OrgContext, domain: DocumentDomain): string {
     ? `\nEntidades jurídicas (id: nome):\n${ctx.legalEntities.map(le => `${le.id}: ${le.name}${le.cnpj ? ` [${le.cnpj}]` : ''}`).join('\n')}`
     : '\nEntidades jurídicas: nenhuma cadastrada — retorne null'
 
+  const ctList = buildContactList(ctx.contacts)
+
   return `Você é um categorizador de transações financeiras para PMEs brasileiras.
 ${domainNote}
 
 Quando vier o bloco "Contexto da conta:" (nome da conta, etiqueta do usuário ou merchant), priorize atribuir centro de custo, unidade de negócio ou entidade jurídica cujos nomes coincidam (correspondência total ou substring forte) com esses sinais — atribua com confiança alta. Não force matches frágeis ou parciais ambíguos.
 
+O contato é a contraparte do lançamento: quem recebeu o dinheiro numa saída, de quem ele veio numa entrada. Atribua só com correspondência forte entre a descrição (ou o bloco "Contexto NF-e", quando houver) e o nome, o nome fantasia ou o documento de um contato listado — o extrato costuma trazer o nome fantasia, não a razão social. Se a contraparte não estiver na lista, retorne null; nunca invente um uuid, e não atribua por coincidência de uma palavra comum ("central", "brasil", "comercio") quando o resto do nome não bate.
+
+O papel serve para desempatar, não para vetar: entre dois contatos parecidos, prefira o fornecedor numa saída e o cliente numa entrada. Um contato de papel divergente ainda pode ser a contraparte certa — reembolso, estorno e devolução a cliente são saídas legítimas, e cadastro incompleto é comum. Nesse caso atribua, mas com contact_confidence mais baixa.
+
+A contact_confidence mede só a identificação da contraparte, independente da categoria: nome fantasia ou documento batendo por inteiro fica acima de 90 mesmo que a natureza do lançamento seja indefinida. Abaixo de 70 o contato é descartado.
+
 Categorias disponíveis (código: nome):
 ${catList}
-${ccList}${buList}${leList}
+${ccList}${buList}${leList}${ctList}
 
 Retorne APENAS este JSON sem nenhum texto adicional:
 {
@@ -356,7 +424,9 @@ Retorne APENAS este JSON sem nenhum texto adicional:
   "business_unit_id": "<uuid exato ou null>",
   "business_unit_confidence": <0-100>,
   "legal_entity_id": "<uuid exato ou null>",
-  "legal_entity_confidence": <0-100>
+  "legal_entity_confidence": <0-100>,
+  "contact_id": "<uuid exato ou null>",
+  "contact_confidence": <0-100>
 }`
 }
 
@@ -473,13 +543,27 @@ async function classifyWithLLM(
   const ccId = parsed.cost_center_id as string | null
   const buId = parsed.business_unit_id as string | null
   const leId = parsed.legal_entity_id as string | null
+  const ctId = parsed.contact_id as string | null
+  const ctConf = Number(parsed.contact_confidence ?? 0) / 100
 
-  if (catConf === 0) return null
-
-  const category = catCode ? ctx.categories.find(c => c.code === catCode) : null
+  const category = catConf > 0 && catCode ? ctx.categories.find(c => c.code === catCode) : null
   const validCc = ccId && ctx.costCenters.some(cc => cc.id === ccId) ? ccId : null
   const validBu = buId && ctx.businessUnits.some(bu => bu.id === buId) ? buId : null
   const validLe = leId && ctx.legalEntities.some(le => le.id === leId) ? leId : null
+  // Mesma guarda das outras: o uuid devolvido tem de existir no contexto. Sem
+  // ela o Haiku inventaria um contato e a FK estouraria na gravacao.
+  // O piso de confiança é exclusivo do contato: as outras três dimensões casam
+  // por nome de conta ou etiqueta, e esta casa contra a descrição do extrato,
+  // onde o fornecedor aparece truncado e abreviado — é a que mais produz match
+  // frágil. Abaixo de 70 fica em branco, e o cliente atribui na tela.
+  const validCt = ctId && ctConf >= 0.7 && ctx.contacts.some(ct => ct.id === ctId) ? ctId : null
+
+  // Categoria indefinida não invalida o resto. Descrição de PIX e TED costuma
+  // identificar a contraparte sem dizer nada sobre a natureza — antes de o
+  // contato existir isso significava resultado vazio de qualquer jeito, e agora
+  // jogaria fora um contato reconhecido com confiança alta. Só descarta quando
+  // nada sobrou. Quem grava trata cada campo em separado.
+  if (!category && !validCc && !validBu && !validLe && !validCt) return null
 
   return {
     result: {
@@ -487,6 +571,7 @@ async function classifyWithLLM(
       costCenterId: validCc,
       businessUnitId: validBu,
       legalEntityId: validLe,
+      contactId: validCt,
       confidence: catConf,
       method: 'llm',
       needsReview: catConf < 0.9,
@@ -563,6 +648,7 @@ export async function categorizeTransaction(
         costCenterId: null,
         businessUnitId: null,
         legalEntityId: null,
+        contactId: null,
         confidence: 1.0,
         method: 'csv_match',
         needsReview: false,
@@ -631,6 +717,7 @@ export async function logCategorizationEvent(params: {
       costCenterId: result.costCenterId,
       businessUnitId: result.businessUnitId,
       legalEntityId: result.legalEntityId,
+      contactId: result.contactId,
     },
     modelUsed: 'claude-haiku-4-5-20251001',
     tokensInput: llmCost.tokensInput,
