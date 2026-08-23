@@ -97,6 +97,21 @@ export function metadataDoRecurso(base: string) {
  */
 export function desafioWwwAuthenticate(base: string, descricao?: string): string {
   const partes = [`Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`]
-  if (descricao) partes.push(`error="invalid_token", error_description="${descricao.replace(/"/g, "'")}"`)
+  if (descricao) partes.push(`error="invalid_token", error_description="${soAscii(descricao)}"`)
   return partes.join(', ')
+}
+
+/**
+ * Cabeçalho HTTP não carrega acento.
+ *
+ * Descoberto na produção: "cabeçalho" saiu como `cabe%C3%A7alho` — o runtime
+ * percent-encoda o que não couber em ISO-8859-1, e o cliente lê o escape cru. A
+ * mensagem completa e acentuada continua no CORPO da resposta; o cabeçalho fica
+ * com a versão sem acento, que é o que um parser estrito espera.
+ */
+function soAscii(s: string): string {
+  return s
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^ -~]/g, '')
+    .replace(/"/g, "'")
 }
