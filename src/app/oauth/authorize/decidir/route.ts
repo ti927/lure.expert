@@ -40,9 +40,9 @@ export async function POST(req: Request) {
   const form = await req.formData()
   const campos: Record<string, string> = {}
   form.forEach((v, k) => {
-    // `org` é multivalorado e sai por `getAll`; achatá-lo aqui perderia todas as
-    // empresas menos a última.
-    if (k !== 'org' && typeof v === 'string') campos[k] = v
+    // `org` e `escopo` são multivalorados e saem por `getAll`; achatá-los aqui
+    // perderia todos os valores menos o último.
+    if (k !== 'org' && k !== 'escopo' && typeof v === 'string') campos[k] = v
   })
 
   // As MESMAS regras da tela. Reaproveitar em vez de reescrever é o que impede o
@@ -79,12 +79,19 @@ export async function POST(req: Request) {
     return paraUrl(`${base}/oauth/authorize?${qs.toString()}`)
   }
 
+  // O usuário pode conceder MENOS do que o aplicativo pediu — o OAuth prevê
+  // isso, e a resposta do token declara o que de fato foi concedido. `leitura`
+  // entra sempre: a caixa dela é desabilitada na tela (e caixa desabilitada não
+  // é enviada), e um consentimento vazio seria uma conexão que não faz nada.
+  const marcados = new Set(form.getAll('escopo').map(String))
+  const escopos = pedido.scopes.filter(e => e === 'leitura' || marcados.has(e))
+
   const codigo = await criarCodigo({
     clientId: pedido.clientId,
     userId: user.id,
     redirectUri: pedido.redirectUri,
     codeChallenge: pedido.codeChallenge,
-    scopes: pedido.scopes,
+    scopes: escopos.length > 0 ? escopos : ['leitura'],
     organizationIds: escolhidas,
     resource: pedido.resource,
   })
@@ -95,7 +102,7 @@ export async function POST(req: Request) {
     userId: user.id,
     clientId: pedido.clientId,
     clientName: pedido.clientName,
-    scopes: pedido.scopes,
+    scopes: escopos,
   })
 
   return paraUrl(urlDeSucesso(pedido.redirectUri, codigo, pedido.state))

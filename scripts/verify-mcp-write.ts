@@ -17,6 +17,7 @@ import { db } from '@/db'
 import {
   oauthClients, organizations, memberships, transactions, categories,
   categorizationRules, costCenters, transactionAllocations, dataSources,
+  allocationTemplates, allocationTemplateLines,
 } from '@/db/schema'
 import { and, eq, like, sql, isNotNull } from 'drizzle-orm'
 import { garantirGrant, emitirTokens } from '@/lib/oauth/store'
@@ -132,8 +133,8 @@ async function main() {
     'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
 
   const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
-  t(catalogoE.length === catalogoL.length + 2,
-    `com escrita, o catálogo ganha o par prever_/aplicar_ (${catalogoE.length} ferramentas)`)
+  t(catalogoE.length === catalogoL.length + 4,
+    `com escrita, o catálogo ganha os DOIS pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
 
   // ═══ Naturezas ════════════════════════════════════════════════════════════
   console.log('\n── catálogos ──')
@@ -287,6 +288,105 @@ async function main() {
   t(reaplicar.isError && reaplicar.texto.includes('já foi aplicada'),
     'a MESMA prévia não aplica duas vezes — consumo atômico')
 
+  // ═══ Rateio ═══════════════════════════════════════════════════════════════
+  console.log('\n── rateio: pesos e centavos ──')
+
+  const [modelo] = await db.insert(allocationTemplates).values({
+    organizationId: ORG, name: 'Comercial 60 / resto 40',
+  }).returning({ id: allocationTemplates.id })
+  await db.insert(allocationTemplateLines).values([
+    { organizationId: ORG, templateId: modelo.id, sequence: 1, weight: '3', costCenterId: cc.id },
+    { organizationId: ORG, templateId: modelo.id, sequence: 2, weight: '2' },
+  ])
+
+  const modelos = await chamar(comEscrita, 'listar_modelos_de_rateio', { organizationId: ORG })
+  const listaModelos = (modelos.dados as { modelos: { id: string; partes: { percentual: number }[] }[] })?.modelos ?? []
+  t(listaModelos.length === 1 && listaModelos[0].partes.length === 2,
+    'listar_modelos_de_rateio devolve o modelo com suas partes')
+  t(Math.abs(listaModelos[0].partes[0].percentual - 60) < 0.01,
+    `peso 3:2 é exibido como ${listaModelos[0].partes[0].percentual}% — o modelo guarda PROPORÇÃO, não percentual`)
+
+  const ambos = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'POSTO' },
+    modeloId: modelo.id, pesos: [{ peso: 1 }],
+  })
+  t(ambos.isError && ambos.texto.includes('OU'),
+    'modeloId E pesos juntos: recusa — não há como saber qual deve valer')
+
+  const nenhum = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'POSTO' },
+  })
+  t(nenhum.isError, 'sem modeloId e sem pesos: recusa')
+
+  // R$ 400 em 60/40 → 240 / 160, exato.
+  const rat = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'POSTO' }, modeloId: modelo.id,
+  })
+  const pr = rat.dados as {
+    previaId: string
+    resumo: { quantidade: number; valorTotal: number; proporcao: string; amostra: { partes: number[] }[] }
+  }
+  t(pr.resumo.quantidade === 1, 'atinge o único POSTO')
+  t(JSON.stringify(pr.resumo.amostra[0].partes) === '[240,160]',
+    `R$ 400 em 3:2 vira ${JSON.stringify(pr.resumo.amostra[0].partes)} — fecha no centavo`)
+  t(pr.resumo.proporcao.includes('60'), `a proporção é declarada legível (${pr.resumo.proporcao})`)
+
+  const aplicRat = await chamar(comEscrita, 'aplicar_rateio_em_lote', {
+    organizationId: ORG, previaId: pr.previaId, confirmacao: 'aplicar',
+  })
+  t(!aplicRat.isError && (aplicRat.dados as { lancamentosRateados: number }).lancamentosRateados === 1,
+    'aplica o rateio')
+
+  const [conf] = await db.execute<{ partes: number; soma: string; total: string; dimNoPai: number }>(sql`
+    SELECT COUNT(a.id)::int AS partes,
+           COALESCE(SUM(a.amount), 0)::text AS soma,
+           MAX(t.amount)::text AS total,
+           COUNT(*) FILTER (WHERE t.cost_center_id IS NOT NULL)::int AS "dimNoPai"
+    FROM transactions t JOIN transaction_allocations a ON a.transaction_id = t.id
+    WHERE t.organization_id = ${ORG}::uuid AND t.description = 'POSTO IPIRANGA'`)
+  t(Number(conf.partes) === 2 && Number(conf.soma) === Number(conf.total),
+    `as 2 partes somam R$ ${conf.soma}, exatamente o valor do lançamento`)
+  t(Number(conf.dimNoPai) === 0,
+    'e o lançamento pai ficou SEM dimensão — com rateio, a classificação vive nas partes')
+
+  const [antesDoTerco] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(a.id)::int AS n FROM transactions t
+    JOIN transaction_allocations a ON a.transaction_id = t.id
+    WHERE t.organization_id = ${ORG}::uuid AND t.description = 'UBER *TRIP RATEADA'`)
+  console.log(`     (o lançamento RATEADA tem ${antesDoTerco.n} partes no banco agora)`)
+
+  // O maior resto: R$ 100 em três partes iguais não divide redondo.
+  const terco = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG,
+    filtro: { descricaoContem: 'RATEADA' },
+    pesos: [{ peso: 1 }, { peso: 1 }, { peso: 1 }],
+  })
+  const pt = terco.dados as { previaId: string; resumo: { jaRateados: number; amostra: { partes: number[] }[] } }
+  const partesTerco = pt.resumo.amostra[0].partes
+  t(partesTerco.reduce((a, b) => a + b, 0) === 100,
+    `R$ 100 em três partes: ${JSON.stringify(partesTerco)} — a sobra do centavo aparece na prévia`)
+  t(pt.resumo.jaRateados === 1,
+    `e a prévia avisa que o lançamento já era rateado e será SUBSTITUÍDO (jaRateados=${pt.resumo.jaRateados})`)
+
+  const aplicTerco = await chamar(comEscrita, 'aplicar_rateio_em_lote', {
+    organizationId: ORG, previaId: pt.previaId, confirmacao: 'aplicar',
+  })
+  t(!aplicTerco.isError, 'aplica sobre o que já era rateado')
+
+  const [subst] = await db.execute<{ partes: number; soma: string }>(sql`
+    SELECT COUNT(a.id)::int AS partes, COALESCE(SUM(a.amount), 0)::text AS soma
+    FROM transactions t JOIN transaction_allocations a ON a.transaction_id = t.id
+    WHERE t.organization_id = ${ORG}::uuid AND t.description = 'UBER *TRIP RATEADA'`)
+  t(Number(subst.partes) === 3 && Number(subst.soma) === 100,
+    `o rateio anterior de 2 partes foi substituído por ${subst.partes}, somando R$ ${subst.soma}`)
+
+  const modeloAlheio = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'POSTO' },
+    modeloId: '00000000-0000-0000-0000-000000000000',
+  })
+  t(modeloAlheio.isError && modeloAlheio.texto.includes('não encontrado'),
+    'modelo que não é desta empresa: recusa')
+
   // ═══ Auditoria ════════════════════════════════════════════════════════════
   console.log('\n── auditoria ──')
 
@@ -294,8 +394,8 @@ async function main() {
     SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
            COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
     FROM agent_events WHERE organization_id = ${ORG}::uuid`)
-  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 1,
-    `${aud.previas} prévias e ${aud.aplicadas} aplicação registradas em agent_events`)
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 3,
+    `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — uma classificação e dois rateios`)
 
   const [carimbo] = await db.execute<{ tem: boolean }>(sql`
     SELECT (payload ? 'confirmed_at' AND payload ? 'applied_at') AS tem

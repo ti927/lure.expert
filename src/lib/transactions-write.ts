@@ -159,14 +159,15 @@ export async function ensinarRegras(
 const dataIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-DD')
 
 /**
- * O filtro é estreito de propósito.
+ * O filtro é estreito de propósito, e é UM só para todas as escritas em lote.
  *
  * Não é a superfície de filtros de `/transacoes` — é o subconjunto que descreve
- * um lote a reclassificar. Reaproveitar o filtro da tela arrastaria a leitura
- * paginada inteira para cá e daria ao modelo vinte maneiras de pedir a mesma
- * coisa.
+ * um lote. Reaproveitar o filtro da tela arrastaria a leitura paginada inteira
+ * para cá e daria ao modelo vinte maneiras de pedir a mesma coisa. E um único
+ * vocabulário de filtro vale mais que um por operação: quem aprendeu a
+ * descrever um lote para classificar já sabe descrevê-lo para ratear.
  */
-export const filtroClassificacaoSchema = z.object({
+export const filtroLancamentosSchema = z.object({
   descricaoContem: z.string().trim().min(2).max(120).optional()
     .describe('Trecho da descrição, sem diferenciar maiúsculas. Ex.: "UBER".'),
   semNatureza: z.boolean().optional()
@@ -187,12 +188,12 @@ export const filtroClassificacaoSchema = z.object({
   'Informe ao menos um critério. Filtro vazio atingiria todos os lançamentos.',
 )
 
-export type FiltroClassificacao = z.infer<typeof filtroClassificacaoSchema>
+export type FiltroLancamentos = z.infer<typeof filtroLancamentosSchema>
 
 /** Teto por operação. O mesmo espírito do limite de 200 do diálogo da tela. */
 export const TETO_CLASSIFICACAO = 500
 
-function condicoes(organizationId: string, f: FiltroClassificacao): SQL[] {
+function condicoes(organizationId: string, f: FiltroLancamentos): SQL[] {
   const cond: SQL[] = [
     eq(transactions.organizationId, organizationId),
     // `pending` é lançamento de importação ainda não aprovada; classificá-lo
@@ -231,6 +232,21 @@ const semRateio = sql`NOT EXISTS (
   WHERE ${transactionAllocations.transactionId} = ${transactions.id}
 )`
 
+/** Os ids que o filtro descreve agora — o ponto de entrada das outras escritas em lote. */
+export async function idsPorFiltro(
+  organizationId: string,
+  filtro: FiltroLancamentos,
+  limite: number,
+): Promise<string[]> {
+  const linhas = await db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(...condicoes(organizationId, filtro)))
+    .orderBy(sql`${transactions.date} ASC`)
+    .limit(limite)
+  return linhas.map(l => l.id)
+}
+
 export interface ResumoClassificacao {
   quantidade: number
   valorTotal: number
@@ -244,7 +260,7 @@ export interface ResumoClassificacao {
 
 export async function resumirClassificacao(
   organizationId: string,
-  filtro: FiltroClassificacao,
+  filtro: FiltroLancamentos,
   data: DimensionData,
 ): Promise<ResumoClassificacao> {
   const base = condicoes(organizationId, filtro)
@@ -309,7 +325,7 @@ export interface ResultadoClassificacao {
  */
 export async function classificarPorFiltro(
   organizationId: string,
-  filtro: FiltroClassificacao,
+  filtro: FiltroLancamentos,
   data: DimensionData,
   opcoes: { criarRegras?: boolean } = {},
 ): Promise<ResultadoClassificacao> {

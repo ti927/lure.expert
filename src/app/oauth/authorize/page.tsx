@@ -134,14 +134,37 @@ export default async function AuthorizePage({
 
             <section className="space-y-2">
               <h2 className="text-sm font-semibold">O que ele poderá fazer</h2>
-              <ul className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">
+                O aplicativo pediu estas permissões. Você pode conceder menos do que ele pediu —
+                a leitura é o mínimo para a conexão existir.
+              </p>
+              <div className="space-y-1 rounded-md border p-3">
                 {pedido.scopes.map(e => (
-                  <li key={e} className="flex gap-2 text-sm text-muted-foreground">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                    <span>{ESCOPO_DESCRICAO[e]}</span>
-                  </li>
+                  <label
+                    key={e}
+                    className={`flex gap-3 rounded px-2 py-1.5 ${e === 'leitura' ? '' : 'cursor-pointer hover:bg-muted'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      name="escopo"
+                      value={e}
+                      defaultChecked
+                      // Leitura não se desmarca: sem ela não há conexão, e um
+                      // consentimento vazio seria uma conexão que não faz nada.
+                      disabled={e === 'leitura'}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary disabled:opacity-60"
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      {ESCOPO_DESCRICAO[e]}
+                      {e === 'escrita' ? (
+                        <span className="block text-xs">
+                          Toda alteração continua passando por uma prévia que você aprova na conversa.
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
                 ))}
-              </ul>
+              </div>
             </section>
 
             <section className="space-y-2">

@@ -95,6 +95,13 @@ export function dimensionExistsFilter(
     preds.push(sql`${col} IN (${sql.join(f.ids.map(id => sql`${id}::uuid`), sql`, `)})`)
   }
 
+  // Este EXISTS funciona hoje por um detalhe frágil: `transaction_lines` não tem
+  // coluna `id`, então o `"id"` que o Drizzle emite sem qualificação não acha
+  // nada no escopo interno e cai no externo. A mesma construção em
+  // `transaction_allocations` — que TEM `id` — comparava `a.transaction_id =
+  // a.id` e vivia falsa. Se a view um dia ganhar `id`, todo filtro de dimensão
+  // de `/transacoes` quebra em silêncio; quem chamar daqui em diante deve passar
+  // a coluna já qualificada.
   return sql`EXISTS (
     SELECT 1 FROM transaction_lines tl
     WHERE tl.transaction_id = ${txIdColumn}

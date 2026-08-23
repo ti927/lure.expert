@@ -16,6 +16,7 @@ import { db } from '@/db'
 import {
   memberships, organizations, transactions, categories,
   costCenters, businessUnits, legalEntities, contacts,
+  allocationTemplates, allocationTemplateLines,
 } from '@/db/schema'
 import { scopeFromMcpGrant } from '@/lib/query/scope'
 import { runQuery, explicarQuery } from '@/lib/query/engine'
@@ -23,9 +24,14 @@ import { querySpecSchema, type QuerySource } from '@/lib/query/spec'
 import { fontesDisponiveis } from '@/lib/query/sources'
 import { QueryValidationError, ScopeDeniedError } from '@/lib/query/errors'
 import {
-  assertLeafCategory, filtroClassificacaoSchema, resumirClassificacao,
-  classificarPorFiltro, TETO_CLASSIFICACAO,
+  assertLeafCategory, filtroLancamentosSchema, resumirClassificacao,
+  classificarPorFiltro, idsPorFiltro, TETO_CLASSIFICACAO,
 } from '@/lib/transactions-write'
+import {
+  preverLoteDeRateio, aplicarLoteDeRateio, MAX_LOTE, MAX_PARTES,
+  type AllocationWeight,
+} from '@/lib/allocations-write'
+import { normalizeWeights, formatProportion } from '@/lib/allocation-math'
 import {
   registrarPrevia, consumirPrevia, divergiu, registrarAplicacao,
   exigirConfirmacao, PALAVRA_DE_CONFIRMACAO,
@@ -325,7 +331,7 @@ const destinoClassificacao = z.object({
   'Informe ao menos uma dimensão de destino.')
 
 const entradaPreverClassificacao = alvo.extend({
-  filtro: filtroClassificacaoSchema,
+  filtro: filtroLancamentosSchema,
   destino: destinoClassificacao,
   criarRegras: z.boolean().default(true).describe(
     'Cria uma regra por descrição única, para futuras importações caírem sozinhas no mesmo lugar.',
@@ -456,15 +462,281 @@ const aplicarClassificacao: Ferramenta = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Rateio
+// ─────────────────────────────────────────────────────────────────────────────
+
+const listarModelosDeRateio: Ferramenta = {
+  nome: 'listar_modelos_de_rateio',
+  titulo: 'Listar modelos de rateio',
+  descricao:
+    'Modelos de rateio salvos. Um modelo guarda PROPORÇÃO, nunca valor — o mesmo serve ao aluguel ' +
+    'de R$ 12.000 e à conta de luz de R$ 340. Use o id de um deles em prever_rateio_em_lote no ' +
+    'lugar de informar pesos à mão.',
+  entrada: alvo,
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const scope = await escopoDe(ctx, String(args.organizationId))
+
+    const modelos = await db
+      .select({ id: allocationTemplates.id, nome: allocationTemplates.name })
+      .from(allocationTemplates)
+      .where(and(
+        eq(allocationTemplates.organizationId, scope.organizationId),
+        eq(allocationTemplates.isActive, true),
+      ))
+      .orderBy(allocationTemplates.name)
+      .limit(100)
+
+    if (modelos.length === 0) return { modelos: [] }
+
+    const linhas = await db
+      .select({
+        templateId: allocationTemplateLines.templateId,
+        peso: allocationTemplateLines.weight,
+        costCenterId: allocationTemplateLines.costCenterId,
+        businessUnitId: allocationTemplateLines.businessUnitId,
+        legalEntityId: allocationTemplateLines.legalEntityId,
+        contactId: allocationTemplateLines.contactId,
+      })
+      .from(allocationTemplateLines)
+      .where(inArray(allocationTemplateLines.templateId, modelos.map(m => m.id)))
+      .orderBy(allocationTemplateLines.sequence)
+
+    return {
+      modelos: modelos.map(m => {
+        const minhas = linhas.filter(l => l.templateId === m.id)
+        const pcts = normalizeWeights(minhas.map(l => Number(l.peso)))
+        return {
+          id: m.id,
+          nome: m.nome,
+          partes: minhas.map((l, i) => ({
+            percentual: pcts[i],
+            costCenterId: l.costCenterId,
+            businessUnitId: l.businessUnitId,
+            legalEntityId: l.legalEntityId,
+            contactId: l.contactId,
+          })),
+        }
+      }),
+    }
+  },
+}
+
+const FERRAMENTA_RATEIO = 'rateio_em_lote'
+
+const pesoDeEntrada = z.object({
+  peso: z.number().positive().describe(
+    'Peso RELATIVO, não percentual fechado: 60 e 40 é a mesma divisão que 6 e 4. ' +
+    'Não precisa somar 100.',
+  ),
+  costCenterId:   z.string().uuid().nullable().default(null),
+  businessUnitId: z.string().uuid().nullable().default(null),
+  legalEntityId:  z.string().uuid().nullable().default(null),
+  contactId:      z.string().uuid().nullable().default(null),
+})
+
+const entradaPreverRateio = alvo.extend({
+  filtro: filtroLancamentosSchema,
+  modeloId: z.string().uuid().optional()
+    .describe('Um modelo de listar_modelos_de_rateio. Use isto OU pesos, não os dois.'),
+  pesos: z.array(pesoDeEntrada).min(1).max(MAX_PARTES).optional(),
+})
+
+const preverRateio: Ferramenta = {
+  nome: 'prever_rateio_em_lote',
+  titulo: 'Prever rateio em lote',
+  descricao:
+    'Mostra como um rateio repartiria os lançamentos, SEM gravar. Cada lançamento é repartido pelo ' +
+    'método do maior resto, então fecha no centavo exato — e a prévia mostra onde a sobra caiu. ' +
+    'Rateio SUBSTITUI o que já existir no lançamento; a prévia diz quantos já eram rateados. ' +
+    'Apresente o resumo ao usuário e obtenha o aceite antes de aplicar.',
+  entrada: entradaPreverRateio,
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as z.infer<typeof entradaPreverRateio>
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const pesos = await resolverPesos(scope.organizationId, a.modeloId, a.pesos)
+
+    const ids = await idsPorFiltro(scope.organizationId, a.filtro, MAX_LOTE + 1)
+    if (ids.length === 0) {
+      return { previaId: null, aviso: 'Nenhum lançamento casa com este filtro. Não há o que ratear.' }
+    }
+    if (ids.length > MAX_LOTE) {
+      return {
+        previaId: null,
+        aviso: `O filtro atinge mais de ${MAX_LOTE} lançamentos, que é o teto por operação. ` +
+          'Estreite o filtro — por período, por conta ou por valor.',
+      }
+    }
+
+    const previsao = await preverLoteDeRateio(scope.organizationId, ids, pesos)
+    if ('error' in previsao) throw new Error(previsao.error)
+
+    const valorTotal = previsao.rows.reduce((s, r) => s + r.amount, 0)
+    const resumo = {
+      quantidade: previsao.rows.length,
+      valorTotal,
+      jaRateados: previsao.jaRateados,
+      partesPorLancamento: pesos.length,
+      proporcao: formatProportion(pesos.map(p => p.weight)),
+      amostra: previsao.rows.slice(0, 5).map(r => ({
+        data: r.date, descricao: r.description, valor: r.amount, partes: r.parts,
+      })),
+    }
+
+    const { previaId, expiraEm } = await registrarPrevia({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_RATEIO,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resumo,
+      pedido: { filtro: a.filtro, pesos, modeloId: a.modeloId ?? null },
+    })
+
+    return {
+      previaId,
+      expiraEm,
+      resumo,
+      ...(previsao.jaRateados > 0 ? {
+        aviso: `${previsao.jaRateados} lançamento(s) já têm rateio e serão SUBSTITUÍDOS. ` +
+          'O rateio anterior deles se perde.',
+      } : {}),
+      comoAplicar: `Mostre este resumo ao usuário. Com o aceite dele, chame ` +
+        `aplicar_rateio_em_lote com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
+    }
+  },
+}
+
+const aplicarRateio: Ferramenta = {
+  nome: 'aplicar_rateio_em_lote',
+  titulo: 'Aplicar rateio em lote',
+  descricao:
+    'Aplica o rateio de uma prévia. Exige o previaId e a palavra literal "aplicar". Recalcula do ' +
+    'zero e RECUSA se o conjunto mudou desde a prévia. Só chame com o aceite do usuário.',
+  entrada: alvo.extend({
+    previaId: z.string().uuid(),
+    confirmacao: z.string().describe('A palavra literal "aplicar".'),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; previaId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    const previa = await consumirPrevia({
+      previaId: a.previaId,
+      ferramenta: FERRAMENTA_RATEIO,
+      organizationId: scope.organizationId,
+      userId: ctx.userId,
+    })
+    if (!previa.ok) throw new Error(previa.motivo)
+
+    const pedido = previa.pedido as {
+      filtro: Parameters<typeof idsPorFiltro>[1]
+      pesos: AllocationWeight[]
+      modeloId: string | null
+    }
+
+    const ids = await idsPorFiltro(scope.organizationId, pedido.filtro, MAX_LOTE + 1)
+    const conferencia = await preverLoteDeRateio(scope.organizationId, ids.slice(0, MAX_LOTE), pedido.pesos)
+    if ('error' in conferencia) throw new Error(conferencia.error)
+
+    const problema = divergiu(previa.resumo, {
+      quantidade: conferencia.rows.length,
+      valorTotal: conferencia.rows.reduce((s, r) => s + r.amount, 0),
+    })
+    if (problema) throw new Error(problema)
+
+    const inicio = Date.now()
+    const r = await aplicarLoteDeRateio(
+      scope.organizationId, ids.slice(0, MAX_LOTE), pedido.pesos, pedido.modeloId,
+    )
+    if ('error' in r) throw new Error(r.error)
+
+    await registrarAplicacao({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_RATEIO,
+      previaId: a.previaId,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resultado: { aplicados: r.aplicados },
+      duracaoMs: Date.now() - inicio,
+    })
+
+    return {
+      aplicado: true,
+      lancamentosRateados: r.aplicados,
+      observacao: 'As dimensões passaram para as partes; o lançamento em si ficou sem dimensão, ' +
+        'como o modelo de rateio exige. A natureza não é rateada e continua no lançamento.',
+    }
+  },
+}
+
+/** Pesos vindos do modelo ou informados à mão — nunca os dois. */
+async function resolverPesos(
+  organizationId: string,
+  modeloId: string | undefined,
+  pesos: z.infer<typeof pesoDeEntrada>[] | undefined,
+): Promise<AllocationWeight[]> {
+  if (modeloId && pesos) {
+    throw new Error('Informe modeloId OU pesos, não os dois — não há como saber qual deve valer.')
+  }
+  if (pesos?.length) {
+    return pesos.map(p => ({
+      weight: p.peso,
+      costCenterId: p.costCenterId ?? null,
+      businessUnitId: p.businessUnitId ?? null,
+      legalEntityId: p.legalEntityId ?? null,
+      contactId: p.contactId ?? null,
+    }))
+  }
+  if (!modeloId) throw new Error('Informe modeloId ou pesos.')
+
+  const linhas = await db
+    .select({
+      peso: allocationTemplateLines.weight,
+      costCenterId: allocationTemplateLines.costCenterId,
+      businessUnitId: allocationTemplateLines.businessUnitId,
+      legalEntityId: allocationTemplateLines.legalEntityId,
+      contactId: allocationTemplateLines.contactId,
+    })
+    .from(allocationTemplateLines)
+    .innerJoin(allocationTemplates, eq(allocationTemplates.id, allocationTemplateLines.templateId))
+    .where(and(
+      eq(allocationTemplateLines.templateId, modeloId),
+      // A junção com o modelo existe só para provar a organização: sem ela, um
+      // id de modelo alheio traria as linhas dele.
+      eq(allocationTemplates.organizationId, organizationId),
+    ))
+    .orderBy(allocationTemplateLines.sequence)
+
+  if (linhas.length === 0) throw new Error('Modelo de rateio não encontrado nesta empresa.')
+
+  return linhas.map(l => ({
+    weight: Number(l.peso),
+    costCenterId: l.costCenterId,
+    businessUnitId: l.businessUnitId,
+    legalEntityId: l.legalEntityId,
+    contactId: l.contactId,
+  }))
+}
+
 const CATALOGO: Ferramenta[] = [
   listarOrganizacoes,
   descreverOrganizacao,
   listarCategorias,
   listarDimensoes,
+  listarModelosDeRateio,
   consultar,
   explicarConsulta,
   preverClassificacao,
   aplicarClassificacao,
+  preverRateio,
+  aplicarRateio,
 ]
 
 /** O que este consentimento enxerga. */
