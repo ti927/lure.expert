@@ -7,6 +7,7 @@
 // categoria, com `LIMIT 5` cravado no SQL.
 
 export const GROUPING_IDS = [
+  'dia',
   'mes',
   'trimestre',
   'ano',
@@ -33,6 +34,7 @@ export interface GroupingMeta {
 }
 
 export const GROUPINGS: Record<GroupingId, GroupingMeta> = {
+  dia:                { rotulo: 'Dia',                 rotuloVazio: 'Sem data',              temporal: true },
   mes:                { rotulo: 'Mês',                 rotuloVazio: 'Sem data',              temporal: true },
   trimestre:          { rotulo: 'Trimestre',           rotuloVazio: 'Sem data',              temporal: true },
   ano:                { rotulo: 'Ano',                 rotuloVazio: 'Sem data',              temporal: true },

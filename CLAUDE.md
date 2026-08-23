@@ -142,6 +142,7 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `query/spec.ts` | `querySpecSchema` — **um Zod, três consumidores**: motor, ferramenta MCP `consultar` e bloco de dashboard |
 | `query/engine.ts` | `runQuery` — a **única** função de `lib/query/**` que chama o banco — e `explicarQuery` |
 | `query/sources/` | um descritor por fonte. **A fonte não escreve a cláusula de organização**; o motor a emite a partir de `orgColumn` |
+| `query/derive.ts` | `withSubtotals` — a cascata do P&L sobre o resultado do motor, envolvendo `computeSubtotals` |
 
 **A regra que separa leitura analítica de operacional** (Fase 1):
 
@@ -245,7 +246,8 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 1.0 | Motor de consulta: escopo, spec Zod, fonte `realizado`, `runQuery` | ✅ (aguardando confirmação na tela) |
 | 1.1 | ~~Organização ativa (cookie + seletor)~~ **adiada** — cada usuário tem exatamente 1 organização hoje, e Julio não tem vínculo nas dos clientes. Volta com os convites, na Fase 4. Só o `orderBy` latente foi corrigido | ⏸️ |
 | 1.2 | Fontes `orcado` e `nfe`. `balanco` **não entrou**: é snapshot por documento e não há um único documento de balanço no banco para conferir contra | ✅ (aguardando confirmação na tela) |
-| 1.3 | Migrar `dashboard.ts` e `fluxo.ts` para o motor + tabelas de dashboard antecipadas | 🔲 |
+| 1.3 | `getTopExpenseCategories` e `getCashFlowChart` migradas para o motor + `derive.ts` (cascata do P&L) + agrupamento por `dia` | ✅ (aguardando confirmação na tela) |
+| 1.4 | Tabelas de dashboard (migration 0028) + `block-spec.ts` antecipados da Fase 5 | 🔲 |
 | 2 | Chave de IA por organização, teto e alertas | 🔲 |
 | 3 | Servidor MCP remoto com OAuth 2.1 | 🔲 |
 | 4 | Convites e papéis | 🔲 |

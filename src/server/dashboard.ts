@@ -3,10 +3,13 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships } from '@/db/schema'
-import { eq, and, isNotNull, sql } from 'drizzle-orm'
+import { memberships, categories } from '@/db/schema'
+import { eq, and, isNotNull, inArray, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { startOfMonth, endOfMonth, subMonths, subDays, format, parseISO } from 'date-fns'
 import type { DrillDownTransaction } from '@/lib/dre-types'
+import { runQuery } from '@/lib/query/engine'
+import { scopeFromSession } from '@/lib/query/scope'
 
 // Resolve uma referência de mês ('YYYY-MM' ou undefined) em todos os marcos
 // usados pelas server actions do dashboard. Quando referenceMonth é inválido
@@ -81,12 +84,9 @@ export type TopExpenseCategory = {
 const expenseTypes = sql.raw(
   `'deducoes_tributarias','deducoes_operacionais','cpv','sga','resultado_financeiro','ir'`
 )
-// Tipos que representam saída de caixa "operacional + não-operacional" — usado pelo Top 5
-// (que inclui financiamentos/investimentos como "despesa" no sentido colloquial), mas
-// exclui transfers e BP (ver bpAndTransferTypes para a contraparte).
-const cashOutflowTypes = sql.raw(
-  `'deducoes_tributarias','deducoes_operacionais','cpv','sga','resultado_financeiro','ir','emprestimos_amortizacoes','investimentos_retiradas'`
-)
+// A lista de tipos de saída de caixa virou `TIPOS_SAIDA_CAIXA`, mais abaixo, ao
+// lado da consulta que a usa — o Top 5 passou a montar a lista como array, e o
+// motor a parametriza em vez de interpolá-la crua.
 const bpAndTransferTypes = sql.raw(
   `'transfer','ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido','emprestimos_amortizacoes','investimentos_retiradas'`
 )
@@ -293,60 +293,86 @@ export async function getFinancialIndicators(referenceMonth?: string): Promise<F
 // - Respeita hide_in_cashflow (mesmo critério de /fluxo)
 // Quando uma transação está classificada direto numa Pai-sem-filhos, a própria Pai
 // aparece como categoria-folha (parentId fica null).
-export async function getTopExpenseCategories(referenceMonth?: string): Promise<TopExpenseCategory[]> {
-  const { organizationId } = await getAuthContext()
+/** Os 8 tipos que o Top 5 trata como "despesa" no sentido coloquial. */
+const TIPOS_SAIDA_CAIXA = [
+  'deducoes_tributarias', 'deducoes_operacionais', 'cpv', 'sga',
+  'resultado_financeiro', 'ir', 'emprestimos_amortizacoes', 'investimentos_retiradas',
+]
 
+/**
+ * Top N categorias de despesa do mês.
+ *
+ * Passou a ser uma consulta do motor na Fase 1.3, e o `limite` deixou de estar
+ * cravado no SQL — era literalmente `LIMIT 5`, e foi esse detalhe que motivou o
+ * motor inteiro: trocar `agruparPor` para `unidade_de_negocio` agora responde
+ * "top 5 UENs" sem função nova.
+ *
+ * Mudança de fonte junto: lê `transaction_lines` em vez de `transactions`, o que
+ * corrige a atribuição de lançamentos rateados (a soma não muda, porque a
+ * natureza não é rateada, mas a contagem passa a ser de lançamentos e não de
+ * partes).
+ */
+export async function getTopExpenseCategories(
+  referenceMonth?: string,
+  limite = 5,
+): Promise<TopExpenseCategory[]> {
+  const { userId, organizationId } = await getAuthContext()
   const { curFrom, curTo } = resolveMonthRange(referenceMonth)
 
-  type Row = {
-    cat_id:      string
-    cat_name:    string
-    cat_code:    string | null
-    cat_type:    string
-    parent_id:   string | null
-    parent_name: string | null
-    parent_code: string | null
-    total:       string
-    tx_count:    string
-  }
+  const scope = await scopeFromSession(userId, organizationId)
+  const resultado = await runQuery(scope, {
+    fonte:      'realizado',
+    medidas:    ['saidas', 'contagem'],
+    agruparPor: ['categoria'],
+    periodo:    { tipo: 'intervalo', de: curFrom, ate: curTo, regime: 'caixa' },
+    // `direcao` filtra LINHAS, não só a medida. Sem ele, uma categoria que só
+    // teve entrada no mês apareceria na lista com R$ 0,00 de saída, ocupando
+    // uma das cinco vagas — a query original filtrava `direction = 'outflow'`
+    // e por isso nunca a via.
+    filtros: {
+      direcao: 'outflow',
+      tiposDeCategoria: TIPOS_SAIDA_CAIXA,
+      visibilidade: 'caixa',
+      excluirBalanco: true,
+    },
+    ordenarPor: [{ por: 'saidas', direcao: 'desc' }],
+    limite,
+  })
 
-  const rows = await db.execute<Row>(sql`
-    SELECT
-      c.id::text       AS cat_id,
-      c.name           AS cat_name,
-      c.code           AS cat_code,
-      c.type           AS cat_type,
-      p.id::text       AS parent_id,
-      p.name           AS parent_name,
-      p.code           AS parent_code,
-      SUM(t.amount::numeric)::text AS total,
-      COUNT(*)::text               AS tx_count
-    FROM transactions t
-    JOIN categories c           ON t.category_id = c.id
-    LEFT JOIN categories p      ON c.parent_id   = p.id
-    WHERE t.organization_id = ${organizationId}::uuid
-      AND t.status NOT IN ('pending', 'duplicate')
-      AND t.direction = 'outflow'
-      AND COALESCE(t.effective_date, t.date)::date >= ${curFrom}::date
-      AND COALESCE(t.effective_date, t.date)::date <= ${curTo}::date
-      AND c.type IN (${cashOutflowTypes})
-      AND COALESCE(c.hide_in_cashflow, false) = false
-    GROUP BY c.id, c.name, c.code, c.type, p.id, p.name, p.code
-    ORDER BY SUM(t.amount::numeric) DESC
-    LIMIT 5
-  `)
+  const ids = resultado.linhas.map(l => l.chaves[0].id).filter((x): x is string => !!x)
+  if (ids.length === 0) return []
 
-  return rows.map(r => ({
-    categoryId:   r.cat_id,
-    categoryName: r.cat_name,
-    categoryCode: r.cat_code,
-    categoryType: r.cat_type,
-    parentId:     r.parent_id,
-    parentName:   r.parent_name,
-    parentCode:   r.parent_code,
-    total:        Number(r.total),
-    txCount:      Number(r.tx_count),
-  }))
+  // A hierarquia que a tela mostra não é agregação — vem do plano de contas.
+  const parent = alias(categories, 'parent')
+  const hierarquia = await db
+    .select({
+      id: categories.id, name: categories.name, code: categories.code, type: categories.type,
+      parentId: parent.id, parentName: parent.name, parentCode: parent.code,
+    })
+    .from(categories)
+    .leftJoin(parent, eq(categories.parentId, parent.id))
+    .where(and(eq(categories.organizationId, organizationId), inArray(categories.id, ids)))
+
+  const porId = new Map(hierarquia.map(h => [h.id, h]))
+
+  return resultado.linhas
+    .map((l): TopExpenseCategory | null => {
+      const id = l.chaves[0].id
+      const h = id ? porId.get(id) : undefined
+      if (!id || !h) return null
+      return {
+        categoryId:   id,
+        categoryName: h.name,
+        categoryCode: h.code,
+        categoryType: h.type,
+        parentId:     h.parentId,
+        parentName:   h.parentName,
+        parentCode:   h.parentCode,
+        total:        l.medidas.saidas,
+        txCount:      l.medidas.contagem,
+      }
+    })
+    .filter((x): x is TopExpenseCategory => x !== null)
 }
 
 // Drill-down para qualquer conjunto de categoryIds + range de datas. Usado pelo card
@@ -497,33 +523,40 @@ export async function getDashboardCategoryDrillDown(
   return { transactions }
 }
 
+/**
+ * Movimentação diária dos 90 dias que terminam no mês de referência.
+ *
+ * Migrada para o motor na Fase 1.3. Sem filtro de tipo — o gráfico mostra o
+ * caixa como ele é, incluindo transferências e contas patrimoniais, então
+ * `excluirBalanco` vai explicitamente `false` e a visibilidade fica em `todas`.
+ * Os padrões do motor são mais restritivos que isso, e herdá-los mudaria o
+ * gráfico em silêncio.
+ *
+ * O teto de 500 linhas do motor cabe: 90 dias.
+ */
 export async function getCashFlowChart(referenceMonth?: string): Promise<CashFlowDay[]> {
-  const { organizationId } = await getAuthContext()
+  const { userId, organizationId } = await getAuthContext()
 
   const { curTo } = resolveMonthRange(referenceMonth)
-  const toDate   = curTo
   const fromDate = format(subDays(parseISO(curTo), 89), 'yyyy-MM-dd')
 
-  type DayRow = { date: string; inflow: string; outflow: string }
+  const scope = await scopeFromSession(userId, organizationId)
+  const resultado = await runQuery(scope, {
+    fonte:      'realizado',
+    medidas:    ['entradas', 'saidas'],
+    agruparPor: ['dia'],
+    periodo:    { tipo: 'intervalo', de: fromDate, ate: curTo, regime: 'caixa' },
+    filtros:    { excluirBalanco: false, visibilidade: 'todas' },
+    ordenarPor: [{ por: 'dia', direcao: 'asc' }],
+    limite:     500,
+  })
 
-  const rows = await db.execute<DayRow>(sql`
-    SELECT
-      COALESCE(t.effective_date, t.date)::date::text AS date,
-      COALESCE(SUM(CASE WHEN t.direction = 'inflow'  THEN t.amount::numeric ELSE 0 END), 0)::text AS inflow,
-      COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE 0 END), 0)::text AS outflow
-    FROM transactions t
-    WHERE t.organization_id = ${organizationId}::uuid
-      AND t.status NOT IN ('pending', 'duplicate')
-      AND COALESCE(t.effective_date, t.date)::date >= ${fromDate}::date
-      AND COALESCE(t.effective_date, t.date)::date <= ${toDate}::date
-    GROUP BY COALESCE(t.effective_date, t.date)::date
-    ORDER BY COALESCE(t.effective_date, t.date)::date ASC
-  `)
-
-  return rows.map(r => ({
-    date:    String(r.date),
-    inflow:  Number(r.inflow),
-    outflow: Number(r.outflow),
-  }))
+  return resultado.linhas
+    .filter(l => l.chaves[0].id !== null)
+    .map(l => ({
+      date:    l.chaves[0].id as string,
+      inflow:  l.medidas.entradas,
+      outflow: l.medidas.saidas,
+    }))
 }
 

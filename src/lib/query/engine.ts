@@ -28,6 +28,7 @@ import {
  * chamador. A unidade vai parametrizada.
  */
 const GRUPO_TEMPORAL: Partial<Record<GroupingId, { unidade: string; formato: string }>> = {
+  dia:       { unidade: 'day',     formato: 'YYYY-MM-DD' },
   mes:       { unidade: 'month',   formato: 'YYYY-MM' },
   trimestre: { unidade: 'quarter', formato: 'YYYY-"T"Q' },
   ano:       { unidade: 'year',    formato: 'YYYY' },
