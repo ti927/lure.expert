@@ -35,6 +35,11 @@ export const realizado: SourceDescriptor = {
   },
 
   supportedDimensions: ['centrosDeCusto', 'unidadesDeNegocio', 'entidadesLegais', 'contatos'],
+  filterColumns: {
+    categoria: sql`tl.category_id`,
+    conta:     sql`tl.account_id`,
+    direcao:   sql`tl.direction`,
+  },
 
   measures: {
     valor_liquido:  { expr: liquido },
@@ -45,19 +50,8 @@ export const realizado: SourceDescriptor = {
     ticket_medio:   { expr: sql`SUM(tl.amount::numeric) / NULLIF(COUNT(DISTINCT tl.transaction_id), 0)` },
   },
 
+  // mes/trimestre/ano ficam a cargo do motor — ver a nota em types.ts.
   groupings: {
-    mes: {
-      chave:  sql`TO_CHAR(DATE_TRUNC('month', tl.date::date), 'YYYY-MM')`,
-      rotulo: sql`TO_CHAR(DATE_TRUNC('month', tl.date::date), 'YYYY-MM')`,
-    },
-    trimestre: {
-      chave:  sql`TO_CHAR(DATE_TRUNC('quarter', tl.date::date), 'YYYY-"T"Q')`,
-      rotulo: sql`TO_CHAR(DATE_TRUNC('quarter', tl.date::date), 'YYYY-"T"Q')`,
-    },
-    ano: {
-      chave:  sql`TO_CHAR(DATE_TRUNC('year', tl.date::date), 'YYYY')`,
-      rotulo: sql`TO_CHAR(DATE_TRUNC('year', tl.date::date), 'YYYY')`,
-    },
     categoria: {
       chave:  sql`${sql.raw(c)}.id::text`,
       rotulo: sql`${sql.raw(c)}.name`,

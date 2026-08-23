@@ -243,8 +243,8 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 |---|---|---|
 | 0 | Corte do chat + medição de IA + tela de consumo + fix do `forceRun` | ✅ (aguardando confirmação na tela) |
 | 1.0 | Motor de consulta: escopo, spec Zod, fonte `realizado`, `runQuery` | ✅ (aguardando confirmação na tela) |
-| 1.1 | Organização ativa (cookie + seletor) — `auth-context.ts` tem `.limit(1)` sem `orderBy` | 🔲 |
-| 1.2 | Fontes `orcado`, `nfe` e `balanco` + `derive.ts` (cascata da DRE) | 🔲 |
+| 1.1 | ~~Organização ativa (cookie + seletor)~~ **adiada** — cada usuário tem exatamente 1 organização hoje, e Julio não tem vínculo nas dos clientes. Volta com os convites, na Fase 4. Só o `orderBy` latente foi corrigido | ⏸️ |
+| 1.2 | Fontes `orcado` e `nfe`. `balanco` **não entrou**: é snapshot por documento e não há um único documento de balanço no banco para conferir contra | ✅ (aguardando confirmação na tela) |
 | 1.3 | Migrar `dashboard.ts` e `fluxo.ts` para o motor + tabelas de dashboard antecipadas | 🔲 |
 | 2 | Chave de IA por organização, teto e alertas | 🔲 |
 | 3 | Servidor MCP remoto com OAuth 2.1 | 🔲 |

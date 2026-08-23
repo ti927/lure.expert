@@ -52,7 +52,29 @@ export interface SourceDescriptor {
   /** Dimensões que a fonte realmente tem. NF-e só tem entidade e contato. */
   supportedDimensions: Array<'centrosDeCusto' | 'unidadesDeNegocio' | 'entidadesLegais' | 'contatos'>
 
-  measures:  Partial<Record<MeasureId, MeasureSql>>
+  /**
+   * Colunas dos filtros que não são dimensão. Ausente = a fonte não suporta o
+   * filtro, e pedi-lo é recusado com mensagem — em vez de gerar SQL que
+   * referencia coluna inexistente.
+   *
+   * `budget_entries` não tem conta; `invoices` não tem natureza.
+   *
+   * São EXPRESSÕES, não nomes de coluna, porque `direcao` precisa normalizar:
+   * o motor fala `inflow`/`outflow` e `invoices` guarda `saida`/`entrada`. A
+   * tradução fica na fonte, e o motor compara sempre do mesmo jeito.
+   */
+  filterColumns: Partial<Record<'categoria' | 'conta' | 'direcao', SQL>>
+
+  measures: Partial<Record<MeasureId, MeasureSql>>
+
+  /**
+   * Agrupamentos NÃO temporais. `mes`, `trimestre` e `ano` são construídos pelo
+   * motor a partir da coluna de data já resolvida pelo regime.
+   *
+   * Não é economia de linhas: declarados na fonte, eles ficariam presos a uma
+   * coluna fixa, e pedir "por mês em regime de caixa" filtraria por uma data e
+   * agruparia por outra — atribuindo meses errados sem erro nenhum.
+   */
   groupings: Partial<Record<GroupingId, GroupingSql>>
 
   /** SQL de cada JOIN opcional. */

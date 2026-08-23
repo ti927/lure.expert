@@ -13,7 +13,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { memberships } from '@/db/schema'
-import { eq, and, isNotNull } from 'drizzle-orm'
+import { eq, and, isNotNull, asc } from 'drizzle-orm'
 
 export interface AuthContext {
   userId:         string
@@ -32,10 +32,17 @@ export async function getAuthContext(): Promise<AuthContext> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  // `orderBy` explícito: `.limit(1)` sem ordem deixa o Postgres escolher, e um
+  // usuário com duas organizações receberia uma arbitrária — que poderia mudar
+  // entre requisições. Hoje todo usuário tem exatamente uma, então isto é
+  // defesa contra o dia em que convites existirem (Fase 4), não correção de bug
+  // ativo. As outras 21 cópias desta lógica em `src/server/` continuam sem a
+  // ordem; elas serão consolidadas aqui quando a organização ativa entrar.
   const [membership] = await db
     .select({ organizationId: memberships.organizationId })
     .from(memberships)
     .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
+    .orderBy(asc(memberships.createdAt), asc(memberships.organizationId))
     .limit(1)
   if (!membership) redirect('/onboarding')
 

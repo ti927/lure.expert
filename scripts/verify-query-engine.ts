@@ -203,9 +203,11 @@ async function main() {
     `filtro "sem centro de custo" devolve ${semCc.linhas[0]?.medidas.contagem} = esperado ${esperado}`)
 
   // ── 5. As recusas ───────────────────────────────────────────────────────
-  await deveRecusar('fonte ainda indisponível',
-    async () => runQuery(scope, { fonte: 'orcado', periodo, medidas: ['valor_liquido'] }),
-    'QueryValidationError')
+  await deveRecusar('fonte "balanco", ainda não registrada',
+    async () => runQuery(scope, {
+      fonte: 'balanco', medidas: ['valor_liquido'],
+      periodo: { tipo: 'snapshot', em: ate },
+    }), 'QueryValidationError')
   await deveRecusar('limite acima do teto',
     async () => runQuery(scope, { fonte: 'realizado', periodo, medidas: ['valor_liquido'], limite: 5000 }),
     'QueryValidationError')
@@ -248,7 +250,115 @@ async function main() {
   t(valido.organizationId === membros[0].org && valido.actor === 'session',
     'escopo com vínculo aceito é emitido')
 
-  // ── 7. explicarQuery não toca o banco ───────────────────────────────────
+  // ── 7. Fonte `orcado` contra fetchBudgetRows ────────────────────────────
+  const [versao] = await db.execute<{ id: string; org: string; n: number }>(sql`
+    SELECT bv.id::text AS id, bv.organization_id::text AS org, COUNT(be.id)::int AS n
+    FROM budget_versions bv JOIN budget_entries be ON be.version_id = bv.id
+    GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 1`)
+
+  if (!versao) {
+    console.log('AVISO | nenhuma versão de orçamento com ocorrências — fonte "orcado" não conciliada')
+  } else {
+    const scopeOrc = scopeFromJob(versao.org)
+    const [faixaOrc] = await db.execute<{ de: string; ate: string }>(sql`
+      SELECT MIN(competence_date)::text AS de, MAX(competence_date)::text AS ate
+      FROM budget_entries WHERE version_id = ${versao.id}::uuid`)
+
+    // Réplica de fetchBudgetRows, sem passar pelo motor.
+    const ref = await db.execute<{ cat: string; mes: string; valor: string }>(sql`
+      SELECT c.id::text AS cat,
+             TO_CHAR(DATE_TRUNC('month', e.competence_date::date), 'YYYY-MM') AS mes,
+             COALESCE(SUM(CASE WHEN e.direction = 'inflow' THEN e.amount::numeric ELSE -e.amount::numeric END), 0)::text AS valor
+      FROM budget_entries e
+      JOIN categories c ON e.category_id = c.id
+      JOIN categories p ON c.parent_id   = p.id
+      WHERE e.organization_id = ${versao.org}::uuid
+        AND e.version_id      = ${versao.id}::uuid
+        AND e.competence_date::date >= ${faixaOrc.de}::date
+        AND e.competence_date::date <= ${faixaOrc.ate}::date
+        AND c.type NOT IN ('ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido')
+        AND c.hide_in_dre = false
+      GROUP BY c.id, DATE_TRUNC('month', e.competence_date::date)`)
+
+    const motorOrc = await runQuery(scopeOrc, {
+      fonte: 'orcado', medidas: ['valor_liquido'], agruparPor: ['categoria', 'mes'],
+      periodo: { tipo: 'intervalo', de: faixaOrc.de, ate: faixaOrc.ate, regime: 'competencia' },
+      filtros: { versaoOrcamento: versao.id, excluirBalanco: true, visibilidade: 'dre' },
+      limite: 500,
+    })
+    const mapaOrc = new Map<string, number>()
+    for (const l of motorOrc.linhas) {
+      const cat = l.chaves.find(k => k.campo === 'categoria')!.id
+      const mes = l.chaves.find(k => k.campo === 'mes')!.id
+      if (cat !== null) mapaOrc.set(`${cat}|${mes}`, l.medidas.valor_liquido)
+    }
+    let orcIguais = 0, orcDif = 0
+    for (const r of ref) {
+      const v = mapaOrc.get(`${r.cat}|${r.mes}`)
+      if (v !== undefined && Math.abs(v - Number(r.valor)) < 0.005) orcIguais++
+      else { orcDif++; if (orcDif <= 2) console.log(`  divergente ${r.cat.slice(0,8)}|${r.mes}: ref=${r.valor} motor=${v}`) }
+    }
+    t(orcDif === 0 && orcIguais > 0,
+      `${orcIguais}/${ref.length} células idênticas entre fetchBudgetRows e a fonte "orcado"`)
+
+    await deveRecusar('orçado sem versão',
+      async () => runQuery(scopeOrc, {
+        fonte: 'orcado', medidas: ['valor_liquido'],
+        periodo: { tipo: 'intervalo', de: faixaOrc.de, ate: faixaOrc.ate, regime: 'competencia' },
+      }), 'QueryValidationError')
+    await deveRecusar('orçado filtrado por conta (não existe)',
+      async () => runQuery(scopeOrc, {
+        fonte: 'orcado', medidas: ['valor_liquido'],
+        periodo: { tipo: 'intervalo', de: faixaOrc.de, ate: faixaOrc.ate, regime: 'competencia' },
+        filtros: { versaoOrcamento: versao.id, contas: ['x'] },
+      }), 'QueryValidationError')
+  }
+
+  // ── 8. Fonte `nfe` — recusas e escopo (tabela vazia hoje) ───────────────
+  const periodoNfe = { tipo: 'intervalo' as const, de, ate, regime: 'competencia' as const }
+  const nfeOk = await runQuery(scope, {
+    fonte: 'nfe', medidas: ['valor_liquido', 'contagem'], agruparPor: ['contato'],
+    periodo: periodoNfe, limite: 10,
+  })
+  t(Array.isArray(nfeOk.linhas), `fonte "nfe" executa (${nfeOk.linhas.length} linhas — a tabela está vazia hoje)`)
+
+  await deveRecusar('NF-e agrupada por centro de custo',
+    async () => runQuery(scope, {
+      fonte: 'nfe', medidas: ['valor_liquido'], agruparPor: ['centro_de_custo'], periodo: periodoNfe,
+    }), 'QueryValidationError')
+  await deveRecusar('NF-e filtrada por unidade de negócio',
+    async () => runQuery(scope, {
+      fonte: 'nfe', medidas: ['valor_liquido'], periodo: periodoNfe,
+      filtros: { unidadesDeNegocio: ['11111111-1111-1111-1111-111111111111'] },
+    }), 'QueryValidationError')
+  await deveRecusar('NF-e agrupada por natureza (invoices não tem)',
+    async () => runQuery(scope, {
+      fonte: 'nfe', medidas: ['valor_liquido'], agruparPor: ['categoria'], periodo: periodoNfe,
+    }), 'QueryValidationError')
+
+  // ── 9. Regime muda a coluna de agrupamento, não só a de filtro ──────────
+  // Foi o defeito achado ao escrever a segunda fonte: com `mes` declarado na
+  // fonte, o agrupamento ficava preso à data de competência e "por mês em
+  // regime de caixa" atribuía meses errados sem erro nenhum.
+  const porMesComp = await runQuery(scope, {
+    fonte: 'realizado', medidas: ['valor_liquido'], agruparPor: ['mes'],
+    periodo: { tipo: 'intervalo', de, ate, regime: 'competencia' }, limite: 500,
+  })
+  const porMesCaixa = await runQuery(scope, {
+    fonte: 'realizado', medidas: ['valor_liquido'], agruparPor: ['mes'],
+    periodo: { tipo: 'intervalo', de, ate, regime: 'caixa' }, limite: 500,
+  })
+  const [{ divergem }] = await db.execute<{ divergem: number }>(sql`
+    SELECT COUNT(*)::int AS divergem FROM transaction_lines
+    WHERE organization_id = ${org}::uuid AND effective_date IS NOT NULL
+      AND DATE_TRUNC('month', effective_date::date) <> DATE_TRUNC('month', date::date)`)
+  const mesmoTotal = Math.abs(
+    porMesComp.linhas.reduce((a, l) => a + l.medidas.valor_liquido, 0) -
+    porMesCaixa.linhas.reduce((a, l) => a + l.medidas.valor_liquido, 0)) < 0.01
+  t(mesmoTotal,
+    `agrupar por mês em competência e em caixa dá o mesmo total (${divergem} linha(s) caem em mês diferente entre os regimes)`)
+
+  // ── 10. explicarQuery não toca o banco ──────────────────────────────────
   const exp = explicarQuery({
     fonte: 'realizado', medidas: ['saidas'], agruparPor: ['unidade_de_negocio'],
     periodo: { tipo: 'relativo', meses: 12, regime: 'caixa' }, limite: 5,

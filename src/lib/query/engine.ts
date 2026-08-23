@@ -14,12 +14,24 @@ import { db } from '@/db'
 import { DIM_NONE } from '@/lib/dre-types'
 import { GROUPINGS, type GroupingId } from './groupings'
 import { MEASURES, type MeasureId } from './measures'
-import { SOURCES, type JoinId } from './sources'
+import { SOURCES, type JoinId, type GroupingSql } from './sources'
 import { QueryValidationError } from './errors'
 import type { QueryScope } from './scope'
 import {
   querySpecSchema, type QueryInput, type QuerySpec, type QueryResult, type QueryRow,
 } from './spec'
+
+/**
+ * Agrupamentos de tempo, construídos pelo motor.
+ *
+ * O formato entra por `sql.raw` a partir deste mapa fechado — nunca do
+ * chamador. A unidade vai parametrizada.
+ */
+const GRUPO_TEMPORAL: Partial<Record<GroupingId, { unidade: string; formato: string }>> = {
+  mes:       { unidade: 'month',   formato: 'YYYY-MM' },
+  trimestre: { unidade: 'quarter', formato: 'YYYY-"T"Q' },
+  ano:       { unidade: 'year',    formato: 'YYYY' },
+}
 
 /** Dimensão do filtro → coluna da view. Union fechado; nada vem do chamador. */
 const COLUNA_DIMENSAO = {
@@ -108,11 +120,24 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
   const joins = new Set<JoinId>()
 
   const grupos = spec.agruparPor.map((g: GroupingId) => {
+    // Temporais são construídos aqui, sobre a coluna de data JÁ RESOLVIDA pelo
+    // regime. Deixar isso na fonte prenderia o agrupamento a uma coluna fixa e
+    // faria "por mês em regime de caixa" agrupar pela data de competência.
+    const temporal = GRUPO_TEMPORAL[g]
+    if (temporal) {
+      // Unidade e formato entram por `raw` a partir do mapa fechado acima, e
+      // não como parâmetro: parametrizados, cada ocorrência da expressão vira
+      // um placeholder diferente, e o Postgres deixa de reconhecer SELECT e
+      // GROUP BY como a mesma coisa.
+      const expr = sql`TO_CHAR(DATE_TRUNC(${sql.raw(`'${temporal.unidade}'`)}, ${colunaData}), ${sql.raw(`'${temporal.formato}'`)})`
+      return { id: g, d: { chave: expr, rotulo: expr } as GroupingSql }
+    }
+
     const d = src.groupings[g]
     if (!d) {
       throw new QueryValidationError('agruparPor',
         `A fonte "${spec.fonte}" não pode ser agrupada por "${g}".`,
-        Object.keys(src.groupings))
+        [...Object.keys(src.groupings), ...Object.keys(GRUPO_TEMPORAL)])
     }
     d.joins?.forEach(j => joins.add(j))
     return { id: g, d }
@@ -146,16 +171,26 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
     if (f) condicoes.push(f)
   }
 
+  const exigeColuna = (chave: 'categoria' | 'conta' | 'direcao', campo: string) => {
+    const col = src.filterColumns[chave]
+    if (!col) {
+      throw new QueryValidationError(`filtros.${campo}`,
+        `A fonte "${spec.fonte}" não tem "${chave}".`,
+        Object.keys(src.filterColumns))
+    }
+    return col
+  }
+
   if (spec.filtros.direcao) {
-    condicoes.push(sql`${sql.raw(`${src.alias}.direction`)} = ${spec.filtros.direcao}`)
+    condicoes.push(sql`${exigeColuna('direcao', 'direcao')} = ${spec.filtros.direcao}`)
   }
   if (spec.filtros.categorias?.length) {
-    condicoes.push(sql`${sql.raw(`${src.alias}.category_id`)} IN (${
+    condicoes.push(sql`${exigeColuna('categoria', 'categorias')} IN (${
       sql.join(spec.filtros.categorias.map(id => sql`${id}::uuid`), sql`, `)
     })`)
   }
   if (spec.filtros.contas?.length) {
-    condicoes.push(sql`${sql.raw(`${src.alias}.account_id`)} IN (${
+    condicoes.push(sql`${exigeColuna('conta', 'contas')} IN (${
       sql.join(spec.filtros.contas.map(a => sql`${a}`), sql`, `)
     })`)
   }
@@ -171,13 +206,21 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
     .map(j => src.joins[j])
     .filter((x): x is SQL => !!x)
 
+  // GROUP BY por POSIÇÃO, não repetindo a expressão. Repetir obriga o Postgres
+  // a reconhecer os dois textos como equivalentes — o que falha assim que a
+  // expressão tem qualquer parâmetro — e ainda avalia a expressão duas vezes.
   const selects: SQL[] = []
   const groupBy: SQL[] = []
+  let pos = 0
+  const posicionar = (expr: SQL, alias: string) => {
+    selects.push(sql`${expr} AS ${sql.raw(alias)}`)
+    pos += 1
+    groupBy.push(sql.raw(String(pos)))
+  }
   grupos.forEach((g, i) => {
-    selects.push(sql`${g.d.chave} AS ${sql.raw(`k${i}`)}`)
-    selects.push(sql`${g.d.rotulo} AS ${sql.raw(`l${i}`)}`)
-    groupBy.push(g.d.chave, g.d.rotulo)
-    if (g.d.ordem) { selects.push(sql`${g.d.ordem} AS ${sql.raw(`o${i}`)}`); groupBy.push(g.d.ordem) }
+    posicionar(g.d.chave,  `k${i}`)
+    posicionar(g.d.rotulo, `l${i}`)
+    if (g.d.ordem) posicionar(g.d.ordem, `o${i}`)
   })
   medidas.forEach((m, i) => selects.push(sql`${m.d.expr} AS ${sql.raw(`m${i}`)}`))
 
