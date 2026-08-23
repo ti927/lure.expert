@@ -138,6 +138,7 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `allocation-math.ts` | aritmética do rateio em centavos inteiros: `toCents`, `splitEqually`, `applyProportion` (maior resto), `reduceWeights` (MDC), `normalizeWeights`/`formatProportion` |
 | `ai-pricing.ts` | tabela de preço por modelo, `calcCostUsd`, conversão USD→BRL, `estimarCustoCategorizacao` |
 | `crypto.ts` | AES-256-GCM para segredos que precisam **voltar** ao texto claro (a chave da Anthropic do cliente). Nada a ver com `encryptApiKey` de `sefaz.ts`, que é só base64 |
+| `ai-key-test.ts` | `testarChaveAnthropic` — chamada de 1 token que valida a chave antes de gravá-la, com erro traduzido para algo acionável |
 | `ai-access.ts` | `resolverAcessoIa(organizationId, exec?)` — o funil que responde "pode chamar a IA agora, e com qual chave?". Recusa é descritiva, não exceção |
 | `ai-usage.ts` | `registrarUsoDeIa` — **único ponto de escrita de custo em `agent_events`** — e `tokensDaResposta` |
 | `query/scope.ts` | `QueryScope` (tipo marcado) + `scopeFromSession`/`scopeFromMcpGrant`/`scopeFromJob`. Nenhum construtor emite sem confirmar membership aceita |
@@ -252,7 +253,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 1.3 | `getTopExpenseCategories` e `getCashFlowChart` migradas para o motor + `derive.ts` (cascata do P&L) + agrupamento por `dia` | ✅ (aguardando confirmação na tela) |
 | 1.4 | Tabelas de dashboard (migration 0028) + `block-spec.ts` antecipados da Fase 5 | ✅ |
 | 2.0 | Chave de IA por organização (AES-256-GCM), teto, alerta e degradação — **backend** | ✅ |
-| 2.1 | Tela de cadastro da chave e do teto | 🔲 |
+| 2.1 | Tela de cadastro da chave e do teto | ✅ (aguardando confirmação na tela) |
 | 3 | Servidor MCP remoto com OAuth 2.1 | 🔲 |
 | 4 | Convites e papéis | 🔲 |
 | 5 | Dashboard configurável | 🔲 |

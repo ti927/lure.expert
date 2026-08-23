@@ -3,6 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmptyState } from '@/components/states/empty-state'
 import { Activity } from 'lucide-react'
 import { getConsumoIa } from '@/server/ai-consumption'
+import { getAiSettings } from '@/server/ai-settings'
+import { AiKeyManager } from '@/components/settings/ai-key-manager'
 import { ROTULOS_USO_IA } from '@/lib/ai-usage'
 import { monthLabel } from '@/lib/format'
 
@@ -15,7 +17,7 @@ const fmtBrl = (v: number, taxa: number) =>
 const fmtInt = (v: number) => v.toLocaleString('pt-BR')
 
 export default async function ConsumoPage() {
-  const c = await getConsumoIa()
+  const [c, ai] = await Promise.all([getConsumoIa(), getAiSettings()])
 
   const semDados = c.meses.length === 0 && c.totalUsd === 0
 
@@ -27,6 +29,8 @@ export default async function ConsumoPage() {
           Quanto o expert processou nesta organização, e o que isso custou.
         </p>
       </div>
+
+      <AiKeyManager inicial={ai} taxaUsdBrl={c.taxaUsdBrl} />
 
       {semDados ? (
         <EmptyState

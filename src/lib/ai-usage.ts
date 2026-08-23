@@ -18,6 +18,9 @@ export type AiUsageKind =
   | 'categorization'
   | 'document_parse_pdf'
   | 'document_parse_csv'
+  // O teste de chave gasta de verdade (1 token), e o que nao e medido nao
+  // entra em teto -- entao aparece no consumo como qualquer outra chamada.
+  | 'key_validation'
 
 /**
  * Rótulos para a tela de consumo.
@@ -29,6 +32,7 @@ export const ROTULOS_USO_IA: Record<string, string> = {
   categorization:     'Classificação de lançamentos',
   document_parse_pdf: 'Leitura de extrato PDF',
   document_parse_csv: 'Leitura de planilha e CSV',
+  key_validation:     'Teste de chave',
 }
 
 export interface RegistrarUsoParams {
