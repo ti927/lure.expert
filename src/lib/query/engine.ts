@@ -1,0 +1,295 @@
+// O motor. A ÚNICA função de `src/lib/query/**` que chama o banco.
+//
+// Duas invariantes valem para tudo que sai daqui:
+//
+// 1. O predicado de organização é emitido PELO MOTOR, a partir de
+//    `scope.organizationId` e de `src.orgColumn`. A fonte não escreve a
+//    cláusula, então fonte nova não tem onde esquecê-la.
+// 2. Nada que venha do chamador chega a `sql.raw`. Todo fragmento cru sai de um
+//    descritor indexado por enum Zod — é a mesma defesa que `sql-dimensions.ts`
+//    já documenta, estendida a medidas, agrupamentos e joins.
+
+import { sql, type SQL } from 'drizzle-orm'
+import { db } from '@/db'
+import { DIM_NONE } from '@/lib/dre-types'
+import { GROUPINGS, type GroupingId } from './groupings'
+import { MEASURES, type MeasureId } from './measures'
+import { SOURCES, type JoinId } from './sources'
+import { QueryValidationError } from './errors'
+import type { QueryScope } from './scope'
+import {
+  querySpecSchema, type QueryInput, type QuerySpec, type QueryResult, type QueryRow,
+} from './spec'
+
+/** Dimensão do filtro → coluna da view. Union fechado; nada vem do chamador. */
+const COLUNA_DIMENSAO = {
+  centrosDeCusto:    'cost_center_id',
+  unidadesDeNegocio: 'business_unit_id',
+  entidadesLegais:   'legal_entity_id',
+  contatos:          'contact_id',
+} as const
+type ChaveDimensao = keyof typeof COLUNA_DIMENSAO
+
+/**
+ * Resolve o período em datas concretas.
+ *
+ * `relativo` vira intervalo aqui, e não no SQL, para o resultado poder dizer
+ * qual janela foi de fato consultada — um gráfico de "últimos 12 meses" que não
+ * declara o período fica impossível de conferir.
+ */
+function resolverPeriodo(spec: QuerySpec): { de: string; ate: string } | { em: string } {
+  const p = spec.periodo
+  if (p.tipo === 'snapshot') return { em: p.em }
+  if (p.tipo === 'intervalo') {
+    if (p.de > p.ate) {
+      throw new QueryValidationError('periodo', `A data inicial (${p.de}) é depois da final (${p.ate}).`)
+    }
+    return { de: p.de, ate: p.ate }
+  }
+  // Relativo: fecha no último dia do mês corrente e volta N meses.
+  const hoje = new Date()
+  const fim = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + 1, 0))
+  const ini = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() - (p.meses - 1), 1))
+  return { de: ini.toISOString().slice(0, 10), ate: fim.toISOString().slice(0, 10) }
+}
+
+/**
+ * Filtro de uma dimensão, com o sentinela `__null__`.
+ *
+ * Mesma semântica de `dimensionFilters`: só o sentinela vira `IS NULL`;
+ * sentinela junto de ids vira disjunção — sem isso, marcar "Sem centro de
+ * custo" e "Comercial" devolveria só o Comercial.
+ */
+function filtroDimensao(alias: string, coluna: string, ids: string[] | undefined): SQL | null {
+  if (!ids?.length) return null
+  const col = sql.raw(`${alias}.${coluna}`)
+  const uuids = ids.filter(id => id !== DIM_NONE)
+  const querNulo = uuids.length !== ids.length
+
+  if (uuids.length === 0) return sql`${col} IS NULL`
+  const lista = sql`${col} IN (${sql.join(uuids.map(id => sql`${id}::uuid`), sql`, `)})`
+  return querNulo ? sql`(${lista} OR ${col} IS NULL)` : lista
+}
+
+export async function runQuery(scope: QueryScope, input: QueryInput): Promise<QueryResult> {
+  const parsed = querySpecSchema.safeParse(input)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    throw new QueryValidationError(issue.path.join('.') || 'spec', issue.message)
+  }
+  const spec = parsed.data
+
+  const src = SOURCES[spec.fonte]
+  if (!src) {
+    throw new QueryValidationError('fonte', `Fonte "${spec.fonte}" ainda não está disponível.`,
+      Object.keys(SOURCES))
+  }
+
+  // ── Período e regime ──────────────────────────────────────────────────────
+  const periodo = resolverPeriodo(spec)
+  if (src.periodKind === 'snapshot' && !('em' in periodo)) {
+    throw new QueryValidationError('periodo',
+      `A fonte "${spec.fonte}" é uma foto numa data, não um intervalo. Use periodo.tipo = "snapshot".`)
+  }
+  if (src.periodKind === 'range' && 'em' in periodo) {
+    throw new QueryValidationError('periodo',
+      `A fonte "${spec.fonte}" cobre um intervalo. Use periodo.tipo = "intervalo" ou "relativo".`)
+  }
+
+  const regime = spec.periodo.tipo === 'snapshot' ? 'competencia' : spec.periodo.regime
+  const colunaData = src.dateColumns[regime]
+  if (!colunaData) {
+    throw new QueryValidationError('periodo.regime',
+      `A fonte "${spec.fonte}" não suporta o regime "${regime}".`,
+      Object.keys(src.dateColumns))
+  }
+
+  // ── Agrupamentos e medidas ────────────────────────────────────────────────
+  const joins = new Set<JoinId>()
+
+  const grupos = spec.agruparPor.map((g: GroupingId) => {
+    const d = src.groupings[g]
+    if (!d) {
+      throw new QueryValidationError('agruparPor',
+        `A fonte "${spec.fonte}" não pode ser agrupada por "${g}".`,
+        Object.keys(src.groupings))
+    }
+    d.joins?.forEach(j => joins.add(j))
+    return { id: g, d }
+  })
+
+  const medidas = spec.medidas.map((m: MeasureId) => {
+    const d = src.measures[m]
+    if (!d) {
+      throw new QueryValidationError('medidas',
+        `A medida "${m}" não existe na fonte "${spec.fonte}".`,
+        Object.keys(src.measures))
+    }
+    d.joins?.forEach(j => joins.add(j))
+    return { id: m, d }
+  })
+
+  const base = src.baseFilters(spec)
+  base.joins.forEach(j => joins.add(j))
+
+  // ── Filtros de dimensão ───────────────────────────────────────────────────
+  const condicoes: SQL[] = []
+  for (const chave of Object.keys(COLUNA_DIMENSAO) as ChaveDimensao[]) {
+    const ids = spec.filtros[chave]
+    if (!ids?.length) continue
+    if (!src.supportedDimensions.includes(chave)) {
+      throw new QueryValidationError(`filtros.${chave}`,
+        `A fonte "${spec.fonte}" não tem a dimensão "${chave}".`,
+        src.supportedDimensions)
+    }
+    const f = filtroDimensao(src.alias, COLUNA_DIMENSAO[chave], ids)
+    if (f) condicoes.push(f)
+  }
+
+  if (spec.filtros.direcao) {
+    condicoes.push(sql`${sql.raw(`${src.alias}.direction`)} = ${spec.filtros.direcao}`)
+  }
+  if (spec.filtros.categorias?.length) {
+    condicoes.push(sql`${sql.raw(`${src.alias}.category_id`)} IN (${
+      sql.join(spec.filtros.categorias.map(id => sql`${id}::uuid`), sql`, `)
+    })`)
+  }
+  if (spec.filtros.contas?.length) {
+    condicoes.push(sql`${sql.raw(`${src.alias}.account_id`)} IN (${
+      sql.join(spec.filtros.contas.map(a => sql`${a}`), sql`, `)
+    })`)
+  }
+  if (spec.filtros.tiposDeCategoria?.length) {
+    joins.add('categoria')
+    condicoes.push(sql`cat.type IN (${
+      sql.join(spec.filtros.tiposDeCategoria.map(x => sql`${x}`), sql`, `)
+    })`)
+  }
+
+  // ── Montagem ──────────────────────────────────────────────────────────────
+  const joinSql = Array.from(joins)
+    .map(j => src.joins[j])
+    .filter((x): x is SQL => !!x)
+
+  const selects: SQL[] = []
+  const groupBy: SQL[] = []
+  grupos.forEach((g, i) => {
+    selects.push(sql`${g.d.chave} AS ${sql.raw(`k${i}`)}`)
+    selects.push(sql`${g.d.rotulo} AS ${sql.raw(`l${i}`)}`)
+    groupBy.push(g.d.chave, g.d.rotulo)
+    if (g.d.ordem) { selects.push(sql`${g.d.ordem} AS ${sql.raw(`o${i}`)}`); groupBy.push(g.d.ordem) }
+  })
+  medidas.forEach((m, i) => selects.push(sql`${m.d.expr} AS ${sql.raw(`m${i}`)}`))
+
+  const ordenacao = montarOrdenacao(spec, grupos, medidas)
+  const periodoSql = 'em' in periodo
+    ? sql`AND ${colunaData} <= ${periodo.em}::date`
+    : sql`AND ${colunaData} >= ${periodo.de}::date AND ${colunaData} <= ${periodo.ate}::date`
+
+  const where = condicoes.length > 0
+    ? sql` AND ${sql.join(condicoes, sql` AND `)}`
+    : sql``
+
+  // O `limite + 1` é o que permite dizer "truncado" sem uma segunda contagem.
+  const query = sql`
+    SELECT ${sql.join(selects, sql`, `)}
+    FROM ${src.from}
+    ${joinSql.length ? sql.join(joinSql, sql` `) : sql``}
+    WHERE ${sql.raw(src.orgColumn)} = ${scope.organizationId}::uuid
+      ${periodoSql}
+      ${base.where}
+      ${where}
+    ${groupBy.length ? sql`GROUP BY ${sql.join(groupBy, sql`, `)}` : sql``}
+    ${ordenacao}
+    LIMIT ${spec.limite + 1}
+  `
+
+  const linhasBrutas = await db.execute<Record<string, unknown>>(query)
+  const truncado = linhasBrutas.length > spec.limite
+  const usadas = truncado ? linhasBrutas.slice(0, spec.limite) : linhasBrutas
+
+  const linhas: QueryRow[] = usadas.map(r => ({
+    chaves: grupos.map((g, i) => {
+      const id = r[`k${i}`]
+      const rotulo = r[`l${i}`]
+      return {
+        campo:  g.id,
+        id:     id === null || id === undefined ? null : String(id),
+        rotulo: rotulo === null || rotulo === undefined
+          ? GROUPINGS[g.id].rotuloVazio
+          : String(rotulo),
+      }
+    }),
+    medidas: Object.fromEntries(medidas.map((m, i) => [m.id, Number(r[`m${i}`] ?? 0)])),
+  }))
+
+  return {
+    fonte:      spec.fonte,
+    agruparPor: spec.agruparPor,
+    medidas:    spec.medidas,
+    linhas,
+    truncado,
+    periodo,
+  }
+}
+
+/**
+ * ORDER BY.
+ *
+ * Sem ordenação explícita: agrupamento temporal ordena cronologicamente (um
+ * gráfico de meses fora de ordem é inútil), e qualquer outro ordena pela
+ * primeira medida, decrescente — que é o que "top N" quer dizer.
+ */
+function montarOrdenacao(
+  spec: QuerySpec,
+  grupos: Array<{ id: GroupingId }>,
+  medidas: Array<{ id: MeasureId }>,
+): SQL {
+  const alvos: SQL[] = []
+
+  for (const o of spec.ordenarPor) {
+    const iGrupo = grupos.findIndex(g => g.id === o.por)
+    const iMedida = medidas.findIndex(m => m.id === o.por)
+    if (iGrupo === -1 && iMedida === -1) {
+      throw new QueryValidationError('ordenarPor',
+        `"${o.por}" não está entre os agrupamentos nem as medidas desta consulta.`,
+        [...grupos.map(g => g.id), ...medidas.map(m => m.id)])
+    }
+    const col = iGrupo >= 0 ? `k${iGrupo}` : `m${iMedida}`
+    alvos.push(sql`${sql.raw(col)} ${sql.raw(o.direcao === 'asc' ? 'ASC' : 'DESC')} NULLS LAST`)
+  }
+
+  if (alvos.length === 0) {
+    const iTemporal = grupos.findIndex(g => GROUPINGS[g.id].temporal)
+    if (iTemporal >= 0) alvos.push(sql`${sql.raw(`k${iTemporal}`)} ASC NULLS LAST`)
+    else if (grupos.length > 0 && medidas.length > 0) alvos.push(sql`m0 DESC NULLS LAST`)
+  }
+
+  return alvos.length ? sql`ORDER BY ${sql.join(alvos, sql`, `)}` : sql``
+}
+
+/**
+ * Resolve a consulta sem executá-la — para o modelo conferir o que pediu antes
+ * de gastar uma ida ao banco, e para a tela mostrar o que um bloco vai fazer.
+ */
+export function explicarQuery(input: QueryInput) {
+  const parsed = querySpecSchema.safeParse(input)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    throw new QueryValidationError(issue.path.join('.') || 'spec', issue.message)
+  }
+  const spec = parsed.data
+  const src = SOURCES[spec.fonte]
+  if (!src) {
+    throw new QueryValidationError('fonte', `Fonte "${spec.fonte}" ainda não está disponível.`,
+      Object.keys(SOURCES))
+  }
+  return {
+    fonte:      spec.fonte,
+    periodo:    resolverPeriodo(spec),
+    regime:     spec.periodo.tipo === 'snapshot' ? null : spec.periodo.regime,
+    agruparPor: spec.agruparPor.map(g => ({ id: g, rotulo: GROUPINGS[g].rotulo })),
+    medidas:    spec.medidas.map(m => ({ id: m, rotulo: MEASURES[m].rotulo, formato: MEASURES[m].formato })),
+    limite:     spec.limite,
+  }
+}

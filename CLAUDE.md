@@ -138,6 +138,20 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `allocation-math.ts` | aritmética do rateio em centavos inteiros: `toCents`, `splitEqually`, `applyProportion` (maior resto), `reduceWeights` (MDC), `normalizeWeights`/`formatProportion` |
 | `ai-pricing.ts` | tabela de preço por modelo, `calcCostUsd`, conversão USD→BRL, `estimarCustoCategorizacao` |
 | `ai-usage.ts` | `registrarUsoDeIa` — **único ponto de escrita de custo em `agent_events`** — e `tokensDaResposta` |
+| `query/scope.ts` | `QueryScope` (tipo marcado) + `scopeFromSession`/`scopeFromMcpGrant`/`scopeFromJob`. Nenhum construtor emite sem confirmar membership aceita |
+| `query/spec.ts` | `querySpecSchema` — **um Zod, três consumidores**: motor, ferramenta MCP `consultar` e bloco de dashboard |
+| `query/engine.ts` | `runQuery` — a **única** função de `lib/query/**` que chama o banco — e `explicarQuery` |
+| `query/sources/` | um descritor por fonte. **A fonte não escreve a cláusula de organização**; o motor a emite a partir de `orgColumn` |
+
+**A regra que separa leitura analítica de operacional** (Fase 1):
+
+> **Analítica** (agrega, agrupa, soma) → passa pelo motor → lê `transaction_lines`, conta com
+> `COUNT(DISTINCT transaction_id)`.
+> **Operacional** (uma linha por lançamento) → lê `transactions` → filtra dimensão com
+> `dimensionExistsFilter`.
+
+Sem rateio a view degenera na linha de hoje, então nenhum número muda; com rateio o número
+conserta. `getTransactions` e a fila de revisão já estão do lado certo.
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -228,7 +242,10 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | Fase | Entrega | Status |
 |---|---|---|
 | 0 | Corte do chat + medição de IA + tela de consumo + fix do `forceRun` | ✅ (aguardando confirmação na tela) |
-| 1 | Motor de consulta session-free + organização ativa + tabelas de dashboard | 🔲 |
+| 1.0 | Motor de consulta: escopo, spec Zod, fonte `realizado`, `runQuery` | ✅ (aguardando confirmação na tela) |
+| 1.1 | Organização ativa (cookie + seletor) — `auth-context.ts` tem `.limit(1)` sem `orderBy` | 🔲 |
+| 1.2 | Fontes `orcado`, `nfe` e `balanco` + `derive.ts` (cascata da DRE) | 🔲 |
+| 1.3 | Migrar `dashboard.ts` e `fluxo.ts` para o motor + tabelas de dashboard antecipadas | 🔲 |
 | 2 | Chave de IA por organização, teto e alertas | 🔲 |
 | 3 | Servidor MCP remoto com OAuth 2.1 | 🔲 |
 | 4 | Convites e papéis | 🔲 |
