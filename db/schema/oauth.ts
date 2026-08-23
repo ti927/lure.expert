@@ -76,6 +76,10 @@ export const oauthAuthorizationCodes = pgTable('mcp_oauth_authorization_codes', 
  * `replacedBy` implementa a rotação de refresh que o spec exige para cliente
  * público: apresentar um refresh já rotacionado é sinal de roubo, e derruba a
  * cadeia inteira em vez de só recusar aquele pedido.
+ *
+ * A direção é VELHO → novo. Assim a detecção de reuso é uma leitura da linha que
+ * o cliente apresentou (`replacedBy` preenchido = já foi trocado), sem consulta
+ * extra em todo pedido de renovação.
  */
 export const oauthTokens = pgTable(
   'mcp_oauth_tokens',

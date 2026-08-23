@@ -13,7 +13,7 @@ import { signIn } from "./actions";
 export default function LoginPage({
   searchParams,
 }: {
-  searchParams: { error?: string };
+  searchParams: { error?: string; next?: string };
 }) {
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
@@ -26,6 +26,9 @@ export default function LoginPage({
         </CardHeader>
         <CardContent>
           <form action={signIn} className="flex flex-col gap-4">
+            {searchParams.next ? (
+              <input type="hidden" name="next" value={searchParams.next} />
+            ) : null}
             <div className="flex flex-col gap-2">
               <Label htmlFor="email">E-mail</Label>
               <Input

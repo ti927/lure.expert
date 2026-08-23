@@ -258,11 +258,26 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 2.0 | Chave de IA por organização (AES-256-GCM), teto, alerta e degradação — **backend** | ✅ |
 | 2.1 | Tela de cadastro da chave e do teto | ✅ (aguardando confirmação na tela) |
 | 3.0 | Miolo do OAuth: tabelas `mcp_oauth_*` (migration 0030), tokens com hash, PKCE, validação de cliente | ✅ migration aplicada e conferida |
-| 3.1 | Endpoints OAuth: descoberta, registro dinâmico, `/authorize` com consentimento, `/token` | 🔲 |
+| 3.1 | Endpoints OAuth: descoberta, registro dinâmico, `/authorize` com consentimento, `/token`, `/revoke` + tela de conexões | ✅ (aguardando confirmação na tela) |
 | 3.2 | Servidor MCP + ferramentas de leitura | 🔲 |
 | 3.3 | Ferramentas de escrita com preview→confirm | 🔲 |
 | 4 | Convites e papéis | 🔲 |
 | 5 | Dashboard configurável | 🔲 |
+
+**A regra de roteamento que a 3.1 estabeleceu** — vale para tudo que vier no MCP:
+
+> **`/oauth/*`** é HUMANO: autentica por cookie, passa pelo middleware, pode usar `redirect()`.
+> A tela de consentimento e a rota de decisão moram aí.
+> **`/api/oauth/*`** e **`/api/mcp`** são MÁQUINA: a credencial vai no corpo, não veem cookie,
+> e ficam **fora do matcher do middleware** — `updateSession` faria uma ida ao Supabase por
+> requisição sem nenhum cookie para renovar, e penduraria `Set-Cookie` numa resposta JSON.
+
+Consequência prática: a rota de decisão do consentimento é `POST /oauth/authorize/decidir`
+(route handler, não server action) porque o que ela faz de mais importante é um **303 para um
+endereço externo** combinado com o cliente OAuth — um handler emite isso nativamente, e uma
+server action dependeria de o roteador do cliente traduzir o redirecionamento. Como ela
+autentica por cookie, é a única das rotas de OAuth que precisa de defesa de CSRF: confere
+`Origin` (com `Referer` de mesma origem como segunda prova).
 
 **Pendência da Fase 0:** o `DROP` de `organization_facts` → `messages` → `conversations`
 espera Julio confirmar que não quer o histórico do chat. As três têm FK entre si, então saem
@@ -402,6 +417,8 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Motor + MCP (plano de 23/ago)** | |
+| 3.1 | Endpoints OAuth. Descoberta por `rewrites` no `next.config`, **não** por pasta `app/.well-known/`: nome de diretório com ponto é tratado como oculto por boa parte da cadeia de build, e o caminho é MUST do spec. As **variantes com sufixo** (`/.well-known/oauth-authorization-server/api/mcp`) existem porque o RFC 8414 deixa o cliente inserir o caminho do recurso — só a forma curta faria metade dos clientes falhar. `lerPedido` concentra a regra contraintuitiva do `/authorize`: erro em `client_id` ou `redirect_uri` **não pode voltar por redirecionamento** — sem o par provado, redirecionar é o ataque, e o app viraria encaminhador aberto emprestando o domínio; provado o par, o erro volta pela URL com o `state`. O mesmo `lerPedido` roda na tela e na decisão, senão o formulário concederia o que a página teria recusado. **O formulário propõe organizações, a membership dispõe** — é a inversão do webhook SEFAZ. Código reusado e refresh reusado são tratados como **roubo**, não engano: o primeiro revoga os tokens nascidos dele, o segundo derruba o consentimento inteiro. Login ganhou `?next=` com validação contra `//` e `/\`, que seriam endereço absoluto para o navegador. Tela `/configuracoes/conexoes` — sem ela, desconectar dependeria da boa vontade de quem se quer desconectar. Verificado: **56/56 contra um `next start` de verdade**, por HTTP, incluindo o efeito no banco |
 | **Fase 10 — Dimensões (concluída)** | |
 | 10.5 | Modelos de rateio. Um modelo guarda **proporção**, nunca valor — o mesmo serve ao aluguel de R$ 12.000 e à luz de R$ 340. Os pesos **não somam 100** de propósito: `60:40`, `6:4` e `7200:4800` são a mesma divisão, e é isso que deixa **"Salvar como modelo" partir de um rateio já feito em reais** sem arredondar; quem normaliza é só a exibição. Ao salvar do diálogo individual os centavos passam por `reduceWeights` (MDC) — `[720000, 480000] → [3, 2]`, a única simplificação que preserva a proporção exata e a única que deixa o editor legível. **Defeito achado escrevendo o teste:** `weight numeric(12,4)` comporta 8 dígitos inteiros, e um lançamento de R$ 1 milhão vira peso 100.000.000 — estourava; virou `(18,6)`. **O carimbo de origem conta a menos de propósito:** `allocation_template_id` só é gravado quando o rateio veio do modelo E não foi editado depois, porque a tela existe para decidir se dá para apagar o modelo e um número inflado mentiria justamente aí; contagem é `COUNT(DISTINCT transaction_id)`. `ON DELETE SET NULL` — apagar modelo nunca desfaz rateio nem mexe em DRE. `WeightRowsEditor` **extraído** do diálogo de lote e reusado pelo editor de modelos. Nova rota `/configuracoes/modelos-de-rateio`. Verificado: migration 19/19 com ROLLBACK, aritmética 19/19 incluindo **2.500 aplicações sobre 500 valores reais fechando o centavo exato** e o ciclo rateio→modelo→rateio devolvendo as mesmas partes nos 500 |
 | 10.3 | As leituras passam a respeitar o rateio. Eram **nove**, não sete, e de duas naturezas. **Analíticas** (DRE, drill-down da DRE, fluxo mensal, drill-down do balanço, drill-down do dashboard, realizado do Orçado × Realizado, `collectActuals`) trocam `transactions` por `transaction_lines`. **Operacionais** (`/transacoes`, fila de revisão) **não** podem ler a view — listam um lançamento por linha e a view as multiplicaria; nelas o filtro vira `dimensionExistsFilter`, um EXISTS sobre a view. Isso conserta dois defeitos que a coluna direta criaria: filtrar "Comercial" **esconderia** o lançamento rateado para Comercial (coluna do pai é nula com rateio), e "Sem centro de custo" pegaria **todo** rateado, inclusive os 100% classificados. A cobertura de dimensão do orçamento também passou pela view, senão passaria a acusar como "sem CC" justamente quem rateou. Contagem virou `COUNT(DISTINCT transaction_id)` — o campo promete lançamentos. UI: linha rateada não oferece edição direta de dimensão (o banco recusaria) e sai da seleção em lote; no drill-down a chave do React e a seleção passam a ser da parte. Verificado: **297 células da DRE idênticas** entre a query velha e a nova, e com rateio 600/400 o total da categoria não muda. Custo medido: DRE 0%, filtro +8% |

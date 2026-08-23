@@ -110,8 +110,11 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
   expires_at        timestamptz NOT NULL,
   last_used_at      timestamptz,
   revoked_at        timestamptz,
-  -- Rotação de refresh: o token novo aponta para o que substituiu. Reuso de um
-  -- refresh já rotacionado é sinal de roubo, e a cadeia inteira cai.
+  -- Rotação de refresh: o token VELHO aponta para o que o substituiu. Nesta
+  -- direção, detectar reuso é ler a própria linha apresentada — `replaced_by`
+  -- preenchido já é a prova de que aquele refresh foi trocado. Na direção
+  -- inversa seria preciso uma segunda consulta em todo pedido de renovação.
+  -- Reuso de um refresh já rotacionado é sinal de roubo, e a cadeia inteira cai.
   replaced_by       uuid        REFERENCES mcp_oauth_tokens(id) ON DELETE SET NULL,
   created_at        timestamptz NOT NULL DEFAULT now(),
 

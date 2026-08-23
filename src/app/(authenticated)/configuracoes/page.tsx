@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { OrgForm } from '@/components/settings/org-form'
 import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
 import { getAutoCategorize } from '@/server/settings'
-import { Tags, Building2, Briefcase, Landmark, Users, ChevronRight, Zap, FileText, Split, Activity } from 'lucide-react'
+import { Tags, Building2, Briefcase, Landmark, Users, ChevronRight, Zap, FileText, Split, Activity, Plug } from 'lucide-react'
 
 const NAV_SECTIONS = [
   {
@@ -126,6 +126,21 @@ export default async function ConfiguracoesPage() {
                 <p className="text-sm font-medium text-foreground">Consumo de IA</p>
                 <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
                   Quanto o expert processou nesta organização, por mês e por origem, e o que custou.
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+            </div>
+          </Link>
+
+          <Link href="/configuracoes/conexoes">
+            <div className="flex items-center gap-4 p-4 rounded-lg border bg-card hover:bg-muted/40 transition-colors cursor-pointer">
+              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
+                <Plug className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground">Conexões</p>
+                <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                  Assistentes externos autorizados a acessar seus dados, e o botão para desconectá-los.
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />

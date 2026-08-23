@@ -171,10 +171,15 @@ async function main() {
         VALUES (${grant.id}::uuid, 'refresh', 'hash_velho', now() + interval '30 days')
         RETURNING id::text AS id`)
       const [tokNovo] = await tx.execute<{ id: string }>(sql`
-        INSERT INTO mcp_oauth_tokens (grant_id, kind, token_hash, expires_at, replaced_by)
-        VALUES (${grant.id}::uuid, 'refresh', 'hash_novo', now() + interval '30 days', ${tokVelho.id}::uuid)
+        INSERT INTO mcp_oauth_tokens (grant_id, kind, token_hash, expires_at)
+        VALUES (${grant.id}::uuid, 'refresh', 'hash_novo', now() + interval '30 days')
         RETURNING id::text AS id`)
-      t(!!tokNovo.id, 'rotação de refresh: o novo aponta para o que substituiu')
+      // Direção VELHO → novo: é ela que faz detectar reuso ser uma leitura da
+      // linha apresentada, sem consulta extra a cada renovação.
+      await tx.execute(sql`
+        UPDATE mcp_oauth_tokens SET revoked_at = now(), replaced_by = ${tokNovo.id}::uuid
+        WHERE id = ${tokVelho.id}::uuid`)
+      t(true, 'rotação de refresh: o velho aponta para o que o substituiu')
 
       await recusa('tipo de token inventado', () =>
         tx.execute(sql`INSERT INTO mcp_oauth_tokens (grant_id, kind, token_hash, expires_at)
@@ -183,13 +188,13 @@ async function main() {
         tx.execute(sql`INSERT INTO mcp_oauth_tokens (grant_id, kind, token_hash, expires_at)
                        VALUES (${grant.id}::uuid, 'access', 'hash_velho', now() + interval '1 hour')`))
 
-      // ── SET NULL: apagar o elo antigo não pode derrubar o novo ────────────
-      await tx.execute(sql`DELETE FROM mcp_oauth_tokens WHERE id = ${tokVelho.id}::uuid`)
+      // ── SET NULL: apagar um elo da cadeia não pode derrubar o outro ───────
+      await tx.execute(sql`DELETE FROM mcp_oauth_tokens WHERE id = ${tokNovo.id}::uuid`)
       const [sobrou] = await tx.execute<{ n: number; ref: string | null }>(sql`
         SELECT COUNT(*)::int AS n, MAX(replaced_by::text) AS ref
-        FROM mcp_oauth_tokens WHERE id = ${tokNovo.id}::uuid`)
+        FROM mcp_oauth_tokens WHERE id = ${tokVelho.id}::uuid`)
       t(Number(sobrou.n) === 1 && sobrou.ref === null,
-        'apagar o token substituído deixa o novo vivo com replaced_by nulo')
+        'apagar o token que substituiu deixa o velho na tabela com replaced_by nulo')
 
       // ── CASCADE: revogar o cliente apaga tudo que dependia dele ───────────
       await tx.execute(sql`DELETE FROM mcp_oauth_clients WHERE client_id = ${cli}`)
