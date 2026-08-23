@@ -76,9 +76,12 @@ export const processDocument = inngest.createFunction(
         if (!response.ok) throw new Error(`Download falhou: ${response.status}`)
 
         const buffer = Buffer.from(await response.arrayBuffer())
+        // O contexto é o que permite atribuir o custo da chamada à organização
+        // certa — antes da Fase 0 os parsers não recebiam nada disso.
+        const ctx = { organizationId, documentId }
         const parsed = isExcelCsv
-          ? await parseExcelOrCsv(buffer, mimeType)
-          : await parsePdf(buffer, pdfPassword ?? undefined)
+          ? await parseExcelOrCsv(buffer, ctx, mimeType)
+          : await parsePdf(buffer, ctx, pdfPassword ?? undefined)
 
         if (parsed.rows.length > 0) {
           const batchSize = 100

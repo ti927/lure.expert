@@ -40,14 +40,15 @@ o que está documentado, PARAR e me consultar.
 1. **Multi-tenancy via RLS sempre.** Toda query DEVE respeitar `organization_id`.
 2. **LLM é última opção.** Sempre tente código → regras → recorrência →
    embeddings antes de chamar IA.
-3. **Use Haiku pra bulk, Sonnet pro miolo, Opus quase nunca.**
+3. **Haiku para tudo.** O chat Sonnet morreu na Fase 0; sobraram tres
+   consumidores, todos Haiku: categorizador e os dois parsers.
 4. **Ative prompt caching em system prompts longos.**
 5. **Operações pesadas vão pra Inngest, nunca síncronas.**
 6. **Tudo em português** (interface, dados, comentários de código).
 7. **Antes de gerar texto pelo expert, leia `docs/AI_VOICE.md`.** Tom é
    "especialista calmo, direto, sem firulas".
 8. **Antes de criar componente novo, verifique se já existe** em `/components/ui`,
-   `/components/financial`, `/components/states`, `/components/expert`,
+   `/components/financial`, `/components/states`,
    `/components/transacoes-shared` e `/components/budget`. Quando duas telas
    precisarem do mesmo componente, **mova** o existente para `/components/` e
    atualize os imports **no mesmo commit** — nunca duplique "por enquanto".
@@ -63,19 +64,25 @@ o que está documentado, PARAR e me consultar.
 13. **Cartão de crédito corporativo é passivo intermediário:** compras
     impactam DRE na data da compra; pagamento da fatura é `transfer`,
     não despesa nova.
-14. **Custo de IA é interno (Lure paga).** NÃO expor "tokens" ao cliente.
-    Métricas de uso exibidas são em unidades de valor (operações, atividades,
-    valor entregue). Medição interna em `agent_events`.
-15. **Memória do expert é híbrida:** conversacional (`conversations`+`messages`)
-    + memória curada (`organization_facts`) que cresce só com confirmação
-    humana.
+14. **REVOGADO na Fase 0 (23/ago/2026).** Dizia: *"Custo de IA é interno (Lure
+    paga). NÃO expor 'tokens' ao cliente."* Passou a valer o contrário — chave
+    de IA **própria por organização, obrigatória**, e a visibilidade do consumo
+    **depende de quem paga**: organização com chave própria vê tokens e R$;
+    organização na chave da plataforma (exceção explícita, `aiKeySource`) vê
+    unidades de valor. **Motivo:** havia clientes usando o app sem supervisão e
+    consumindo os créditos da Lure, sem teto, alerta nem atribuição. Toda
+    medição vive em `agent_events`, escrita só por `registrarUsoDeIa`.
+15. **REVOGADO na Fase 0.** Dizia que a memória do expert era híbrida
+    (`conversations`+`messages` + `organization_facts` curada). O chat morreu e
+    as três tabelas ficaram sem escritor. O papel de memória passa ao Project do
+    claude.ai, com `docs/AI_VOICE.md` como instrução e o MCP como ferramentas.
 
 ## Stack
 - Next.js 14 (App Router) + TypeScript + Tailwind + shadcn/ui
 - Supabase (Postgres + Auth + Storage + pgvector)
 - Drizzle ORM
 - Inngest pra jobs em background
-- Anthropic SDK (Claude Haiku 4.5 + Sonnet 4.6)
+- Anthropic SDK (Claude Haiku 4.5 apenas — o Sonnet saiu com o chat na Fase 0)
 - Vercel deploy
 
 ## Identidade visual (ver `docs/DESIGN_TOKENS.md`)
@@ -102,7 +109,6 @@ o que está documentado, PARAR e me consultar.
 - `/components/financial` — CurrencyDisplay, PercentageDelta, KPICard, DataTable, `Num` (célula das matrizes de 12 meses)
 - `/components/states` — EmptyState, LoadingState, ErrorState, PartialDataBanner
 - `/components/layout` — AppShell, Sidebar (criados na Fase 0.5)
-- `/components/expert` — ExpertTrigger (criado); futuros: ReportCanvas, InlineChart, DiffPreview
 - `/components/transacoes-shared` — o que /transacoes, /dre, /fluxo e /balanco compartilham:
   `DrillDownDialog`, `ColHeader`, filtros (`MultiSelectFilter`, `DescFilter`, `AmountFilter`,
   `DirectionFilter`), `DimFilter`, `CellCombobox`, `CategoryCellCombobox`, `BatchClassifyDialog`,
@@ -130,6 +136,8 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `budget-import.ts` | `parseBudgetCsv`, `buildRecurrenceCandidates`, `timesPerMonth` |
 | `budget-read.ts` | `fetchBudgetRows` — a leitura do orçado que `/dre` e `/orcamento` compartilham |
 | `allocation-math.ts` | aritmética do rateio em centavos inteiros: `toCents`, `splitEqually`, `applyProportion` (maior resto), `reduceWeights` (MDC), `normalizeWeights`/`formatProportion` |
+| `ai-pricing.ts` | tabela de preço por modelo, `calcCostUsd`, conversão USD→BRL, `estimarCustoCategorizacao` |
+| `ai-usage.ts` | `registrarUsoDeIa` — **único ponto de escrita de custo em `agent_events`** — e `tokensDaResposta` |
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -147,13 +155,13 @@ Nunca encerrar uma sessão de trabalho sem confirmar que o GitHub está atualiza
 - NÃO mudar stack sem discutir
 - NÃO usar localStorage pra dados sensíveis
 - NÃO fazer query sem RLS
-- NÃO chamar LLM em código síncrono (sempre via Inngest, exceto chat
-  interativo)
+- NÃO chamar LLM em código síncrono (sempre via Inngest)
 - NÃO commitar `.env`
 - NÃO usar emoji em texto gerado pelo expert (ver AI_VOICE.md)
 - NÃO referir-se aos agentes como "IA", "assistente" ou "Lure" — sempre
   "expert"
-- NÃO expor "tokens" ao cliente
+- NÃO chamar a Anthropic sem passar por `registrarUsoDeIa` — o que não é
+  medido não entra em teto
 - NÃO executar mutação via expert sem preview+confirm humano
 - NÃO implementar Tipo C (mutações autônomas — pagar, enviar mensagem
   pra terceiro) — fora do escopo
@@ -214,7 +222,27 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 
 ## Próximo passo
 
-**Nada em andamento — a Fase 10 fechou.** As frentes abertas, sem ordem decidida:
+**Em andamento: o plano de motor de consulta + MCP + dashboard configurável**, aprovado em
+23/ago/2026. Plano completo em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
+
+| Fase | Entrega | Status |
+|---|---|---|
+| 0 | Corte do chat + medição de IA + tela de consumo + fix do `forceRun` | ✅ (aguardando confirmação na tela) |
+| 1 | Motor de consulta session-free + organização ativa + tabelas de dashboard | 🔲 |
+| 2 | Chave de IA por organização, teto e alertas | 🔲 |
+| 3 | Servidor MCP remoto com OAuth 2.1 | 🔲 |
+| 4 | Convites e papéis | 🔲 |
+| 5 | Dashboard configurável | 🔲 |
+
+**Pendência da Fase 0:** o `DROP` de `organization_facts` → `messages` → `conversations`
+espera Julio confirmar que não quer o histórico do chat. As três têm FK entre si, então saem
+juntas ou não saem. Ao dropar, remover as três de
+`db/migrations/rls/test_rls_isolation.sql` no mesmo commit — o script lista tabelas
+nominalmente e já quebrou assim na migration 0015.
+
+---
+
+### Frentes anteriores, ainda abertas
 
 | Frente | O que falta | Tamanho |
 |---|---|---|
@@ -505,7 +533,9 @@ O hostname `db.qwouuvgndiggoglfrmvr.supabase.co` falha com `ENOTFOUND` no ambien
 - Plano gratuito: não — só trial de 14 dias
 - Open Finance via: **Pluggy** (travado em 2026-05-18 — cobertura BR, docs e suporte em PT)
 - SEFAZ via: [provedor — definir antes da Fase 7 amplificadora]
-- Custo de IA: interno (Lure paga, embutido no pricing). Sem BYO API key.
+- ~~Custo de IA: interno (Lure paga, embutido no pricing). Sem BYO API key.~~
+  **REVOGADO na Fase 0 (23/ago/2026):** chave por organização, obrigatória.
+  Ver princípio 14.
 - Provedor de IA: Anthropic apenas. Multi-LLM diferido.
 - Tipo C de mutações (autônomas): fora do escopo no MVP e MVP+1.
 - Pricing final: decisão na Fase 10. Recomendação atual: tier por porte

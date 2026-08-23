@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
-import { classifyTransaction, deleteTransactions, triggerCategorization } from '@/server/transactions'
+import { classifyTransaction, deleteTransactions, triggerCategorization, previewCategorization } from '@/server/transactions'
 import { ALLOWED_PAGE_SIZES } from '@/lib/transactions-page-size'
 import { ColHeader } from '@/components/transacoes-shared/col-header'
 import {
@@ -150,6 +150,8 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
   const [deleteTargetIds, setDeleteTargetIds] = useState<string[]>([])
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCategorizing, setIsCategorizing] = useState(false)
+  const [previaCategorizacao, setPreviaCategorizacao] =
+    useState<{ count: number; custoEstimadoUsd: number } | null>(null)
   const [fromLocal, setFromLocal] = useState(searchParams.from ?? '')
   const [toLocal, setToLocal] = useState(searchParams.to ?? '')
 
@@ -255,10 +257,24 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
   const outflow = Number(data.totals.outflow)
   const net     = inflow - outflow
 
+  /**
+   * O clique agora ABRE A PRÉVIA em vez de disparar. Este botão manda o job com
+   * `forceRun`, que ignora o toggle de categorização automática — era o único
+   * caminho capaz de gerar milhares de chamadas de IA sem aviso nenhum.
+   */
   async function handleTriggerCategorization() {
+    setIsCategorizing(true)
+    const p = await previewCategorization()
+    setIsCategorizing(false)
+    if (p.count === 0) { toast.info('Não há lançamentos sem categoria.'); return }
+    setPreviaCategorizacao(p)
+  }
+
+  async function confirmarCategorizacao() {
     setIsCategorizing(true)
     const result = await triggerCategorization()
     setIsCategorizing(false)
+    setPreviaCategorizacao(null)
     if ('error' in result) { toast.error(result.error); return }
     if (!result.triggered) { toast.info('Não há lançamentos sem categoria.'); return }
     toast.success(`Categorizando ${result.count} lançamento${result.count !== 1 ? 's' : ''}...`)
@@ -650,6 +666,38 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
       )}
 
       {/* ── Dialogs ────────────────────────────────────────────────────────── */}
+      <AlertDialog open={previaCategorizacao !== null} onOpenChange={open => { if (!open) setPreviaCategorizacao(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Classificar {previaCategorizacao?.count.toLocaleString('pt-BR')} lançamento
+              {previaCategorizacao?.count !== 1 ? 's' : ''}?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Cada lançamento sem natureza que não casar por regra ou recorrência vai passar
+                  pelo expert. O custo estimado desta rodada é de{' '}
+                  <strong className="text-foreground tabular-nums">
+                    US$ {previaCategorizacao?.custoEstimadoUsd.toFixed(2)}
+                  </strong>.
+                </p>
+                <p className="text-[11px]">
+                  É estimativa, não promessa: o consumo real depende de quantos lançamentos as
+                  camadas determinísticas resolvem sozinhas antes de chegar ao expert.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCategorizing}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmarCategorizacao} disabled={isCategorizing}>
+              {isCategorizing ? 'Iniciando...' : 'Classificar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={deleteTargetIds.length > 0} onOpenChange={open => { if (!open) setDeleteTargetIds([]) }}>
         <AlertDialogContent>
           <AlertDialogHeader>

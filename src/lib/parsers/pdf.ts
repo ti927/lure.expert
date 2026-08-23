@@ -1,6 +1,10 @@
 import type { DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages/messages'
 import { anthropic } from '@/lib/anthropic'
+import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
+import type { ParseContext } from './context'
 import type { StagingRow } from './excel-csv'
+
+const MODELO = 'claude-haiku-4-5-20251001'
 
 export type PdfParseResult = {
   rows: StagingRow[]
@@ -103,7 +107,7 @@ function toStagingRows(llmRows: LlmRow[]): StagingRow[] {
 // Envia o PDF como documento nativo para Claude.
 // Claude renderiza o PDF com seu próprio motor — sem problemas de codificação de fonte.
 // Funciona tanto para PDFs com camada de texto quanto para PDFs de imagem (scaneados).
-async function extractViaDocument(buffer: Buffer): Promise<PdfParseResult> {
+async function extractViaDocument(buffer: Buffer, ctx: ParseContext): Promise<PdfParseResult> {
   const base64 = buffer.toString('base64')
 
   const docBlock: DocumentBlockParam = {
@@ -120,8 +124,9 @@ async function extractViaDocument(buffer: Buffer): Promise<PdfParseResult> {
     text: 'Extraia as transações deste extrato bancário.',
   }
 
+  const inicio = Date.now()
   const message = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: MODELO,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
     messages: [
@@ -135,6 +140,19 @@ async function extractViaDocument(buffer: Buffer): Promise<PdfParseResult> {
   const responseText = message.content.find(b => b.type === 'text')?.text ?? ''
   const { rows: llmRows, warnings: parseWarnings } = parseLlmResponse(responseText)
 
+  // Esta é a chamada mais cara do app por unidade — manda o PDF inteiro em
+  // base64 — e até a Fase 0 não registrava custo nenhum.
+  await registrarUsoDeIa({
+    organizationId: ctx.organizationId,
+    kind:  'document_parse_pdf',
+    model: MODELO,
+    usage: tokensDaResposta(message.usage),
+    entityType: 'document',
+    entityId:   ctx.documentId ?? null,
+    payload:    { bytesPdf: buffer.byteLength, linhasExtraidas: llmRows.length },
+    durationMs: Date.now() - inicio,
+  })
+
   return {
     rows: toStagingRows(llmRows),
     warnings: parseWarnings,
@@ -143,7 +161,11 @@ async function extractViaDocument(buffer: Buffer): Promise<PdfParseResult> {
 }
 
 // Ponto de entrada principal
-export async function parsePdf(buffer: Buffer, password?: string): Promise<PdfParseResult> {
+export async function parsePdf(
+  buffer: Buffer,
+  ctx: ParseContext,
+  password?: string,
+): Promise<PdfParseResult> {
   // Detecta proteção por senha antes de enviar à API
   try {
     await checkPasswordProtection(buffer, password)
@@ -161,5 +183,5 @@ export async function parsePdf(buffer: Buffer, password?: string): Promise<PdfPa
   // Sempre usa o processamento nativo de PDF do Claude para garantir precisão.
   // Extração de texto via pdf-parse é não-confiável em PDFs bancários brasileiros
   // com fontes customizadas (ex: Itaú, XP) onde símbolos monetários são corrompidos.
-  return extractViaDocument(buffer)
+  return extractViaDocument(buffer, ctx)
 }

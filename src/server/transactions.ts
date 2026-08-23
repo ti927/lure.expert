@@ -10,6 +10,7 @@ import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte
 import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
 import { dimensionExistsFilter } from '@/lib/sql-dimensions'
+import { estimarCustoCategorizacao } from '@/lib/ai-pricing'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -431,10 +432,8 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
   return { success: true, updated: txList.length }
 }
 
-export async function triggerCategorization(): Promise<{ triggered: boolean; count: number } | { error: string }> {
-  const { organizationId } = await getAuthContext()
-
-  const uncategorized = await db
+async function idsNaoCategorizados(organizationId: string) {
+  return db
     .select({ id: transactions.id })
     .from(transactions)
     .where(and(
@@ -442,6 +441,30 @@ export async function triggerCategorization(): Promise<{ triggered: boolean; cou
       ne(transactions.status, 'pending'),
       isNull(transactions.categoryId),
     ))
+}
+
+/**
+ * Quantos lançamentos o botão "Categorizar agora" vai classificar, e quanto
+ * isso deve custar — sem disparar nada.
+ *
+ * Existe porque `triggerCategorization` dispara com `forceRun = true`, que
+ * **ignora o toggle `autoCategorize`**: era o único caminho do app capaz de
+ * gerar milhares de chamadas de IA com um clique e sem aviso. Numa organização
+ * com 7.762 lançamentos sem natureza, é isso que o clique custa.
+ */
+export async function previewCategorization(): Promise<{ count: number; custoEstimadoUsd: number }> {
+  const { organizationId } = await getAuthContext()
+  const pendentes = await idsNaoCategorizados(organizationId)
+  return {
+    count: pendentes.length,
+    custoEstimadoUsd: estimarCustoCategorizacao(pendentes.length),
+  }
+}
+
+export async function triggerCategorization(): Promise<{ triggered: boolean; count: number } | { error: string }> {
+  const { organizationId } = await getAuthContext()
+
+  const uncategorized = await idsNaoCategorizados(organizationId)
 
   if (uncategorized.length === 0) return { triggered: false, count: 0 }
 

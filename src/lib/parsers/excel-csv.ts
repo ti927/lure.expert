@@ -1,7 +1,11 @@
 import { parse } from 'csv-parse/sync'
 import * as XLSX from 'xlsx'
 import { anthropic } from '@/lib/anthropic'
+import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
 import { parseAmount } from '@/lib/format'
+import type { ParseContext } from './context'
+
+const MODELO = 'claude-haiku-4-5-20251001'
 
 export type StagingRow = {
   rowIndex: number
@@ -115,10 +119,14 @@ function detectAuthoritativeColumns(header: string[]): {
   return { categoriaFilhoIdx, categoriaPaiIdx, tipoNaturezaIdx }
 }
 
-async function detectColumnMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping> {
+async function detectColumnMapping(
+  header: string[],
+  sampleRows: string[][],
+  ctx: ParseContext,
+): Promise<ColumnMapping> {
   const authoritative = detectAuthoritativeColumns(header)
   // Tenta LLM primeiro pra advisory hints + colunas semânticas
-  const llmMapping = await tryLlmMapping(header, sampleRows)
+  const llmMapping = await tryLlmMapping(header, sampleRows, ctx)
   if (llmMapping && validateMapping(llmMapping, header.length)) {
     return { ...llmMapping, ...authoritative }
   }
@@ -126,7 +134,11 @@ async function detectColumnMapping(header: string[], sampleRows: string[][]): Pr
   return { ...heuristicMapping(header, sampleRows), ...authoritative }
 }
 
-async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<ColumnMapping | null> {
+async function tryLlmMapping(
+  header: string[],
+  sampleRows: string[][],
+  ctx: ParseContext,
+): Promise<ColumnMapping | null> {
   const userMsg = [
     'Cabeçalho (com índices):',
     header.map((h, i) => `  ${i}: ${h}`).join('\n'),
@@ -135,13 +147,28 @@ async function tryLlmMapping(header: string[], sampleRows: string[][]): Promise<
     ...sampleRows.map(row => row.join(' | ')),
   ].join('\n')
 
+  const inicio = Date.now()
   try {
     const msg = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODELO,
       max_tokens: 300,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMsg }],
     })
+
+    // Chamada barata (max_tokens 300) e uma só por upload, mas até a Fase 0 não
+    // aparecia em lugar nenhum — e o que não é medido não entra em teto.
+    await registrarUsoDeIa({
+      organizationId: ctx.organizationId,
+      kind:  'document_parse_csv',
+      model: MODELO,
+      usage: tokensDaResposta(msg.usage),
+      entityType: 'document',
+      entityId:   ctx.documentId ?? null,
+      payload:    { colunas: header.length, linhasAmostradas: sampleRows.length },
+      durationMs: Date.now() - inicio,
+    })
+
     const text = msg.content.find(b => b.type === 'text')?.text ?? ''
     const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
     const parsed = JSON.parse(cleaned) as Partial<ColumnMapping>
@@ -299,6 +326,7 @@ function deriveDirection(
 
 export async function parseExcelOrCsv(
   buffer: Buffer,
+  ctx: ParseContext,
   mimeType?: string,
 ): Promise<{ rows: StagingRow[]; warnings: string[]; detectedHints: string[] }> {
   const warnings: string[] = []
@@ -321,7 +349,7 @@ export async function parseExcelOrCsv(
   const dataRows = tabular.slice(1).map(row => row.map(c => String(c ?? '')))
 
   const sampleSize = Math.min(20, dataRows.length)
-  const mapping = await detectColumnMapping(header, dataRows.slice(0, sampleSize))
+  const mapping = await detectColumnMapping(header, dataRows.slice(0, sampleSize), ctx)
 
   if (mapping.date === null && mapping.amount === null) {
     warnings.push('Não conseguimos identificar colunas de data e valor. Verifique se o cabeçalho está na primeira linha e usa nomes reconhecíveis (Data, Valor, etc.).')

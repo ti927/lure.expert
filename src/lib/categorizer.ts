@@ -7,11 +7,13 @@ import {
   businessUnits,
   legalEntities,
   contacts,
-  agentEvents,
 } from '@/db/schema'
 import { eq, and, ne, ilike, asc, desc, inArray } from 'drizzle-orm'
 import { anthropic } from '@/lib/anthropic'
+import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
 import { BP_TYPES } from '@/lib/bp-types'
+
+const MODELO_CATEGORIZACAO = 'claude-haiku-4-5-20251001'
 
 const BP_TYPE_SET = new Set<string>(BP_TYPES)
 
@@ -434,7 +436,8 @@ interface LLMCallResult {
   result: CategorizationResult
   tokensInput: number
   tokensOutput: number
-  costUsd: number
+  /** Leitura de cache é cobrada à parte, ~10× mais barata que input novo. */
+  cacheReadTokens: number
 }
 
 function buildAccountContextBlock(account?: AccountContext): string {
@@ -506,7 +509,7 @@ async function classifyWithLLM(
   const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}${nfBlock}${hintsBlock}`
 
   const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: MODELO_CATEGORIZACAO,
     max_tokens: 300,
     system: [
       {
@@ -518,13 +521,10 @@ async function classifyWithLLM(
     messages: [{ role: 'user', content: userMessage }],
   })
 
-  const tokensInput = response.usage.input_tokens
-  const tokensOutput = response.usage.output_tokens
-  const cacheRead = (response.usage as unknown as Record<string, number>).cache_read_input_tokens ?? 0
-  const costUsd =
-    (tokensInput * 0.0000008) +
-    (cacheRead * 0.00000008) +
-    (tokensOutput * 0.000004)
+  // O preço saiu daqui na Fase 0 e vive em `lib/ai-pricing.ts`, junto com o dos
+  // parsers — antes cada consumidor tinha (ou não tinha) a sua própria conta.
+  const { inputTokens: tokensInput, outputTokens: tokensOutput, cacheReadTokens } =
+    tokensDaResposta(response.usage)
 
   const raw = response.content[0].type === 'text' ? response.content[0].text : ''
 
@@ -578,7 +578,7 @@ async function classifyWithLLM(
     },
     tokensInput,
     tokensOutput,
-    costUsd,
+    cacheReadTokens,
   }
 }
 
@@ -586,7 +586,7 @@ async function classifyWithLLM(
 
 export interface CategorizationOutput {
   result: CategorizationResult | null
-  llmCost?: { tokensInput: number; tokensOutput: number; costUsd: number }
+  llmCost?: { tokensInput: number; tokensOutput: number; cacheReadTokens: number }
 }
 
 export interface AccountContext {
@@ -695,20 +695,34 @@ export async function categorizeTransaction(
 
 // ─── Log para agent_events ───────────────────────────────────────────────────
 
+/**
+ * Só grava quando o Haiku foi realmente chamado — as camadas 0 a 2 (CSV,
+ * regras, recorrência) não custam nada e não geram evento.
+ *
+ * Desde a Fase 0 a escrita passa por `registrarUsoDeIa`, que é o ponto único de
+ * medição: o preço vem da mesma tabela que os parsers usam, em vez de ser
+ * recalculado aqui.
+ */
 export async function logCategorizationEvent(params: {
   organizationId: string
   transactionId: string
   result: CategorizationResult
-  llmCost?: { tokensInput: number; tokensOutput: number; costUsd: number }
+  llmCost?: { tokensInput: number; tokensOutput: number; cacheReadTokens: number }
 }) {
   const { organizationId, transactionId, result, llmCost } = params
   if (!llmCost) return
 
-  await db.insert(agentEvents).values({
+  await registrarUsoDeIa({
     organizationId,
-    type: 'categorization',
+    kind:  'categorization',
+    model: MODELO_CATEGORIZACAO,
+    usage: {
+      inputTokens:     llmCost.tokensInput,
+      outputTokens:    llmCost.tokensOutput,
+      cacheReadTokens: llmCost.cacheReadTokens,
+    },
     entityType: 'transaction',
-    entityId: transactionId,
+    entityId:   transactionId,
     payload: {
       method: result.method,
       confidence: result.confidence,
@@ -719,10 +733,5 @@ export async function logCategorizationEvent(params: {
       legalEntityId: result.legalEntityId,
       contactId: result.contactId,
     },
-    modelUsed: 'claude-haiku-4-5-20251001',
-    tokensInput: llmCost.tokensInput,
-    tokensOutput: llmCost.tokensOutput,
-    costUsd: String(llmCost.costUsd),
-    success: true,
   })
 }
