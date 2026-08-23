@@ -17,7 +17,7 @@ import { db } from '@/db'
 import {
   oauthClients, organizations, memberships, transactions, categories,
   categorizationRules, costCenters, transactionAllocations, dataSources,
-  allocationTemplates, allocationTemplateLines,
+  allocationTemplates, allocationTemplateLines, budgetVersions,
 } from '@/db/schema'
 import { and, eq, like, sql, isNotNull } from 'drizzle-orm'
 import { garantirGrant, emitirTokens } from '@/lib/oauth/store'
@@ -133,8 +133,8 @@ async function main() {
     'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
 
   const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
-  t(catalogoE.length === catalogoL.length + 4,
-    `com escrita, o catálogo ganha os DOIS pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
+  t(catalogoE.length === catalogoL.length + 8,
+    `com escrita, o catálogo ganha os QUATRO pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
 
   // ═══ Naturezas ════════════════════════════════════════════════════════════
   console.log('\n── catálogos ──')
@@ -387,6 +387,136 @@ async function main() {
   t(modeloAlheio.isError && modeloAlheio.texto.includes('não encontrado'),
     'modelo que não é desta empresa: recusa')
 
+  // ═══ Orçamento ════════════════════════════════════════════════════════════
+  console.log('\n── orçamento ──')
+
+  const [versao] = await db.insert(budgetVersions).values({
+    organizationId: ORG, name: 'Orçamento 2026', fiscalYear: 2026, status: 'rascunho', isActive: true,
+  }).returning({ id: budgetVersions.id })
+  const [arquivada] = await db.insert(budgetVersions).values({
+    organizationId: ORG, name: 'Orçamento 2025', fiscalYear: 2025, status: 'arquivado',
+  }).returning({ id: budgetVersions.id })
+
+  const versoes = await chamar(comEscrita, 'listar_versoes_de_orcamento', { organizationId: ORG })
+  t(((versoes.dados as { versoes: unknown[] })?.versoes ?? []).length === 2,
+    'listar_versoes_de_orcamento devolve as duas versões')
+
+  const emArquivada = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: arquivada.id, descricao: 'Aluguel',
+    categoryId: folha.id, direcao: 'outflow', mesInicial: '2025-01', valorMensal: 1000,
+  })
+  t(emArquivada.isError && emArquivada.texto.includes('arquivada'),
+    'versão arquivada é somente leitura — recusa com o motivo')
+
+  const semValor = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: versao.id, descricao: 'Aluguel',
+    categoryId: folha.id, direcao: 'outflow', mesInicial: '2026-01',
+  })
+  t(semValor.isError && semValor.texto.includes('valorMensal'),
+    'sem nenhum campo de valor: recusa dizendo quais existem')
+
+  const doisValores = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: versao.id, descricao: 'Aluguel', categoryId: folha.id,
+    direcao: 'outflow', mesInicial: '2026-01', valorMensal: 1000, valorTotal: 12000,
+  })
+  t(doisValores.isError && doisValores.texto.includes('apenas UM'),
+    'dois campos de valor juntos: recusa — o modo seria ambíguo')
+
+  const foraDoExercicio = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: versao.id, descricao: 'Aluguel', categoryId: folha.id,
+    direcao: 'outflow', mesInicial: '2027-06', valorMensal: 1000, ocorrencias: 3,
+  })
+  t(foraDoExercicio.isError,
+    'competência fora do exercício da versão: recusa — exercício é ano civil')
+
+  const emPaiOrc = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: versao.id, descricao: 'Aluguel', categoryId: paiComFilho.id,
+    direcao: 'outflow', mesInicial: '2026-01', valorMensal: 1000,
+  })
+  t(emPaiOrc.isError && emPaiOrc.texto.includes('folha'),
+    'natureza pai também é recusada no orçamento')
+
+  // Prazo de caixa: a competência é em janeiro, o dinheiro sai 30 dias depois.
+  const orc = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: versao.id, descricao: 'Aluguel da sede',
+    categoryId: folha.id, direcao: 'outflow', mesInicial: '2026-01',
+    valorMensal: 1000, ocorrencias: 12, prazoDeCaixaDias: 30, diaDoMes: 5,
+  })
+  const po = orc.dados as {
+    previaId: string
+    resumo: { quantidade: number; valorTotal: number; modo: string; ocorrencias: { competencia: string; caixa: string }[] }
+  }
+  t(po.resumo.quantidade === 12 && po.resumo.valorTotal === 12000,
+    `12 ocorrências somando R$ ${po.resumo.valorTotal}`)
+  t(po.resumo.modo === 'fixo', 'modo deduzido de valorMensal: fixo')
+  t(po.resumo.ocorrencias[0].competencia === '2026-01-05'
+    && po.resumo.ocorrencias[0].caixa === '2026-02-04',
+    `duas datas por ocorrência: competência ${po.resumo.ocorrencias[0].competencia}, ` +
+    `caixa ${po.resumo.ocorrencias[0].caixa} — 30 dias depois`)
+
+  const aplicOrc = await chamar(comEscrita, 'aplicar_lancamento_de_orcamento', {
+    organizationId: ORG, previaId: po.previaId, confirmacao: 'aplicar',
+  })
+  t(!aplicOrc.isError && (aplicOrc.dados as { ocorrenciasGravadas: number }).ocorrenciasGravadas === 12,
+    'grava as 12 ocorrências')
+
+  const [gravado] = await db.execute<{ series: number; entries: number; soma: string }>(sql`
+    SELECT (SELECT COUNT(*)::int FROM budget_series  WHERE organization_id = ${ORG}::uuid) AS series,
+           (SELECT COUNT(*)::int FROM budget_entries WHERE organization_id = ${ORG}::uuid) AS entries,
+           (SELECT COALESCE(SUM(amount),0)::text FROM budget_entries WHERE organization_id = ${ORG}::uuid) AS soma`)
+  t(Number(gravado.series) === 1 && Number(gravado.entries) === 12 && Number(gravado.soma) === 12000,
+    `banco: 1 série, ${gravado.entries} ocorrências, R$ ${gravado.soma}`)
+
+  // Reajuste: 5% a cada 12 meses não muda nada dentro de um exercício de 12.
+  const sazonal = await chamar(comEscrita, 'prever_lancamento_de_orcamento', {
+    organizationId: ORG, versionId: versao.id, descricao: 'Comissões',
+    categoryId: folha.id, direcao: 'outflow', mesInicial: '2026-01',
+    valoresMensais: [100, 200, 300],
+  })
+  const ps = sazonal.dados as { previaId: string; resumo: { modo: string; quantidade: number; valorTotal: number } }
+  t(ps.resumo.modo === 'sazonal' && ps.resumo.quantidade === 3 && ps.resumo.valorTotal === 600,
+    'valoresMensais deduz modo sazonal e as ocorrências vêm da lista (3, somando 600)')
+
+  // ── Cópia do realizado ───────────────────────────────────────────────────
+  const copia = await chamar(comEscrita, 'prever_copia_do_realizado', {
+    organizationId: ORG, versionId: versao.id,
+    deMes: '2026-03', ateMes: '2026-03', ajustePct: 10,
+  })
+  const pc = copia.dados as {
+    previaId: string
+    resumo: { quantidade: number; valorTotal: number; semCategoria: { count: number } }
+    avisos?: string[]
+  }
+  t(pc.resumo.quantidade > 0, `a cópia gera ${pc.resumo.quantidade} lançamento(s) do realizado de março`)
+  t(pc.resumo.semCategoria.count > 0 && (pc.avisos ?? []).some(a => a.includes('sem natureza')),
+    `avisa que ${pc.resumo.semCategoria.count} lançamento(s) sem natureza ficaram de fora`)
+
+  // O dente da prévia, no orçamento: classificar um lançamento muda o realizado.
+  await db.update(transactions).set({ categoryId: folha.id })
+    .where(and(eq(transactions.organizationId, ORG), eq(transactions.description, 'POSTO IPIRANGA')))
+
+  const copiaVelha = await chamar(comEscrita, 'aplicar_copia_do_realizado', {
+    organizationId: ORG, previaId: pc.previaId, confirmacao: 'aplicar',
+  })
+  t(copiaVelha.isError,
+    'classificar um lançamento mudou o realizado: a prévia da cópia é RECUSADA')
+
+  const copia2 = await chamar(comEscrita, 'prever_copia_do_realizado', {
+    organizationId: ORG, versionId: versao.id,
+    deMes: '2026-03', ateMes: '2026-03', ajustePct: 10,
+  })
+  const pc2 = copia2.dados as { previaId: string; resumo: { quantidade: number; valorTotal: number } }
+  const aplicCopia = await chamar(comEscrita, 'aplicar_copia_do_realizado', {
+    organizationId: ORG, previaId: pc2.previaId, confirmacao: 'aplicar',
+  })
+  t(!aplicCopia.isError, `aplica a cópia (${pc2.resumo.quantidade} lançamentos)`)
+
+  const [aposCopia] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM budget_series
+    WHERE organization_id = ${ORG}::uuid AND source = 'copia_realizado'`)
+  t(Number(aposCopia.n) === pc2.resumo.quantidade,
+    `${aposCopia.n} séries nasceram com source='copia_realizado' — separáveis do que foi lançado à mão`)
+
   // ═══ Auditoria ════════════════════════════════════════════════════════════
   console.log('\n── auditoria ──')
 
@@ -394,8 +524,9 @@ async function main() {
     SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
            COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
     FROM agent_events WHERE organization_id = ${ORG}::uuid`)
-  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 3,
-    `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — uma classificação e dois rateios`)
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 5,
+    `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — classificação, dois rateios, ` +
+    'um lançamento orçado e uma cópia do realizado')
 
   const [carimbo] = await db.execute<{ tem: boolean }>(sql`
     SELECT (payload ? 'confirmed_at' AND payload ? 'applied_at') AS tem

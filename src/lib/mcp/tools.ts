@@ -16,7 +16,7 @@ import { db } from '@/db'
 import {
   memberships, organizations, transactions, categories,
   costCenters, businessUnits, legalEntities, contacts,
-  allocationTemplates, allocationTemplateLines,
+  allocationTemplates, allocationTemplateLines, budgetVersions,
 } from '@/db/schema'
 import { scopeFromMcpGrant } from '@/lib/query/scope'
 import { runQuery, explicarQuery } from '@/lib/query/engine'
@@ -32,6 +32,8 @@ import {
   type AllocationWeight,
 } from '@/lib/allocations-write'
 import { normalizeWeights, formatProportion } from '@/lib/allocation-math'
+import { preverSerie, criarSerie, preverCopia, aplicarCopia } from '@/lib/budget-write'
+import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
   registrarPrevia, consumirPrevia, divergiu, registrarAplicacao,
   exigirConfirmacao, PALAVRA_DE_CONFIRMACAO,
@@ -725,18 +727,370 @@ async function resolverPesos(
   }))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Orçamento
+// ─────────────────────────────────────────────────────────────────────────────
+
+const listarVersoesDeOrcamento: Ferramenta = {
+  nome: 'listar_versoes_de_orcamento',
+  titulo: 'Listar versões de orçamento',
+  descricao:
+    'As versões de orçamento da empresa. Cada versão é um exercício (ano civil) com um estado: ' +
+    'rascunho, aprovado ou arquivado — arquivada é somente leitura. Toda escrita de orçamento ' +
+    'exige o versionId de uma versão daqui.',
+  entrada: alvo,
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const scope = await escopoDe(ctx, String(args.organizationId))
+    const linhas = await db
+      .select({
+        id: budgetVersions.id,
+        nome: budgetVersions.name,
+        exercicio: budgetVersions.fiscalYear,
+        estado: budgetVersions.status,
+        ativa: budgetVersions.isActive,
+      })
+      .from(budgetVersions)
+      .where(eq(budgetVersions.organizationId, scope.organizationId))
+      .orderBy(budgetVersions.fiscalYear, budgetVersions.name)
+      .limit(100)
+    return { versoes: linhas }
+  },
+}
+
+const FERRAMENTA_ORCADO = 'lancamento_de_orcamento'
+const FERRAMENTA_COPIA  = 'copia_do_realizado'
+
+/**
+ * Entrada amigável ao modelo, não o schema interno.
+ *
+ * `budgetSeriesInputSchema` tem 20 campos sem default, porque o diálogo da tela
+ * os preenche. Jogá-lo cru no catálogo faria o modelo inventar `adjustmentEvery`
+ * e `seasonalAmounts` em toda chamada. Aqui a entrada descreve o caso comum — um
+ * valor por mês, N meses — e o modo é DEDUZIDO de qual campo de valor veio.
+ */
+const entradaLancamentoOrcado = alvo.extend({
+  versionId: z.string().uuid(),
+  descricao: z.string().trim().min(1).max(200),
+  categoryId: z.string().uuid().describe('Natureza folha — veja listar_categorias.'),
+  direcao: z.enum(['inflow', 'outflow']).describe('inflow para entrada, outflow para saída.'),
+  mesInicial: z.string().regex(/^\d{4}-\d{2}$/).describe('AAAA-MM'),
+  ocorrencias: z.number().int().min(1).max(12).default(12),
+
+  valorMensal: z.number().nonnegative().optional()
+    .describe('O mesmo valor todo mês. Com reajustePct, passa a subir periodicamente.'),
+  valorTotal: z.number().nonnegative().optional()
+    .describe('Um total dividido entre as ocorrências (parcelado).'),
+  valoresMensais: z.array(z.number().nonnegative()).min(1).max(12).optional()
+    .describe('Um valor por ocorrência, na ordem (sazonal).'),
+  reajustePct: z.number().optional().describe('Em pontos percentuais: 5 = +5%.'),
+  reajusteACadaMeses: z.number().int().min(1).default(12),
+
+  intervaloMeses: z.number().int().min(1).max(12).default(1)
+    .describe('1 = mensal, 3 = trimestral.'),
+  diaDoMes: z.number().int().min(1).max(31).default(1),
+  prazoDeCaixaDias: z.number().int().min(0).max(365).default(0)
+    .describe('Dias entre a competência e o caixa. 30 = recebe/paga 30 dias depois.'),
+
+  costCenterId:   z.string().uuid().nullable().default(null),
+  businessUnitId: z.string().uuid().nullable().default(null),
+  legalEntityId:  z.string().uuid().nullable().default(null),
+  contactId:      z.string().uuid().nullable().default(null),
+  observacao: z.string().trim().max(500).nullable().default(null),
+})
+
+function montarSerie(a: z.infer<typeof entradaLancamentoOrcado>): BudgetSeriesInput {
+  const informados = [a.valorMensal, a.valorTotal, a.valoresMensais].filter(v => v !== undefined)
+  if (informados.length === 0) {
+    throw new Error('Informe valorMensal, valorTotal ou valoresMensais.')
+  }
+  if (informados.length > 1) {
+    throw new Error('Informe apenas UM entre valorMensal, valorTotal e valoresMensais.')
+  }
+
+  const modo = a.valoresMensais ? 'sazonal'
+    : a.valorTotal !== undefined ? 'parcelado'
+    : a.reajustePct ? 'reajuste'
+    : 'fixo'
+
+  return {
+    versionId: a.versionId,
+    description: a.descricao,
+    direction: a.direcao,
+    categoryId: a.categoryId,
+    costCenterId: a.costCenterId,
+    businessUnitId: a.businessUnitId,
+    legalEntityId: a.legalEntityId,
+    contactId: a.contactId,
+    startMonth: a.mesInicial,
+    occurrences: a.valoresMensais ? a.valoresMensais.length : a.ocorrencias,
+    intervalMonths: a.intervaloMeses,
+    dayOfMonth: a.diaDoMes,
+    cashLagDays: a.prazoDeCaixaDias,
+    amountMode: modo,
+    baseAmount: a.valorMensal ?? null,
+    totalAmount: a.valorTotal ?? null,
+    // O schema interno guarda fração decimal; a entrada fala em pontos
+    // percentuais, que é como uma pessoa diz "5%".
+    adjustmentRate: a.reajustePct === undefined ? null : a.reajustePct / 100,
+    adjustmentEvery: a.reajusteACadaMeses,
+    seasonalAmounts: a.valoresMensais ?? null,
+    notes: a.observacao,
+  }
+}
+
+const preverLancamentoOrcado: Ferramenta = {
+  nome: 'prever_lancamento_de_orcamento',
+  titulo: 'Prever lançamento de orçamento',
+  descricao:
+    'Mostra as ocorrências que um lançamento orçado geraria, SEM gravar: mês a mês, com a data de ' +
+    'competência e a de caixa de cada uma. Duas datas por ocorrência é o desenho do orçamento — ' +
+    'competência alimenta a DRE orçada, caixa alimenta o fluxo projetado. ' +
+    'Apresente ao usuário e obtenha o aceite antes de aplicar.',
+  entrada: entradaLancamentoOrcado,
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as z.infer<typeof entradaLancamentoOrcado>
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const serie = montarSerie(a)
+    const previsto = await preverSerie(scope.organizationId, serie)
+    if ('error' in previsto) throw new Error(previsto.error)
+
+    const resumo = {
+      quantidade: previsto.ocorrencias.length,
+      valorTotal: previsto.total,
+      versao: `${previsto.versao.name} (${previsto.versao.fiscalYear})`,
+      modo: serie.amountMode,
+      ocorrencias: previsto.ocorrencias.map(o => ({
+        competencia: o.competenceDate, caixa: o.cashDate, valor: o.amount,
+      })),
+    }
+
+    const { previaId, expiraEm } = await registrarPrevia({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_ORCADO,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resumo,
+      pedido: { serie },
+    })
+
+    return {
+      previaId, expiraEm, resumo,
+      comoAplicar: `Mostre as ocorrências ao usuário. Com o aceite dele, chame ` +
+        `aplicar_lancamento_de_orcamento com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
+    }
+  },
+}
+
+const aplicarLancamentoOrcado: Ferramenta = {
+  nome: 'aplicar_lancamento_de_orcamento',
+  titulo: 'Aplicar lançamento de orçamento',
+  descricao:
+    'Grava o lançamento orçado de uma prévia. Exige previaId e a palavra literal "aplicar". ' +
+    'Recalcula do zero e recusa se algo mudou desde a prévia.',
+  entrada: alvo.extend({
+    previaId: z.string().uuid(),
+    confirmacao: z.string().describe('A palavra literal "aplicar".'),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; previaId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    const previa = await consumirPrevia({
+      previaId: a.previaId, ferramenta: FERRAMENTA_ORCADO,
+      organizationId: scope.organizationId, userId: ctx.userId,
+    })
+    if (!previa.ok) throw new Error(previa.motivo)
+
+    const serie = (previa.pedido as { serie: BudgetSeriesInput }).serie
+
+    const agora = await preverSerie(scope.organizationId, serie)
+    if ('error' in agora) throw new Error(agora.error)
+    const problema = divergiu(previa.resumo, {
+      quantidade: agora.ocorrencias.length, valorTotal: agora.total,
+    })
+    if (problema) throw new Error(problema)
+
+    const inicio = Date.now()
+    const r = await criarSerie(scope.organizationId, ctx.userId, serie)
+    if ('error' in r) throw new Error(r.error)
+
+    await registrarAplicacao({
+      organizationId: scope.organizationId, ferramenta: FERRAMENTA_ORCADO,
+      previaId: a.previaId, userId: ctx.userId, clientId: ctx.clientId,
+      resultado: { ocorrencias: r.occurrences }, duracaoMs: Date.now() - inicio,
+    })
+
+    return { aplicado: true, ocorrenciasGravadas: r.occurrences, seriesId: r.seriesId }
+  },
+}
+
+const entradaCopia = alvo.extend({
+  versionId: z.string().uuid(),
+  deMes: z.string().regex(/^\d{4}-\d{2}$/).describe('Primeiro mês do realizado a copiar (AAAA-MM).'),
+  ateMes: z.string().regex(/^\d{4}-\d{2}$/),
+  regime: z.enum(['competencia', 'caixa']).default('competencia'),
+  formato: z.enum(['mensal', 'media']).default('mensal').describe(
+    'mensal preserva a sazonalidade mês a mês; media distribui a média igualmente.',
+  ),
+  detalhamento: z.enum(['categoria', 'dimensoes']).default('categoria').describe(
+    'categoria gera uma linha por natureza; dimensoes abre também por centro de custo e unidade.',
+  ),
+  incluirContato: z.boolean().default(false),
+  ajustePct: z.number().min(-100).max(1000).default(0).describe('Em pontos percentuais: 10 = +10%.'),
+  substituirCopiasAnteriores: z.boolean().default(false).describe(
+    'Apaga só o que veio de cópia anterior; o que foi lançado à mão fica.',
+  ),
+})
+
+function montarCopia(a: z.infer<typeof entradaCopia>): CopyActualsInput {
+  return {
+    versionId: a.versionId,
+    sourceFrom: a.deMes,
+    sourceTo: a.ateMes,
+    regime: a.regime,
+    shape: a.formato,
+    granularity: a.detalhamento,
+    includeContact: a.incluirContato,
+    adjustmentPct: a.ajustePct,
+    replaceExisting: a.substituirCopiasAnteriores,
+  }
+}
+
+const preverCopiaDoRealizado: Ferramenta = {
+  nome: 'prever_copia_do_realizado',
+  titulo: 'Prever cópia do realizado',
+  descricao:
+    'Monta um orçamento a partir do que já aconteceu, SEM gravar. É o caminho para "orce 2027 com ' +
+    'base em 2026 mais 10%". Avisa quanto do realizado está sem natureza ou em natureza inativa — ' +
+    'esse pedaço não é copiável e some da conta, então o total orçado pode ficar abaixo do realizado.',
+  entrada: entradaCopia,
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as z.infer<typeof entradaCopia>
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const r = await preverCopia(scope.organizationId, montarCopia(a))
+    if ('error' in r) throw new Error(r.error)
+    const p = r.preview
+
+    const total = p.targetTotals.inflow + p.targetTotals.outflow
+    const resumo = {
+      quantidade: p.rows.length,
+      valorTotal: total,
+      mesesNaOrigem: p.monthsInSource,
+      totaisOrigem: p.sourceTotals,
+      totaisDestino: p.targetTotals,
+      semCategoria: p.semCategoria,
+      emNaturezaInativa: p.inativas,
+      copiasJaExistentes: p.existingCopied,
+      amostra: p.rows.slice(0, 8),
+    }
+
+    if (p.rows.length === 0) {
+      return { previaId: null, resumo, aviso: 'Não há realizado categorizado nesse período para copiar.' }
+    }
+
+    const { previaId, expiraEm } = await registrarPrevia({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_COPIA,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resumo,
+      pedido: { copia: montarCopia(a) },
+    })
+
+    const avisos: string[] = []
+    if (p.semCategoria.count > 0) {
+      avisos.push(`${p.semCategoria.count} lançamento(s) sem natureza, somando ` +
+        `R$ ${p.semCategoria.total.toFixed(2)}, ficaram de fora da cópia.`)
+    }
+    if (p.existingCopied.series > 0 && !a.substituirCopiasAnteriores) {
+      avisos.push(`Esta versão já tem ${p.existingCopied.series} lançamento(s) vindos de cópia ` +
+        `anterior, somando R$ ${p.existingCopied.total.toFixed(2)}. Sem ` +
+        'substituirCopiasAnteriores, os novos SOMAM aos existentes.')
+    }
+
+    return {
+      previaId, expiraEm, resumo,
+      ...(avisos.length ? { avisos } : {}),
+      comoAplicar: `Mostre este resumo ao usuário. Com o aceite dele, chame ` +
+        `aplicar_copia_do_realizado com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
+    }
+  },
+}
+
+const aplicarCopiaDoRealizado: Ferramenta = {
+  nome: 'aplicar_copia_do_realizado',
+  titulo: 'Aplicar cópia do realizado',
+  descricao:
+    'Grava o orçamento da prévia. Exige previaId e a palavra literal "aplicar". Recalcula do zero ' +
+    'e recusa se o realizado mudou desde a prévia.',
+  entrada: alvo.extend({
+    previaId: z.string().uuid(),
+    confirmacao: z.string().describe('A palavra literal "aplicar".'),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; previaId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    const previa = await consumirPrevia({
+      previaId: a.previaId, ferramenta: FERRAMENTA_COPIA,
+      organizationId: scope.organizationId, userId: ctx.userId,
+    })
+    if (!previa.ok) throw new Error(previa.motivo)
+
+    const copia = (previa.pedido as { copia: CopyActualsInput }).copia
+
+    const agora = await preverCopia(scope.organizationId, copia)
+    if ('error' in agora) throw new Error(agora.error)
+    const problema = divergiu(previa.resumo, {
+      quantidade: agora.preview.rows.length,
+      valorTotal: agora.preview.targetTotals.inflow + agora.preview.targetTotals.outflow,
+    })
+    if (problema) throw new Error(problema)
+
+    const inicio = Date.now()
+    const r = await aplicarCopia(scope.organizationId, ctx.userId, copia)
+    if ('error' in r) throw new Error(r.error)
+
+    await registrarAplicacao({
+      organizationId: scope.organizationId, ferramenta: FERRAMENTA_COPIA,
+      previaId: a.previaId, userId: ctx.userId, clientId: ctx.clientId,
+      resultado: { ...r }, duracaoMs: Date.now() - inicio,
+    })
+
+    return { aplicado: true, ...r }
+  },
+}
+
 const CATALOGO: Ferramenta[] = [
   listarOrganizacoes,
   descreverOrganizacao,
   listarCategorias,
   listarDimensoes,
   listarModelosDeRateio,
+  listarVersoesDeOrcamento,
   consultar,
   explicarConsulta,
   preverClassificacao,
   aplicarClassificacao,
   preverRateio,
   aplicarRateio,
+  preverLancamentoOrcado,
+  aplicarLancamentoOrcado,
+  preverCopiaDoRealizado,
+  aplicarCopiaDoRealizado,
 ]
 
 /** O que este consentimento enxerga. */

@@ -37,7 +37,6 @@ import {
   budgetVersionInputSchema,
   budgetSeriesInputSchema,
   budgetEntryUpdateSchema,
-  copyActualsInputSchema,
   duplicateVersionInputSchema,
   recurrenceChoiceSchema,
   BUDGET_STATUSES,
@@ -69,8 +68,8 @@ import { generateMonthRange } from '@/lib/dre-calc'
 import { dimensionFilters } from '@/lib/sql-dimensions'
 import { expandSeries, fitsInFiscalYear, type RecurrenceInput } from '@/lib/budget-recurrence'
 import {
-  buildCopyDrafts, monthsBetween, collectActuals, countSeriesBySource,
-  applyDraftsToBudget, applyDuplicateVersion, type CopiedSeriesDraft,
+  countSeriesBySource, applyDraftsToBudget, applyDuplicateVersion,
+  type CopiedSeriesDraft,
 } from '@/lib/budget-copy'
 import {
   fetchBudgetRows, fetchForaDoHorizonte, type BudgetPeriodRow,
@@ -84,91 +83,14 @@ import {
   planSeriesUpdate, applySeriesUpdate, applySeriesDelete, diffAdjustedFields, money,
   type SeriesRow, type EntryRow,
 } from '@/lib/budget-scope'
+import {
+  validarAlvos, carregarVersaoEditavel, criarSerie, preverCopia, aplicarCopia,
+  MAX_COPIED_SERIES,
+} from '@/lib/budget-write'
 import { monthLabel } from '@/lib/format'
 import { getFluxoData } from '@/server/fluxo'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Confere que cada FK recebida do cliente pertence à organização.
- * Guarda multi-tenant obrigatório: o `db` conecta num papel que ignora RLS.
- */
-async function validateTargetsBelongToOrg(
-  organizationId: string,
-  t: {
-    categoryId: string
-    costCenterId: string | null
-    businessUnitId: string | null
-    legalEntityId: string | null
-    contactId: string | null
-  },
-): Promise<string | null> {
-  const [cat] = await db
-    .select({ id: categories.id, parentId: categories.parentId, isActive: categories.isActive })
-    .from(categories)
-    .where(and(eq(categories.id, t.categoryId), eq(categories.organizationId, organizationId)))
-    .limit(1)
-
-  if (!cat) return 'Categoria não encontrada nesta organização.'
-  if (!cat.parentId) return 'Escolha uma natureza filho (folha) — naturezas pai não recebem lançamento.'
-  if (!cat.isActive) return 'Essa categoria está inativa. Reative-a ou escolha outra.'
-
-  const checks: Array<Promise<string | null>> = []
-
-  if (t.costCenterId) {
-    checks.push(db.select({ id: costCenters.id }).from(costCenters)
-      .where(and(eq(costCenters.id, t.costCenterId), eq(costCenters.organizationId, organizationId))).limit(1)
-      .then(r => (r.length ? null : 'Centro de custo não encontrado nesta organização.')))
-  }
-  if (t.businessUnitId) {
-    checks.push(db.select({ id: businessUnits.id }).from(businessUnits)
-      .where(and(eq(businessUnits.id, t.businessUnitId), eq(businessUnits.organizationId, organizationId))).limit(1)
-      .then(r => (r.length ? null : 'Unidade de negócio não encontrada nesta organização.')))
-  }
-  if (t.legalEntityId) {
-    checks.push(db.select({ id: legalEntities.id }).from(legalEntities)
-      .where(and(eq(legalEntities.id, t.legalEntityId), eq(legalEntities.organizationId, organizationId))).limit(1)
-      .then(r => (r.length ? null : 'Entidade jurídica não encontrada nesta organização.')))
-  }
-  if (t.contactId) {
-    checks.push(db.select({ id: contacts.id }).from(contacts)
-      .where(and(eq(contacts.id, t.contactId), eq(contacts.organizationId, organizationId))).limit(1)
-      .then(r => (r.length ? null : 'Contato não encontrado nesta organização.')))
-  }
-
-  const results = await Promise.all(checks)
-  return results.find(Boolean) ?? null
-}
-
-interface EditableVersion {
-  id:         string
-  fiscalYear: number
-  status:     string
-  name:       string
-}
-
-/** Versão arquivada é somente-leitura — trava na action, não no banco (reversível). */
-async function loadEditableVersion(
-  organizationId: string,
-  versionId: string,
-): Promise<{ error: string } | { version: EditableVersion }> {
-  const [version] = await db
-    .select({
-      id: budgetVersions.id,
-      fiscalYear: budgetVersions.fiscalYear,
-      status: budgetVersions.status,
-      name: budgetVersions.name,
-    })
-    .from(budgetVersions)
-    .where(and(eq(budgetVersions.id, versionId), eq(budgetVersions.organizationId, organizationId)))
-    .limit(1)
-
-  if (!version) return { error: 'Versão de orçamento não encontrada.' as const }
-  if (version.status === 'arquivado') {
-    return { error: 'Esta versão está arquivada e não pode ser alterada. Duplique-a para trabalhar em cima dela.' as const }
-  }
-  return { version }
-}
 
 /** Os campos de recorrência que `expandSeries` consome, a partir da linha do banco. */
 function toRecurrenceInput(row: {
@@ -606,74 +528,9 @@ export async function getBudgetSeriesEntries(seriesId: string): Promise<BudgetEn
 
 export async function createBudgetSeries(input: BudgetSeriesInput) {
   const { organizationId, userId } = await getAuthContext()
-
-  const parsed = budgetSeriesInputSchema.safeParse(input)
-  if (!parsed.success) return { error: parsed.error.issues[0].message }
-  const v = parsed.data
-
-  const loaded = await loadEditableVersion(organizationId, v.versionId)
-  if ('error' in loaded) return { error: loaded.error }
-
-  const fits = fitsInFiscalYear(v, loaded.version.fiscalYear)
-  if (!fits.ok) return { error: fits.message }
-
-  const targetError = await validateTargetsBelongToOrg(organizationId, v)
-  if (targetError) return { error: targetError }
-
-  const drafts = expandSeries(v)
-
-  await db.transaction(async (tx) => {
-    const [series] = await tx
-      .insert(budgetSeries)
-      .values({
-        organizationId,
-        versionId: v.versionId,
-        description: v.description,
-        direction: v.direction,
-        categoryId: v.categoryId,
-        costCenterId: v.costCenterId,
-        businessUnitId: v.businessUnitId,
-        legalEntityId: v.legalEntityId,
-        contactId: v.contactId,
-        startMonth: `${v.startMonth}-01`,
-        occurrences: v.occurrences,
-        intervalMonths: v.intervalMonths,
-        dayOfMonth: v.dayOfMonth,
-        cashLagDays: v.cashLagDays,
-        amountMode: v.amountMode,
-        baseAmount: v.baseAmount === null ? null : money(v.baseAmount),
-        totalAmount: v.totalAmount === null ? null : money(v.totalAmount),
-        adjustmentRate: v.adjustmentRate === null ? null : String(v.adjustmentRate),
-        adjustmentEvery: v.adjustmentEvery,
-        seasonalAmounts: v.seasonalAmounts,
-        source: 'manual',
-        notes: v.notes,
-        createdByUserId: userId,
-      })
-      .returning({ id: budgetSeries.id })
-
-    await tx.insert(budgetEntries).values(
-      drafts.map(d => ({
-        organizationId,
-        versionId: v.versionId,
-        seriesId: series.id,
-        sequence: d.sequence,
-        description: v.description,
-        direction: v.direction,
-        categoryId: v.categoryId,
-        costCenterId: v.costCenterId,
-        businessUnitId: v.businessUnitId,
-        legalEntityId: v.legalEntityId,
-        contactId: v.contactId,
-        competenceDate: d.competenceDate,
-        cashDate: d.cashDate,
-        amount: money(d.amount),
-      })),
-    )
-  })
-
-  revalidatePath('/orcamento')
-  return { success: true as const, occurrences: drafts.length }
+  const r = await criarSerie(organizationId, userId, input)
+  if ('success' in r) revalidatePath('/orcamento')
+  return r
 }
 
 // ─── Escopos de edição ────────────────────────────────────────────────────────
@@ -691,7 +548,7 @@ async function loadSeriesForEdit(
     .limit(1)
   if (!series) return { error: 'Lançamento não encontrado.' as const }
 
-  const version = await loadEditableVersion(organizationId, series.versionId)
+  const version = await carregarVersaoEditavel(organizationId, series.versionId)
   if ('error' in version) return { error: version.error }
 
   const entries = await db
@@ -756,7 +613,7 @@ export async function updateBudgetSeries(
   const fits = fitsInFiscalYear(v, fiscalYear)
   if (!fits.ok) return { error: fits.message }
 
-  const targetError = await validateTargetsBelongToOrg(organizationId, v)
+  const targetError = await validarAlvos(organizationId, v)
   if (targetError) return { error: targetError }
 
   const plan = planSeriesUpdate(series, entries, v, options)
@@ -868,7 +725,7 @@ export async function updateBudgetEntry(entryId: string, patch: BudgetEntryUpdat
     .limit(1)
   if (!entry) return { error: 'Ocorrência não encontrada.' }
 
-  const loaded = await loadEditableVersion(organizationId, entry.versionId)
+  const loaded = await carregarVersaoEditavel(organizationId, entry.versionId)
   if ('error' in loaded) return { error: loaded.error }
 
   const [series] = await db
@@ -879,7 +736,7 @@ export async function updateBudgetEntry(entryId: string, patch: BudgetEntryUpdat
   if (!series) return { error: 'Série do lançamento não encontrada.' }
 
   if (p.categoryId && p.categoryId !== entry.categoryId) {
-    const targetError = await validateTargetsBelongToOrg(organizationId, {
+    const targetError = await validarAlvos(organizationId, {
       categoryId: p.categoryId,
       costCenterId: null, businessUnitId: null, legalEntityId: null, contactId: null,
     })
@@ -1221,7 +1078,7 @@ export async function deleteBudgetEntry(entryId: string) {
     .limit(1)
   if (!entry) return { error: 'Ocorrência não encontrada.' }
 
-  const loaded = await loadEditableVersion(organizationId, entry.versionId)
+  const loaded = await carregarVersaoEditavel(organizationId, entry.versionId)
   if ('error' in loaded) return { error: loaded.error }
 
   await db.delete(budgetEntries).where(eq(budgetEntries.id, entryId))
@@ -1243,57 +1100,8 @@ export async function deleteBudgetEntry(entryId: string) {
  * dimensão não produzir centenas de linhas sem ninguém perceber — quando
  * estoura, a action FALHA dizendo o número, em vez de cortar em silêncio.
  */
-const MAX_COPIED_SERIES = 300
 
 /** Anotado à mão: sem isso o `'error' in planned` não estreita a união. */
-type CopyPlan =
-  | { error: string }
-  | {
-      input:        CopyActualsInput
-      fiscalYear:   number
-      drafts:       CopiedSeriesDraft[]
-      semCategoria: { count: number; total: number }
-      inativas:     { count: number; total: number }
-    }
-
-/**
- * O caminho comum da prévia e da gravação — as duas partem do mesmo lugar.
- *
- * Sem `validateTargetsBelongToOrg` de propósito: aqui as FKs não vêm do cliente,
- * vêm de `transactions` da própria organização, já filtradas por
- * `organization_id` e por INNER JOIN nas categorias dela. Não há id de fora para
- * validar.
- */
-async function planCopy(organizationId: string, input: CopyActualsInput): Promise<CopyPlan> {
-  const parsed = copyActualsInputSchema.safeParse(input)
-  if (!parsed.success) return { error: parsed.error.issues[0].message }
-  const v = parsed.data
-
-  const loaded = await loadEditableVersion(organizationId, v.versionId)
-  if ('error' in loaded) return { error: loaded.error }
-
-  const { actuals, semCategoria, inativas } = await collectActuals(db, organizationId, v)
-
-  const drafts = buildCopyDrafts(actuals, {
-    fiscalYear:     loaded.version.fiscalYear,
-    shape:          v.shape,
-    granularity:    v.granularity,
-    includeContact: v.includeContact ?? false,
-    adjustmentPct:  v.adjustmentPct,
-  })
-
-  if (drafts.length > MAX_COPIED_SERIES) {
-    return {
-      error: `O período gera ${drafts.length} lançamentos, acima do limite de ${MAX_COPIED_SERIES}. `
-           + (v.includeContact
-              ? 'Desmarque "abrir por contato", use o detalhamento "Por categoria" ou reduza o período.'
-              : 'Use o detalhamento "Por categoria" ou reduza o período.'),
-    }
-  }
-
-  return { input: v, fiscalYear: loaded.version.fiscalYear, drafts, semCategoria, inativas }
-}
-
 /**
  * O que a cópia criaria, sem gravar nada. A gravação refaz o cálculo do zero — a
  * prévia serve para o usuário decidir, nunca como fonte do que se grava.
@@ -1302,40 +1110,7 @@ export async function previewCopyActuals(
   input: CopyActualsInput,
 ): Promise<{ preview: CopyActualsPreview } | { error: string }> {
   const { organizationId } = await getAuthContext()
-
-  const planned = await planCopy(organizationId, input)
-  if ('error' in planned) return { error: planned.error }
-  const { drafts, semCategoria, inativas } = planned
-
-  const sourceTotals = { inflow: 0, outflow: 0 }
-  const targetTotals = { inflow: 0, outflow: 0 }
-  for (const d of drafts) {
-    sourceTotals[d.direction] += d.sourceTotal
-    targetTotals[d.direction] += d.total
-  }
-
-  return {
-    preview: {
-      rows: drafts.map(d => ({
-        description:    d.description,
-        direction:      d.direction,
-        categoryName:   d.categoryName,
-        categoryCode:   d.categoryCode,
-        dimensionLabel: d.dimensionLabel,
-        startMonth:     d.startMonth,
-        occurrences:    d.occurrences,
-        amountMode:     d.amountMode,
-        sourceTotal:    d.sourceTotal,
-        total:          d.total,
-      })),
-      monthsInSource: monthsBetween(planned.input.sourceFrom, planned.input.sourceTo),
-      sourceTotals,
-      targetTotals,
-      semCategoria,
-      inativas,
-      existingCopied: await countSeriesBySource(db, planned.input.versionId, 'copia_realizado'),
-    },
-  }
+  return preverCopia(organizationId, input)
 }
 
 /**
@@ -1346,30 +1121,9 @@ export async function previewCopyActuals(
  */
 export async function copyActualsToBudget(input: CopyActualsInput) {
   const { organizationId, userId } = await getAuthContext()
-
-  const planned = await planCopy(organizationId, input)
-  if ('error' in planned) return { error: planned.error }
-  const { drafts, input: v } = planned
-
-  if (drafts.length === 0) {
-    return { error: 'Não há realizado categorizado nesse período para copiar.' }
-  }
-
-  const notes = `Copiado do realizado de ${monthLabel(v.sourceFrom)} a ${monthLabel(v.sourceTo)}`
-    + (v.adjustmentPct !== 0 ? ` com ${v.adjustmentPct > 0 ? '+' : ''}${v.adjustmentPct}%` : '')
-
-  const result = await db.transaction(tx => applyDraftsToBudget(tx, {
-    organizationId,
-    versionId:       v.versionId,
-    userId,
-    drafts,
-    source:          'copia_realizado',
-    notes,
-    replaceExisting: v.replaceExisting ?? false,
-  }))
-
-  revalidatePath('/orcamento')
-  return { success: true as const, ...result }
+  const r = await aplicarCopia(organizationId, userId, input)
+  if ('success' in r) revalidatePath('/orcamento')
+  return r
 }
 
 /**
@@ -1491,7 +1245,7 @@ export async function previewBudgetCsv(
 ): Promise<{ preview: BudgetCsvParseResult; existing: { series: number; total: number } } | { error: string }> {
   const { organizationId } = await getAuthContext()
 
-  const loaded = await loadEditableVersion(organizationId, versionId)
+  const loaded = await carregarVersaoEditavel(organizationId, versionId)
   if ('error' in loaded) return { error: loaded.error }
 
   const lookups = await loadCsvLookups(organizationId)
@@ -1514,7 +1268,7 @@ export async function importBudgetCsv(
 ) {
   const { organizationId, userId } = await getAuthContext()
 
-  const loaded = await loadEditableVersion(organizationId, versionId)
+  const loaded = await carregarVersaoEditavel(organizationId, versionId)
   if ('error' in loaded) return { error: loaded.error }
 
   const lookups = await loadCsvLookups(organizationId)
@@ -1551,7 +1305,7 @@ export async function getRecurrenceCandidates(
 ): Promise<{ candidates: RecurrenceCandidate[] } | { error: string }> {
   const { organizationId } = await getAuthContext()
 
-  const loaded = await loadEditableVersion(organizationId, versionId)
+  const loaded = await carregarVersaoEditavel(organizationId, versionId)
   if ('error' in loaded) return { error: loaded.error }
 
   const [fluxo, aceitas] = await Promise.all([
@@ -1589,7 +1343,7 @@ export async function acceptDetectedRecurrences(
 ) {
   const { organizationId, userId } = await getAuthContext()
 
-  const loaded = await loadEditableVersion(organizationId, versionId)
+  const loaded = await carregarVersaoEditavel(organizationId, versionId)
   if ('error' in loaded) return { error: loaded.error }
 
   const parsed = z.array(recurrenceChoiceSchema).min(1, 'Escolha ao menos uma recorrência.').safeParse(choices)
@@ -1608,7 +1362,7 @@ export async function acceptDetectedRecurrences(
     if (!candidate) return { error: 'Uma das recorrências não está mais na lista. Reabra o diálogo.' }
     if (candidate.blocked) return { error: `"${candidate.descricao}": ${candidate.blocked}` }
 
-    const targetError = await validateTargetsBelongToOrg(organizationId, {
+    const targetError = await validarAlvos(organizationId, {
       categoryId:     choice.categoryId,
       costCenterId:   choice.costCenterId,
       businessUnitId: choice.businessUnitId,
