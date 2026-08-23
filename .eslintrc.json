@@ -6,5 +6,18 @@
       "varsIgnorePattern": "^_",
       "caughtErrorsIgnorePattern": "^_"
     }]
-  }
+  },
+  "overrides": [
+    {
+      "files": ["src/app/api/mcp/**/*.ts", "src/lib/mcp/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "patterns": [{
+            "group": ["@/server/*", "@/server", "**/server/*"],
+            "message": "O servidor MCP so importa de src/lib/**. Todo arquivo de src/server/ chama redirect(), que lanca NEXT_REDIRECT -- numa resposta JSON-RPC isso vira 500 opaco e o cliente ve a conexao quebrar sem motivo. Extraia a logica para src/lib/ e deixe a server action como casca."
+          }]
+        }]
+      }
+    }
+  ]
 }
