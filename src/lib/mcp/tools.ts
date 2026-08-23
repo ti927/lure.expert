@@ -13,16 +13,28 @@
 import { z } from 'zod'
 import { and, eq, isNotNull, inArray, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { memberships, organizations, transactions, categories } from '@/db/schema'
+import {
+  memberships, organizations, transactions, categories,
+  costCenters, businessUnits, legalEntities, contacts,
+} from '@/db/schema'
 import { scopeFromMcpGrant } from '@/lib/query/scope'
 import { runQuery, explicarQuery } from '@/lib/query/engine'
 import { querySpecSchema, type QuerySource } from '@/lib/query/spec'
 import { fontesDisponiveis } from '@/lib/query/sources'
 import { QueryValidationError, ScopeDeniedError } from '@/lib/query/errors'
+import {
+  assertLeafCategory, filtroClassificacaoSchema, resumirClassificacao,
+  classificarPorFiltro, TETO_CLASSIFICACAO,
+} from '@/lib/transactions-write'
+import {
+  registrarPrevia, consumirPrevia, divergiu, registrarAplicacao,
+  exigirConfirmacao, PALAVRA_DE_CONFIRMACAO,
+} from './preview'
 import type { Escopo } from '@/lib/oauth/clients'
 
 export interface ContextoMcp {
   userId: string
+  clientId: string
   organizationIds: string[]
   scopes: Escopo[]
 }
@@ -190,11 +202,269 @@ const explicarConsulta: Ferramenta = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Catálogos — o que o modelo precisa ler ANTES de escrever
+// ─────────────────────────────────────────────────────────────────────────────
+
+const listarCategorias: Ferramenta = {
+  nome: 'listar_categorias',
+  titulo: 'Listar naturezas',
+  descricao:
+    'O plano de contas. Três níveis (Tipo → Natureza pai → Natureza filho), e **só natureza filho ' +
+    'pode ser atribuída a um lançamento** — `atribuivel: true` marca quais. Chame antes de ' +
+    'classificar qualquer coisa: sem o id daqui não há como dizer para onde vai.',
+  entrada: alvo.extend({
+    busca: z.string().trim().min(2).max(60).optional()
+      .describe('Filtra por nome ou código, sem diferenciar maiúsculas.'),
+  }),
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const scope = await escopoDe(ctx, String(args.organizationId))
+    const busca = typeof args.busca === 'string' ? `%${args.busca}%` : null
+
+    const linhas = await db
+      .select({
+        id: categories.id,
+        codigo: categories.code,
+        nome: categories.name,
+        tipo: categories.type,
+        paiId: categories.parentId,
+        opexCapex: categories.opexCapex,
+        atribuivel: sql<boolean>`NOT EXISTS (
+          SELECT 1 FROM ${categories} f WHERE f.parent_id = ${categories.id}
+        )`,
+      })
+      .from(categories)
+      .where(and(
+        eq(categories.organizationId, scope.organizationId),
+        eq(categories.isActive, true),
+        ...(busca ? [sql`(${categories.name} ILIKE ${busca} OR ${categories.code} ILIKE ${busca})`] : []),
+      ))
+      .orderBy(categories.code)
+      .limit(400)
+
+    return { naturezas: linhas, total: linhas.length }
+  },
+}
+
+const listarDimensoes: Ferramenta = {
+  nome: 'listar_dimensoes',
+  titulo: 'Listar dimensões',
+  descricao:
+    'Centros de custo, unidades de negócio, entidades jurídicas e contatos (clientes/fornecedores) ' +
+    'cadastrados. São as quatro dimensões que classificam um lançamento além da natureza.',
+  entrada: alvo.extend({
+    quais: z.array(z.enum(['centro_de_custo', 'unidade_de_negocio', 'entidade_legal', 'contato']))
+      .optional().describe('Omitido, devolve as quatro.'),
+    busca: z.string().trim().min(2).max(60).optional(),
+  }),
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const scope = await escopoDe(ctx, String(args.organizationId))
+    const quais = (args.quais as string[] | undefined) ?? [
+      'centro_de_custo', 'unidade_de_negocio', 'entidade_legal', 'contato',
+    ]
+    const busca = typeof args.busca === 'string' ? `%${args.busca}%` : null
+    const saida: Record<string, unknown> = {}
+
+    const simples = async (tabela: typeof costCenters | typeof businessUnits | typeof legalEntities) =>
+      db.select({ id: tabela.id, nome: tabela.name, codigo: tabela.code })
+        .from(tabela)
+        .where(and(
+          eq(tabela.organizationId, scope.organizationId),
+          eq(tabela.isActive, true),
+          ...(busca ? [sql`${tabela.name} ILIKE ${busca}`] : []),
+        ))
+        .orderBy(tabela.name)
+        .limit(200)
+
+    if (quais.includes('centro_de_custo'))    saida.centrosDeCusto    = await simples(costCenters)
+    if (quais.includes('unidade_de_negocio')) saida.unidadesDeNegocio = await simples(businessUnits)
+    if (quais.includes('entidade_legal'))     saida.entidadesLegais   = await simples(legalEntities)
+
+    if (quais.includes('contato')) {
+      saida.contatos = await db
+        .select({
+          id: contacts.id,
+          nome: contacts.name,
+          // O extrato bancário traz o nome fantasia muito mais que a razão
+          // social — é por ele que o casamento costuma acontecer.
+          nomeFantasia: contacts.tradeName,
+          documento: contacts.document,
+          cliente: contacts.isCustomer,
+          fornecedor: contacts.isSupplier,
+        })
+        .from(contacts)
+        .where(and(
+          eq(contacts.organizationId, scope.organizationId),
+          eq(contacts.isActive, true),
+          ...(busca ? [sql`(${contacts.name} ILIKE ${busca} OR ${contacts.tradeName} ILIKE ${busca})`] : []),
+        ))
+        .orderBy(contacts.name)
+        .limit(200)
+    }
+
+    return saida
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Escrita — sempre em par prever_ → aplicar_
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FERRAMENTA_CLASSIFICACAO = 'classificacao_em_lote'
+
+const destinoClassificacao = z.object({
+  categoryId:     z.string().uuid().nullable().optional()
+    .describe('Natureza de destino. Só natureza FILHO — veja listar_categorias.'),
+  costCenterId:   z.string().uuid().nullable().optional(),
+  businessUnitId: z.string().uuid().nullable().optional(),
+  legalEntityId:  z.string().uuid().nullable().optional(),
+  contactId:      z.string().uuid().nullable().optional(),
+}).refine(d => Object.values(d).some(v => v !== undefined),
+  'Informe ao menos uma dimensão de destino.')
+
+const entradaPreverClassificacao = alvo.extend({
+  filtro: filtroClassificacaoSchema,
+  destino: destinoClassificacao,
+  criarRegras: z.boolean().default(true).describe(
+    'Cria uma regra por descrição única, para futuras importações caírem sozinhas no mesmo lugar.',
+  ),
+})
+
+const preverClassificacao: Ferramenta = {
+  nome: 'prever_classificacao_em_lote',
+  titulo: 'Prever classificação em lote',
+  descricao:
+    'Mostra o que uma reclassificação em lote faria, SEM fazer. Devolve quantos lançamentos, ' +
+    'quanto somam, uma amostra e quantas regras seriam criadas. Apresente esse resumo ao usuário ' +
+    'e obtenha o aceite dele ANTES de chamar aplicar_classificacao_em_lote.',
+  entrada: entradaPreverClassificacao,
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as z.infer<typeof entradaPreverClassificacao>
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    if (a.destino.categoryId) {
+      const erroCat = await assertLeafCategory(a.destino.categoryId, scope.organizationId)
+      if (erroCat) throw new Error(erroCat)
+    }
+
+    const resumo = await resumirClassificacao(scope.organizationId, a.filtro, a.destino)
+
+    if (resumo.quantidade === 0) {
+      return {
+        previaId: null,
+        resumo,
+        aviso: 'Nenhum lançamento casa com este filtro. Não há o que aplicar.',
+      }
+    }
+    if (resumo.excedeTeto) {
+      return {
+        previaId: null,
+        resumo,
+        aviso: `O filtro atinge ${resumo.quantidade} lançamentos e o teto por operação é ` +
+          `${TETO_CLASSIFICACAO}. Estreite o filtro — por período, por conta ou por valor.`,
+      }
+    }
+
+    const { previaId, expiraEm } = await registrarPrevia({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_CLASSIFICACAO,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resumo: { ...resumo },
+      pedido: { filtro: a.filtro, destino: a.destino, criarRegras: a.criarRegras },
+    })
+
+    return {
+      previaId,
+      expiraEm,
+      resumo,
+      ...(resumo.rateadosExcluidos > 0 ? {
+        aviso: `${resumo.rateadosExcluidos} lançamento(s) rateado(s) ficaram de fora: com rateio, ` +
+          'as dimensões ficam nas partes, não no lançamento. A natureza deles pode ser alterada normalmente.',
+      } : {}),
+      comoAplicar: `Mostre este resumo ao usuário. Com o aceite dele, chame ` +
+        `aplicar_classificacao_em_lote com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
+    }
+  },
+}
+
+const aplicarClassificacao: Ferramenta = {
+  nome: 'aplicar_classificacao_em_lote',
+  titulo: 'Aplicar classificação em lote',
+  descricao:
+    'Aplica a reclassificação de uma prévia. Exige o previaId e a palavra literal "aplicar". ' +
+    'Recalcula do zero e RECUSA se o conjunto mudou desde a prévia — nesse caso, gere outra. ' +
+    'Só chame depois de o usuário ter visto o resumo e concordado.',
+  entrada: alvo.extend({
+    previaId: z.string().uuid(),
+    confirmacao: z.string().describe('A palavra literal "aplicar".'),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; previaId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    const previa = await consumirPrevia({
+      previaId: a.previaId,
+      ferramenta: FERRAMENTA_CLASSIFICACAO,
+      organizationId: scope.organizationId,
+      userId: ctx.userId,
+    })
+    if (!previa.ok) throw new Error(previa.motivo)
+
+    const pedido = previa.pedido as {
+      filtro: Parameters<typeof resumirClassificacao>[1]
+      destino: Parameters<typeof resumirClassificacao>[2]
+      criarRegras?: boolean
+    }
+
+    // Recalcula. Se o mundo mudou entre prever e aplicar, recusa — aplicar
+    // sobre uma fotografia velha é como se apaga o trabalho de outra pessoa.
+    const agora = await resumirClassificacao(scope.organizationId, pedido.filtro, pedido.destino)
+    const problema = divergiu(previa.resumo, agora)
+    if (problema) throw new Error(problema)
+
+    const inicio = Date.now()
+    const r = await classificarPorFiltro(scope.organizationId, pedido.filtro, pedido.destino, {
+      criarRegras: pedido.criarRegras !== false,
+    })
+
+    await registrarAplicacao({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_CLASSIFICACAO,
+      previaId: a.previaId,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resultado: { ...r },
+      duracaoMs: Date.now() - inicio,
+    })
+
+    return {
+      aplicado: true,
+      lancamentosAtualizados: r.atualizados,
+      regrasAfetadas: r.regrasAfetadas,
+      observacao: r.regrasAfetadas > 0
+        ? `${r.regrasAfetadas} regra(s) gravada(s): importações futuras com a mesma descrição caem sozinhas neste destino.`
+        : undefined,
+    }
+  },
+}
+
 const CATALOGO: Ferramenta[] = [
   listarOrganizacoes,
   descreverOrganizacao,
+  listarCategorias,
+  listarDimensoes,
   consultar,
   explicarConsulta,
+  preverClassificacao,
+  aplicarClassificacao,
 ]
 
 /** O que este consentimento enxerga. */

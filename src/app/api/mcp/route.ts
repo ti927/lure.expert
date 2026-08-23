@@ -183,6 +183,7 @@ async function despachar(p: PedidoJsonRpc, portador: Portador): Promise<unknown 
       try {
         const saida = await f.executar(lidos.data as Record<string, unknown>, {
           userId: portador.userId,
+          clientId: portador.clientId,
           organizationIds: portador.organizationIds,
           scopes: portador.scopes,
         })

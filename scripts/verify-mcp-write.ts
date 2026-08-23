@@ -1,0 +1,318 @@
+/**
+ * Exercita as ferramentas de ESCRITA do MCP contra um `next start` de verdade.
+ *
+ *   npx next build
+ *   DATABASE_URL="<pooler>" npx next start -p 3100 &
+ *   DATABASE_URL="<pooler>" npx tsx scripts/verify-mcp-write.ts
+ *
+ * Ao contrário do teste de leitura, este ESCREVE — e escrever no dado de um
+ * cliente para testar seria reclassificar a contabilidade dele. Então o teste
+ * cria a própria organização, com usuário sintético e lançamentos próprios, e a
+ * apaga no fim (o CASCADE leva lançamentos, categorias, regras e eventos).
+ *
+ * Nada de real é tocado. Se o script morrer no meio, a organização sobra com o
+ * nome `ZZ Teste MCP escrita` e a execução seguinte a remove.
+ */
+import { db } from '@/db'
+import {
+  oauthClients, organizations, memberships, transactions, categories,
+  categorizationRules, costCenters, transactionAllocations, dataSources,
+} from '@/db/schema'
+import { and, eq, like, sql, isNotNull } from 'drizzle-orm'
+import { garantirGrant, emitirTokens } from '@/lib/oauth/store'
+
+const BASE = process.env.BASE_URL ?? 'http://localhost:3100'
+const RECURSO = `${BASE}/api/mcp`
+const NOME_ORG = 'ZZ Teste MCP escrita'
+const USUARIO = '33333333-3333-3333-3333-333333333333'
+
+let ok = 0, falhas = 0
+const t = (bom: boolean, msg: string) => { bom ? ok++ : falhas++; console.log(`${bom ? 'OK  ' : 'FALHA'} | ${msg}`) }
+
+let proximoId = 1
+async function rpc(token: string, method: string, params?: unknown) {
+  const r = await fetch(RECURSO, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: proximoId++, method, ...(params ? { params } : {}) }),
+  })
+  return JSON.parse(await r.text()) as Record<string, unknown>
+}
+
+async function chamar(token: string, name: string, args: Record<string, unknown>) {
+  const resp = await rpc(token, 'tools/call', { name, arguments: args })
+  const result = (resp.result ?? {}) as Record<string, unknown>
+  const erroProtocolo = resp.error as { code: number; message: string } | undefined
+  const conteudo = (result.content ?? []) as { text: string }[]
+  const texto = conteudo.map(c => c.text).join('\n')
+  let dados: unknown = result.structuredContent
+  if (dados === undefined) { try { dados = JSON.parse(texto) } catch { dados = null } }
+  return { dados, isError: result.isError === true, texto, erroProtocolo }
+}
+
+async function limpar() {
+  await db.delete(oauthClients).where(like(oauthClients.clientName, 'ZZ Teste MCP%'))
+  await db.delete(organizations).where(eq(organizations.name, NOME_ORG))
+}
+
+async function main() {
+  await limpar()
+
+  // ═══ Cenário isolado ══════════════════════════════════════════════════════
+  const [org] = await db.insert(organizations).values({
+    name: NOME_ORG, slug: `zz-teste-mcp-escrita-${Date.now()}`,
+  }).returning({ id: organizations.id })
+  const ORG = org.id
+
+  await db.insert(memberships).values({
+    userId: USUARIO, organizationId: ORG, role: 'owner', acceptedAt: new Date(),
+  })
+
+  // O gatilho de INSERT em `organizations` semeia o plano de contas — é dele que
+  // saem as naturezas de verdade que o teste vai usar como destino.
+  const [{ n: semeadas }] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM categories WHERE organization_id = ${ORG}::uuid`)
+  t(Number(semeadas) > 0, `plano de contas semeado pelo gatilho (${semeadas} naturezas)`)
+
+  const [cc] = await db.insert(costCenters).values({
+    organizationId: ORG, name: 'Comercial',
+  }).returning({ id: costCenters.id })
+
+  // `transactions.data_source_id` é NOT NULL — todo lançamento vem de alguma
+  // origem, mesmo os digitados.
+  const [fonte] = await db.insert(dataSources).values({
+    organizationId: ORG, type: 'manual', provider: 'teste', name: 'Origem de teste',
+  }).returning({ id: dataSources.id })
+
+  const lancamentos = [
+    { desc: 'UBER *TRIP 001', valor: '250.00' },
+    { desc: 'UBER *TRIP 002', valor: '310.00' },
+    { desc: 'UBER *TRIP 003', valor: '120.00' },  // abaixo de 200, fica de fora
+    { desc: 'POSTO IPIRANGA', valor: '400.00' },  // outra descrição
+  ]
+  await db.insert(transactions).values(lancamentos.map(l => ({
+    organizationId: ORG, dataSourceId: fonte.id, date: '2026-03-10', amount: l.valor,
+    direction: 'outflow', description: l.desc, status: 'confirmed',
+  })))
+
+  // Um lançamento RATEADO, para provar que ele fica de fora quando a
+  // classificação mexe em dimensão. As partes entram na mesma transação porque
+  // a soma exata é conferida por gatilho deferido até o commit.
+  await db.transaction(async (tx) => {
+    const [pai] = await tx.insert(transactions).values({
+      organizationId: ORG, dataSourceId: fonte.id, date: '2026-03-11', amount: '100.00',
+      direction: 'outflow', description: 'UBER *TRIP RATEADA', status: 'confirmed',
+    }).returning({ id: transactions.id })
+    await tx.insert(transactionAllocations).values([
+      { organizationId: ORG, transactionId: pai.id, sequence: 1, amount: '60.00', costCenterId: cc.id },
+      { organizationId: ORG, transactionId: pai.id, sequence: 2, amount: '40.00' },
+    ])
+  })
+
+  // ═══ Dois consentimentos: um só de leitura, outro com escrita ════════════
+  console.log('\n── escopo ──')
+
+  await db.insert(oauthClients).values([
+    { clientId: 'zz_cli_leitura', clientName: 'ZZ Teste MCP leitura', redirectUris: [`${BASE}/cb`] },
+    { clientId: 'zz_cli_escrita', clientName: 'ZZ Teste MCP escrita', redirectUris: [`${BASE}/cb`] },
+  ])
+  const grantL = await garantirGrant({ userId: USUARIO, clientId: 'zz_cli_leitura', organizationIds: [ORG], scopes: ['leitura'] })
+  const grantE = await garantirGrant({ userId: USUARIO, clientId: 'zz_cli_escrita', organizationIds: [ORG], scopes: ['leitura', 'escrita'] })
+  const { accessToken: soLeitura } = await emitirTokens(grantL, RECURSO, ['leitura'])
+  const { accessToken: comEscrita } = await emitirTokens(grantE, RECURSO, ['leitura', 'escrita'])
+
+  const catalogoL = ((await rpc(soLeitura, 'tools/list')).result as { tools: { name: string }[] }).tools
+  t(!catalogoL.some(f => f.name.startsWith('prever_') || f.name.startsWith('aplicar_')),
+    `consentimento de leitura NÃO enxerga as ferramentas de escrita (${catalogoL.length} ferramentas)`)
+
+  const tentativa = await chamar(soLeitura, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'UBER' }, destino: { categoryId: null },
+  })
+  t(tentativa.erroProtocolo?.code === -32601,
+    'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
+
+  const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
+  t(catalogoE.length === catalogoL.length + 2,
+    `com escrita, o catálogo ganha o par prever_/aplicar_ (${catalogoE.length} ferramentas)`)
+
+  // ═══ Naturezas ════════════════════════════════════════════════════════════
+  console.log('\n── catálogos ──')
+
+  const cats = await chamar(comEscrita, 'listar_categorias', { organizationId: ORG, busca: 'via' })
+  const naturezas = (cats.dados as { naturezas: { id: string; nome: string; atribuivel: boolean }[] })?.naturezas ?? []
+  t(naturezas.length > 0, `listar_categorias com busca devolve ${naturezas.length} natureza(s)`)
+
+  const [folha] = await db.select({ id: categories.id, nome: categories.name })
+    .from(categories)
+    .where(and(
+      eq(categories.organizationId, ORG),
+      isNotNull(categories.parentId),
+      sql`NOT EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = ${categories.id})`,
+    ))
+    .limit(1)
+  const [paiComFilho] = await db.select({ id: categories.id })
+    .from(categories)
+    .where(and(
+      eq(categories.organizationId, ORG),
+      sql`EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = ${categories.id})`,
+    ))
+    .limit(1)
+
+  const dims = await chamar(comEscrita, 'listar_dimensoes', { organizationId: ORG, quais: ['centro_de_custo'] })
+  t(((dims.dados as { centrosDeCusto: unknown[] })?.centrosDeCusto ?? []).length === 1,
+    'listar_dimensoes devolve o centro de custo cadastrado')
+
+  // ═══ Prévia: as recusas ═══════════════════════════════════════════════════
+  console.log('\n── prévia: o que ela recusa ──')
+
+  const vazio = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: {}, destino: { categoryId: folha.id },
+  })
+  t(vazio.isError && vazio.texto.includes('critério'),
+    'filtro VAZIO é recusado — casaria com a base inteira da organização')
+
+  const emPai = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'UBER' }, destino: { categoryId: paiComFilho.id },
+  })
+  t(emPai.isError && emPai.texto.includes('subcategorias'),
+    'natureza PAI é recusada — só folha pode receber lançamento')
+
+  const semDestino = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'UBER' }, destino: {},
+  })
+  t(semDestino.isError, 'destino vazio é recusado')
+
+  const semCasar = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'NAO_EXISTE_ISSO' }, destino: { categoryId: folha.id },
+  })
+  t((semCasar.dados as { previaId: string | null })?.previaId === null,
+    'filtro que não casa com nada não gera prévia — não há o que aplicar')
+
+  // ═══ Prévia: o resumo ═════════════════════════════════════════════════════
+  console.log('\n── prévia: o que ela mostra ──')
+
+  const previa = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG,
+    filtro: { descricaoContem: 'UBER', valorMinimo: 200 },
+    destino: { categoryId: folha.id },
+  })
+  const p = previa.dados as {
+    previaId: string
+    resumo: { quantidade: number; valorTotal: number; regrasAfetadas: number; amostra: unknown[] }
+  }
+  t(p.resumo.quantidade === 2, `atinge 2 lançamentos — o de R$ 120 ficou fora pelo valor (${p.resumo.quantidade})`)
+  t(Math.abs(p.resumo.valorTotal - 560) < 0.01, `soma R$ ${p.resumo.valorTotal.toFixed(2)} (250 + 310)`)
+  t(p.resumo.regrasAfetadas === 2, 'diz que criará 2 regras — descrições diferentes, regras diferentes')
+  t(p.resumo.amostra.length === 2, 'traz amostra para o usuário conferir antes de aceitar')
+  t(typeof p.previaId === 'string', 'devolve um previaId')
+
+  // Rateado só é excluído quando a classificação mexe em DIMENSÃO; a natureza
+  // de um lançamento rateado continua sendo uma só, e pode ser alterada.
+  const comDimensao = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'UBER' }, destino: { costCenterId: cc.id },
+  })
+  const pd = comDimensao.dados as { resumo: { rateadosExcluidos: number; quantidade: number } }
+  t(pd.resumo.rateadosExcluidos === 1,
+    'ao mexer em dimensão, o lançamento RATEADO fica de fora e a prévia diz isso')
+  t(pd.resumo.quantidade === 3,
+    'e os 3 não rateados seguem no lote (o gatilho do banco recusaria o rateado)')
+
+  // ═══ Aplicação: os dentes ═════════════════════════════════════════════════
+  console.log('\n── aplicação: o que ela recusa ──')
+
+  const semPalavra = await chamar(comEscrita, 'aplicar_classificacao_em_lote', {
+    organizationId: ORG, previaId: p.previaId, confirmacao: 'sim',
+  })
+  t(semPalavra.isError && semPalavra.texto.includes('aplicar'),
+    'sem a palavra literal "aplicar", recusa')
+
+  const previaInventada = await chamar(comEscrita, 'aplicar_classificacao_em_lote', {
+    organizationId: ORG, previaId: '00000000-0000-0000-0000-000000000000', confirmacao: 'aplicar',
+  })
+  t(previaInventada.isError && previaInventada.texto.includes('não encontrada'),
+    'previaId inventado: recusa')
+
+  // ── O dente principal: o mundo mudou entre prever e aplicar ──────────────
+  await db.insert(transactions).values({
+    organizationId: ORG, dataSourceId: fonte.id, date: '2026-03-12', amount: '999.00',
+    direction: 'outflow', description: 'UBER *TRIP 004', status: 'confirmed',
+  })
+
+  const divergente = await chamar(comEscrita, 'aplicar_classificacao_em_lote', {
+    organizationId: ORG, previaId: p.previaId, confirmacao: 'aplicar',
+  })
+  t(divergente.isError && divergente.texto.includes('2') && divergente.texto.includes('3'),
+    'entrou um lançamento novo no filtro: RECUSA, dizendo 2 → 3 — nada foi aplicado')
+
+  const [{ n: intactos }] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM transactions
+    WHERE organization_id = ${ORG}::uuid AND category_id IS NOT NULL`)
+  t(Number(intactos) === 0, 'e nenhum lançamento foi tocado pela tentativa recusada')
+
+  // ═══ Aplicação: o caminho feliz ═══════════════════════════════════════════
+  console.log('\n── aplicação: o caminho feliz ──')
+
+  const previa2 = await chamar(comEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG,
+    filtro: { descricaoContem: 'UBER', valorMinimo: 200 },
+    destino: { categoryId: folha.id },
+  })
+  const p2 = previa2.dados as { previaId: string; resumo: { quantidade: number } }
+  t(p2.resumo.quantidade === 3, 'a prévia nova já conta os 3 — inclusive o que entrou depois')
+
+  const aplicado = await chamar(comEscrita, 'aplicar_classificacao_em_lote', {
+    organizationId: ORG, previaId: p2.previaId, confirmacao: 'aplicar',
+  })
+  const res = aplicado.dados as { aplicado: boolean; lancamentosAtualizados: number; regrasAfetadas: number }
+  t(!aplicado.isError && res.lancamentosAtualizados === 3, `aplicou em ${res.lancamentosAtualizados} lançamentos`)
+  t(res.regrasAfetadas === 3, `gravou ${res.regrasAfetadas} regras — uma por descrição única`)
+
+  const [{ n: classificados }] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM transactions
+    WHERE organization_id = ${ORG}::uuid AND category_id = ${folha.id}::uuid`)
+  t(Number(classificados) === 3, 'e o banco confirma: 3 lançamentos com a natureza gravada')
+
+  const [{ n: naoTocado }] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM transactions
+    WHERE organization_id = ${ORG}::uuid AND category_id IS NULL`)
+  t(Number(naoTocado) === 3, 'o de R$ 120, o POSTO e o rateado seguem sem natureza — o filtro foi respeitado')
+
+  const regras = await db.select({ id: categorizationRules.id })
+    .from(categorizationRules).where(eq(categorizationRules.organizationId, ORG))
+  t(regras.length === 3, `${regras.length} regras no banco — importações futuras caem sozinhas`)
+
+  const reaplicar = await chamar(comEscrita, 'aplicar_classificacao_em_lote', {
+    organizationId: ORG, previaId: p2.previaId, confirmacao: 'aplicar',
+  })
+  t(reaplicar.isError && reaplicar.texto.includes('já foi aplicada'),
+    'a MESMA prévia não aplica duas vezes — consumo atômico')
+
+  // ═══ Auditoria ════════════════════════════════════════════════════════════
+  console.log('\n── auditoria ──')
+
+  const [aud] = await db.execute<{ previas: number; aplicadas: number }>(sql`
+    SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
+           COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
+    FROM agent_events WHERE organization_id = ${ORG}::uuid`)
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 1,
+    `${aud.previas} prévias e ${aud.aplicadas} aplicação registradas em agent_events`)
+
+  const [carimbo] = await db.execute<{ tem: boolean }>(sql`
+    SELECT (payload ? 'confirmed_at' AND payload ? 'applied_at') AS tem
+    FROM agent_events WHERE organization_id = ${ORG}::uuid AND type = 'mcp_applied' LIMIT 1`)
+  t(carimbo?.tem === true, 'a aplicação carrega confirmed_at e applied_at, como o princípio 10 pede')
+
+  await limpar()
+  const [{ n: sobrou }] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM transactions WHERE organization_id = ${ORG}::uuid`)
+  t(Number(sobrou) === 0, 'limpeza: apagar a organização de teste levou tudo junto')
+
+  console.log(`\n${ok} ok, ${falhas} falha(s)`)
+  process.exit(falhas > 0 ? 1 : 0)
+}
+
+main().catch(async (e) => {
+  console.error('ERRO:', e)
+  try { await limpar() } catch { /* nada */ }
+  process.exit(1)
+})
