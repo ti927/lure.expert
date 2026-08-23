@@ -214,8 +214,24 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 
 ## Próximo passo
 
+**Nada em andamento — a Fase 10 fechou.** As frentes abertas, sem ordem decidida:
+
+| Frente | O que falta | Tamanho |
+|---|---|---|
+| **Fase 8 — Adquirentes** (pausada em 8.1) | 8.2 upload de extratos, 8.3 Cielo, 8.4 reconciliação lote × vendas, 8.5 UX + MDR | média |
+| **Fase 11 — Agente Proativo** | job diário de insights, alertas WhatsApp/e-mail, fechamento mensal narrado | ~2 semanas |
+| **Fase 12 — Onboarding, Billing, Lançamento** | onboarding guiado, Stripe, planos com limites, trial que expira, `/pricing` | 2–3 semanas |
+| **Contato pela NF-e** (avulsa) | `invoices.contact_id` existe e nunca foi escrito; alimentaria sozinha a dimensão da Fase 10 | curta |
+| **`vercel.json` com `regions`** | versionar a região `gru1`, hoje só no painel (ver Infraestrutura) | trivial |
+
+Recomendação registrada: **contato pela NF-e** tem a melhor relação custo/benefício agora — é curta
+e faz o cadastro de contatos crescer sozinho, que hoje depende de digitação. Se a prioridade for
+vender, a **Fase 12** é a que destrava.
+
+---
+
 **Fase 10 — Dimensões: cliente/fornecedor e rateio. CONCLUÍDA.** Migrations 0025, 0026 e 0027
-aplicadas e conferidas contra o banco; 10.4 confirmada na tela.
+aplicadas e conferidas contra o banco; 10.4 e 10.5 confirmadas na tela.
 
 | Sessão | Entrega | Status |
 |---|---|---|
@@ -425,6 +441,36 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 ---
 
 ## Infraestrutura de Produção (Vercel + Supabase)
+
+### Região da Vercel — `gru1` (São Paulo), nunca a padrão
+
+A **Function Region** do projeto tem de ser **São Paulo (`gru1`)**. O padrão da Vercel é
+`iad1` (Washington), e o banco está em `sa-east-1` (São Paulo) — com a função nos EUA, **toda
+consulta atravessa o Atlântico duas vezes**.
+
+**Como conferir em 5 segundos:**
+```
+curl -s -D - -o /dev/null https://lure-expert.vercel.app/login | grep -i x-vercel-id
+```
+O formato é `X-Vercel-Id: <edge>::<função>::<id>`. Tem de sair `gru1::gru1`. Se sair
+`gru1::iad1`, a requisição entra em São Paulo e é despachada para Washington para renderizar.
+
+**Por que dói tanto:** toda página autenticada faz no mínimo **3 idas sequenciais** ao banco antes
+de mostrar qualquer coisa — `auth.getUser()` (HTTPS ao Supabase), o membership (Postgres) e só
+então os dados. De `iad1` cada ida custa ~110–125ms; três sequenciais são ~360ms de rede pura por
+página, e fria o handshake TLS acrescenta mais 3 idas e voltas por conexão. De `gru1` para
+`sa-east-1` é a mesma cidade, ~1–5ms.
+
+**Medido na produção, antes e depois** (TTFB de `/login`, que quase não toca o banco):
+`400–427ms morno / 850ms frio` → **`258–269ms morno / 457ms frio`**.
+
+**Onde trocar:** Vercel → Settings → Functions → Function Region → São Paulo (`gru1`), e
+**redeploy** (deployments existentes ficam na região antiga). Os jobs Inngest e os crons rodam na
+mesma região da função, então ganham junto.
+
+⚠️ **A escolha vive no painel, não no repositório.** Um projeto Vercel recriado do zero volta
+silenciosamente para `iad1`. Versionar isso é um `vercel.json` com `{ "regions": ["gru1"] }` —
+ainda não feito.
 
 ### DATABASE_URL — usar Transaction Pooler, nunca conexão direta
 

@@ -6,6 +6,153 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão de infraestrutura — a função rodava nos EUA e o banco no Brasil — *deployada*
+
+**Sintoma relatado:** "o app está respondendo muito lento".
+
+**Diagnóstico, em um cabeçalho.** `curl -D -` na produção devolvia:
+
+```
+X-Vercel-Id: gru1::iad1::bzztb-...
+```
+
+O formato é `<edge>::<função>::<id>`. A requisição **entrava em São Paulo** e era despachada para
+**Washington (`iad1`, a região padrão da Vercel)** para renderizar — e a função então conversava com
+o Supabase, de volta em São Paulo. Cada consulta atravessava o Atlântico duas vezes.
+
+**O multiplicador:** toda página autenticada faz no mínimo **3 idas sequenciais** ao Brasil antes de
+mostrar qualquer coisa — `auth.getUser()` (HTTPS ao Supabase), depois o membership (Postgres), e só
+então as consultas de dados. De `iad1` para `sa-east-1` cada ida custa ~110–125ms; três sequenciais
+são ~360ms de rede pura por página, morna. Fria, o handshake TLS é mais 3 idas e voltas por conexão.
+
+**Medido antes:** TTFB de `/login` 400–427ms morno, 850ms frio — e `/login` quase não toca o banco.
+Ida e volta daqui ao pooler 47ms; abrir conexão do zero ~300ms; trabalho real das consultas
+`/transacoes` pág. 1 ≈ 97ms, DRE 12 meses ≈ 52ms, plano de contas ≈ 55ms.
+
+**Correção:** Vercel → Settings → Functions → Function Region → **São Paulo (`gru1`)** + redeploy.
+
+**Medido depois:** `X-Vercel-Id: gru1::gru1::...`, TTFB **258–269ms morno** e **457ms frio**.
+
+**Por que não teve contrapartida:** trocar região normalmente aproxima uns usuários e afasta outros.
+Aqui não — o produto é PT-BR, BRL, PME brasileira, e o banco está em São Paulo. Usuário, função e
+banco passaram a ficar na mesma cidade. Os jobs Inngest e os crons rodam na mesma região da função,
+então o sync do Pluggy, a categorização e a reconciliação ganharam junto.
+
+**Pendência conhecida:** a região foi configurada **no painel da Vercel, não no repositório**. Um
+`vercel.json` com `{ "regions": ["gru1"] }` deixaria a escolha versionada — sem ele, um projeto
+Vercel recriado do zero volta silenciosamente para `iad1`.
+
+**O que a mudança não conserta:** as três idas sequenciais continuam existindo, só ficaram baratas.
+O trabalho das consultas também continua.
+
+---
+
+### ✅ Sessão 10.5 — Modelos de rateio reutilizáveis — *commit `c4616c7`*
+
+**Entregue:**
+- [db/migrations/rls/0027_allocation_templates.sql](db/migrations/rls/0027_allocation_templates.sql) — `allocation_templates` + `allocation_template_lines` + `transaction_allocations.allocation_template_id` + 5 índices + RLS (8 policies) + 2 triggers `updated_at`.
+- [db/schema/allocation-templates.ts](db/schema/allocation-templates.ts), [src/server/allocation-templates.ts](src/server/allocation-templates.ts) (5 actions).
+- [src/components/transacoes-shared/weight-rows-editor.tsx](src/components/transacoes-shared/weight-rows-editor.tsx) — **extraído** do diálogo de lote e reusado pelo editor de modelos.
+- [src/components/transacoes-shared/allocation-template-bar.tsx](src/components/transacoes-shared/allocation-template-bar.tsx) — `Aplicar modelo ▾ | Salvar como modelo`, nos dois diálogos de rateio.
+- [src/app/(authenticated)/configuracoes/modelos-de-rateio/page.tsx](src/app/(authenticated)/configuracoes/modelos-de-rateio/page.tsx) + [src/components/settings/allocation-template-manager.tsx](src/components/settings/allocation-template-manager.tsx).
+- `reduceWeights`, `normalizeWeights`, `formatProportion` em [src/lib/allocation-math.ts](src/lib/allocation-math.ts).
+
+**Defeito encontrado escrevendo o teste, antes de aplicar a migration.** Eu tinha posto
+`weight numeric(12,4)`, que comporta 8 dígitos inteiros. Como o diálogo individual salva os
+**centavos** do rateio como peso, um lançamento acima de R$ 1 milhão viraria peso 100.000.000 e
+estouraria a coluna. Virou `(18,6)`. O mesmo teste motivou `reduceWeights`: sem redução pelo MDC,
+quem abrisse o modelo no editor veria campos de peso com "720000" e "480000".
+
+**Verificado:** migration 19/19 com ROLLBACK antes de aplicar, 22/22 conferida contra o banco
+depois. Aritmética 19/19, incluindo **2.500 aplicações sobre 500 valores reais** fechando o centavo
+exato e o ciclo rateio → modelo → rateio devolvendo as mesmas partes nos 500.
+
+Decisões de desenho em `docs/SCHEMA_DECISIONS.md` Decisão 17.
+
+---
+
+### ✅ Sessão 10.4 — UI do rateio
+
+Diálogo por lançamento (dois campos por parte, valor **e** %, com o valor canônico), linha
+expansível em `/transacoes` mostrando as partes, e rateio em lote por proporção com prévia por
+lançamento. Atalhos: "Dividir igualmente" e duplo clique no valor para receber o resto.
+
+**Bug de produção, e o mais instrutivo da fase.** Gravar um rateio dava
+`Application error: a server-side exception has occurred`. Causa: `toCents` apagava **todos** os
+pontos, tratando qualquer texto como formato brasileiro. `transactions.amount` chega do Postgres
+como `"467.62"` — ponto DECIMAL — e virava 46.762 centavos. O diálogo passou a exigir partes
+somando R$ 46.762,00 num lançamento de R$ 467,62; a validação do servidor concordava (mesma
+função, mesmo erro) e só o gatilho do banco percebia, no commit — sem `try/catch`, a exceção subia
+crua. Fix: a vírgula desempata (existe → brasileiro; não existe → o ponto é decimal), mais catch
+loud em `saveAllocations` repassando a mensagem do `RAISE`. Verificado 13/13, incluindo 300 valores
+reais da tabela.
+
+**A falha por trás da falha:** os 19 testes anteriores da aritmética cobriam `'1.234,56'` e números,
+e **nenhum** cobria uma string vinda do banco. O caminho banco → diálogo era justamente o não coberto.
+
+---
+
+### ✅ Sessão 10.3 — As leituras passam a respeitar o rateio
+
+Eram **nove** leituras, não sete, e de duas naturezas.
+
+**Analíticas** (DRE, drill-down da DRE, fluxo mensal, drill-down do balanço, drill-down do
+dashboard, realizado do Orçado × Realizado, `collectActuals`) trocaram `FROM transactions` por
+`FROM transaction_lines`.
+
+**Operacionais** (`/transacoes`, fila de revisão) **não podem** ler a view — listam um lançamento
+por linha e a view as multiplicaria. Nelas o filtro virou `dimensionExistsFilter`, um `EXISTS` sobre
+a view. Isso conserta dois defeitos que a coluna direta criaria: filtrar "Comercial" **esconderia**
+o lançamento rateado para Comercial (com rateio a coluna do pai é nula), e "Sem centro de custo"
+pegaria **todo** rateado, inclusive os 100% classificados. A cobertura de dimensão do orçamento
+também passou pela view, senão acusaria como "sem CC" justamente quem rateou.
+
+Contagem virou `COUNT(DISTINCT transaction_id)` — o campo promete lançamentos.
+
+**Verificado:** 297 células da DRE idênticas entre a query velha e a nova; com rateio 600/400 o
+total da categoria não muda. Custo medido: DRE 0%, filtro de dimensão +8%.
+
+---
+
+### ✅ Sessão 10.2 — Schema do rateio, e a mudança de modelo
+
+O CLAUDE.md registrava rateio como "percentual independente por dimensão", cruzado por uma view.
+Ao explicar o desenho para decidir o schema, **o Julio propôs sub-lançamentos** — e dois defeitos do
+desenho antigo ficaram visíveis: cruzar 60/40 de centro de custo com 70/30 de contato **inventa** a
+célula "Admin + Cliente B", que ninguém afirmou, e a multiplicação das proporções reintroduz fração
+de centavo mesmo com cada dimensão fechando exata. O modelo dele foi adotado.
+
+**Soma exata é regra do banco**, num `CONSTRAINT TRIGGER` **deferido até o commit** — `CHECK` enxerga
+uma linha por vez e a soma é propriedade do conjunto; deferido, dá para inserir as três partes de
+333 uma a uma. O mesmo gatilho cobre apagar parte, editar parte e editar o valor do pai. Com rateio
+as dimensões do pai ficam **vazias**, e o gatilho recusa o contrário: preenchidas, toda leitura
+ainda não migrada atribuiria o valor **integral** a uma das partes.
+
+**Verificado:** 15/15 rodando a migration dentro de uma transação com ROLLBACK antes de aplicar,
+22/22 conferida contra o banco depois. Decisão 16 em SCHEMA_DECISIONS.
+
+---
+
+### ✅ Sessão 10.1 — Contato vira a 4ª dimensão da classificação
+
+**Backend:** lista de contatos no system prompt do Haiku com nome fantasia, documento e papel — o
+extrato traz o fantasia muito mais que a razão social; teto de 400 com o corte declarado ao modelo.
+Piso de confiança de 70 **só** no contato, a única dimensão que casa contra a descrição do extrato.
+
+**Papel desempata, não veta.** A primeira versão mandava recusar papel divergente; o Haiku ignorou,
+e com razão — estorno e devolução a cliente são saídas.
+
+**Dois defeitos que tornavam o resto inerte:** `catConf === 0` **descartava o resultado inteiro**,
+jogando fora contato de 95% de confiança; e o `set` fixo do job **apagava com null** toda dimensão
+não reconhecida na passada — inclusive classificação manual, porque "Categorizar agora" reprocessa.
+
+**Telas:** coluna, filtro e ordenação em `/transacoes`; quinto campo no batch; filtro + coluna em
+`/transacoes/revisao`; alvo de contato nas regras.
+
+**Verificado:** 7/7 casos de classificação contra o banco com Haiku real.
+
+---
+
 ### ✅ Sessão 10.0 — Contatos viram cadastro (4a dimensão), parte 1
 
 Primeira sessão da Fase 10. `contacts` existia desde a Fase 1 e **nunca teve uma linha escrita por
