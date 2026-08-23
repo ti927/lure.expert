@@ -137,6 +137,9 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `budget-read.ts` | `fetchBudgetRows` — a leitura do orçado que `/dre` e `/orcamento` compartilham |
 | `allocation-math.ts` | aritmética do rateio em centavos inteiros: `toCents`, `splitEqually`, `applyProportion` (maior resto), `reduceWeights` (MDC), `normalizeWeights`/`formatProportion` |
 | `ai-pricing.ts` | tabela de preço por modelo, `calcCostUsd`, conversão USD→BRL, `estimarCustoCategorizacao` |
+| `oauth/tokens.ts` | geração e hash (SHA-256) dos tokens, TTLs, `tokenVivo` — **revogação vence validade** |
+| `oauth/pkce.ts` | PKCE só com `S256`; `plain` é recusado porque anularia a proteção |
+| `oauth/clients.ts` | registro dinâmico (RFC 7591), validação de redirect por igualdade **exata**, catálogo de escopos |
 | `crypto.ts` | AES-256-GCM para segredos que precisam **voltar** ao texto claro (a chave da Anthropic do cliente). Nada a ver com `encryptApiKey` de `sefaz.ts`, que é só base64 |
 | `ai-key-test.ts` | `testarChaveAnthropic` — chamada de 1 token que valida a chave antes de gravá-la, com erro traduzido para algo acionável |
 | `ai-access.ts` | `resolverAcessoIa(organizationId, exec?)` — o funil que responde "pode chamar a IA agora, e com qual chave?". Recusa é descritiva, não exceção |
@@ -254,7 +257,10 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 1.4 | Tabelas de dashboard (migration 0028) + `block-spec.ts` antecipados da Fase 5 | ✅ |
 | 2.0 | Chave de IA por organização (AES-256-GCM), teto, alerta e degradação — **backend** | ✅ |
 | 2.1 | Tela de cadastro da chave e do teto | ✅ (aguardando confirmação na tela) |
-| 3 | Servidor MCP remoto com OAuth 2.1 | 🔲 |
+| 3.0 | Miolo do OAuth: tabelas `mcp_oauth_*` (migration 0030), tokens com hash, PKCE, validação de cliente | ✅ **migration pendente de aplicação** |
+| 3.1 | Endpoints OAuth: descoberta, registro dinâmico, `/authorize` com consentimento, `/token` | 🔲 |
+| 3.2 | Servidor MCP + ferramentas de leitura | 🔲 |
+| 3.3 | Ferramentas de escrita com preview→confirm | 🔲 |
 | 4 | Convites e papéis | 🔲 |
 | 5 | Dashboard configurável | 🔲 |
 
@@ -362,6 +368,7 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
 - ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
 - ✅ `db/migrations/rls/0026_transaction_allocations.sql` — `transaction_allocations` + view `transaction_lines` + RLS + os gatilhos da invariante do rateio. Aplicação conferida contra o banco (22/22): 12 colunas, 2 CHECKs, 6 índices, RLS com as 4 policies, os 2 gatilhos com `tgdeferrable` e `tginitdeferred` verdadeiros, `security_invoker=true` na view, e as regras exercitadas de verdade — soma que não fecha, dimensão no pai, edição do valor e 51 partes recusadas, tudo revertido ao fim
+- 🔲 `db/migrations/rls/0030_oauth_mcp.sql` — `mcp_oauth_clients`, `mcp_oauth_access_grants`, `mcp_oauth_authorization_codes`, `mcp_oauth_tokens` + 5 índices + RLS. **Prefixo `mcp_` obrigatório:** o Supabase já tem `auth.oauth_clients` e companhia. **Validada mas ainda NÃO aplicada:** 45/45 com ROLLBACK
 - ✅ `db/migrations/rls/0029_organization_ai_settings.sql` — `organization_ai_settings` (chave cifrada, teto, alerta) + 5 CHECKs + RLS (4 policies) + trigger + **backfill das organizações existentes em `'platform'`**. Validada antes (22/22 com ROLLBACK) e conferida depois contra o banco: `numeric(10,2)` no teto, os 5 CHECKs, as 4 policies, e o backfill com 6/6 organizações em `platform` e nenhuma chave cadastrada
 - ✅ `db/migrations/rls/0028_dashboards.sql` — `dashboards` + `dashboard_blocks` + `dashboard_shares` + 8 índices + RLS (12 policies) + 2 triggers `updated_at`. Validada antes (24/24 com ROLLBACK) e conferida depois contra o banco (27/27 no total das duas): índice parcial do painel padrão, índice único do alvo de compartilhamento, CASCADE do painel para blocos, e as regras de coerência recusando de verdade
 - ✅ `db/migrations/rls/0027_allocation_templates.sql` — `allocation_templates` + `allocation_template_lines` + `transaction_allocations.allocation_template_id` + 5 índices + RLS (8 policies) + 2 triggers `updated_at`. Validada antes com ROLLBACK (19/19) e conferida depois contra o banco (22/22): `weight numeric(18,6)`, os 3 CHECKs, CASCADE da linha, SET NULL no carimbo e nas 4 dimensões, índice único e índice parcial, RLS com as 4 policies em cada tabela, e as regras exercitadas de verdade — nome duplicado por caixa/espaço recusado, peso de 9 dígitos e de 6 decimais gravados, CASCADE ao apagar o modelo, tudo revertido ao fim
