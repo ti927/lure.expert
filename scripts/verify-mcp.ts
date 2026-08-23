@@ -145,6 +145,22 @@ async function main() {
   t(obrigatorios.includes('organizationId') && obrigatorios.includes('periodo') && !obrigatorios.includes('limite'),
     'io:input funcionou — só o que não tem default é obrigatório (limite ficou de fora)')
 
+  // O catálogo tem de descrever o que o servidor FAZ. `balanco` está no enum do
+  // Zod e não está no registro do motor: anunciá-la faria o modelo oferecê-la ao
+  // usuário e falhar só na chamada.
+  const fontes = ((props.fonte ?? {}) as { enum?: string[] }).enum ?? []
+  t(fontes.length === 3 && !fontes.includes('balanco'),
+    `só as fontes que o motor registra são anunciadas (${fontes.join(', ')})`)
+
+  const fonteInexistente = saida(await rpc(accessToken, 'tools/call', {
+    name: 'consultar',
+    arguments: {
+      organizationId: EMPRESA, fonte: 'balanco',
+      periodo: { tipo: 'snapshot', em: '2026-06-30' },
+    },
+  }))
+  t(fonteInexistente.isError, 'e pedir balanço é recusado, com a lista do que existe')
+
   const desconhecida = await rpc(accessToken, 'tools/call', { name: 'apagar_tudo', arguments: {} })
   t((desconhecida.json?.error as { code: number })?.code === -32601,
     'ferramenta inexistente: erro de protocolo -32601')

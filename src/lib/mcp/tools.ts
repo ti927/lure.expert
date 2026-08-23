@@ -16,7 +16,8 @@ import { db } from '@/db'
 import { memberships, organizations, transactions, categories } from '@/db/schema'
 import { scopeFromMcpGrant } from '@/lib/query/scope'
 import { runQuery, explicarQuery } from '@/lib/query/engine'
-import { querySpecSchema } from '@/lib/query/spec'
+import { querySpecSchema, type QuerySource } from '@/lib/query/spec'
+import { fontesDisponiveis } from '@/lib/query/sources'
 import { QueryValidationError, ScopeDeniedError } from '@/lib/query/errors'
 import type { Escopo } from '@/lib/oauth/clients'
 
@@ -136,7 +137,25 @@ const descreverOrganizacao: Ferramenta = {
   },
 }
 
-const entradaConsulta = querySpecSchema.extend(alvo.shape)
+/**
+ * As fontes que o MCP anuncia saem do REGISTRO do motor, não do enum do Zod.
+ *
+ * O enum tem quatro (`balanco` incluída), mas o registro tem três — o balanço
+ * ficou de fora de propósito, por ser snapshot por documento e não haver um
+ * documento no banco para conferir contra. Publicar as quatro fazia o modelo
+ * oferecer balanço ao usuário com confiança e só descobrir na chamada que ela
+ * não existe. Anunciar menos do que o tipo permite é o certo aqui: o catálogo
+ * tem de descrever o que o servidor FAZ, não o que ele um dia fará.
+ */
+const FONTES = fontesDisponiveis() as [QuerySource, ...QuerySource[]]
+
+const entradaConsulta = querySpecSchema.extend({
+  ...alvo.shape,
+  fonte: z.enum(FONTES).default('realizado').describe(
+    'realizado = lançamentos efetivados; orcado = o planejado; nfe = notas fiscais. ' +
+    'O balanço patrimonial ainda não é consultável por aqui.',
+  ),
+})
 
 const consultar: Ferramenta = {
   nome: 'consultar',
