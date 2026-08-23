@@ -9,8 +9,8 @@ import {
   contacts,
 } from '@/db/schema'
 import { eq, and, ne, ilike, asc, desc, inArray } from 'drizzle-orm'
-import { anthropic } from '@/lib/anthropic'
 import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
+import { resolverAcessoIa } from '@/lib/ai-access'
 import { BP_TYPES } from '@/lib/bp-types'
 
 const MODELO_CATEGORIZACAO = 'claude-haiku-4-5-20251001'
@@ -508,7 +508,13 @@ async function classifyWithLLM(
   const hintsBlock = buildCategoryHintsBlock(categoryHints)
   const userMessage = `Descrição: ${description}\nValor: ${amount}\nDireção: ${direction === 'inflow' ? 'entrada' : 'saída'}${categoryHint}${accountBlock}${nfBlock}${hintsBlock}`
 
-  const response = await anthropic.messages.create({
+  // Recusa devolve null, e a cascata segue: as camadas 0 a 2 (CSV, regras,
+  // recorrencia) ja resolveram o que sabiam, e o que sobrar vai para a fila de
+  // revisao -- exatamente o que ja acontecia quando o modelo falhava.
+  const acesso = await resolverAcessoIa(ctx.organizationId)
+  if (!acesso.ok) return null
+
+  const response = await acesso.client.messages.create({
     model: MODELO_CATEGORIZACAO,
     max_tokens: 300,
     system: [

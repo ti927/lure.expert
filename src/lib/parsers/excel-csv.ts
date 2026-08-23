@@ -1,7 +1,7 @@
 import { parse } from 'csv-parse/sync'
 import * as XLSX from 'xlsx'
-import { anthropic } from '@/lib/anthropic'
 import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
+import { resolverAcessoIa } from '@/lib/ai-access'
 import { parseAmount } from '@/lib/format'
 import type { ParseContext } from './context'
 
@@ -149,7 +149,14 @@ async function tryLlmMapping(
 
   const inicio = Date.now()
   try {
-    const msg = await anthropic.messages.create({
+    // Aqui a recusa e silenciosa de proposito: `detectColumnMapping` ja cai na
+    // heuristica por palavra-chave quando isto devolve null, e o CSV continua
+    // importando. Derrubar o upload por causa da chave seria pior que perder
+    // precisao no cabecalho.
+    const acesso = await resolverAcessoIa(ctx.organizationId)
+    if (!acesso.ok) return null
+
+    const msg = await acesso.client.messages.create({
       model: MODELO,
       max_tokens: 300,
       system: SYSTEM_PROMPT,

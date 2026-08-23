@@ -1,6 +1,6 @@
 import type { DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages/messages'
-import { anthropic } from '@/lib/anthropic'
 import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
+import { resolverAcessoIa } from '@/lib/ai-access'
 import type { ParseContext } from './context'
 import type { StagingRow } from './excel-csv'
 
@@ -124,8 +124,14 @@ async function extractViaDocument(buffer: Buffer, ctx: ParseContext): Promise<Pd
     text: 'Extraia as transações deste extrato bancário.',
   }
 
+  // PDF nao tem plano B: sem chave ou acima do teto, o upload falha com o
+  // motivo em vez de devolver zero linha, que o cliente leria como "o extrato
+  // esta vazio".
+  const acesso = await resolverAcessoIa(ctx.organizationId)
+  if (!acesso.ok) throw new Error(acesso.mensagem)
+
   const inicio = Date.now()
-  const message = await anthropic.messages.create({
+  const message = await acesso.client.messages.create({
     model: MODELO,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
