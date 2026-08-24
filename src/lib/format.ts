@@ -91,3 +91,74 @@ export function parseAmount(s: string | undefined | null): number | null {
   const abs = Math.abs(n)
   return negative ? -abs : abs
 }
+
+/**
+ * Minúsculo, sem acento, espaços colapsados — para casar texto digitado com
+ * cadastro.
+ *
+ * Movida de `budget-import.ts`, que passou a importar daqui. **Não unifique com
+ * `normalizeForMatch` de `categorizer.ts`:** aquela decide classificação, e
+ * mexer nela mudaria retroativamente o resultado de `findCategoryByCsvMapping`.
+ * Duas funções parecidas com donos diferentes é mais barato que uma com dois.
+ */
+export function norm(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const MESES_PT: Record<string, number> = {
+  jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6,
+  jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12,
+}
+
+/**
+ * Texto de planilha → data ISO `AAAA-MM-DD`. `null` quando não dá para ler.
+ *
+ * Movida de `parsers/excel-csv.ts` (onde se chamava `normalizeDate`) pelo mesmo
+ * motivo que `parseAmount` foi movida na 9.5, e que está escrito ali em cima: o
+ * arquivo de origem carrega o SDK da Anthropic junto, e quem precisa desta
+ * função — o contrato de importação — não pode arrastar isso.
+ *
+ * Comportamento inalterado: ISO, DD/MM/AAAA (com `/`, `.` ou `-`), DD/MM/AA
+ * assumindo 20AA, "02 jan." usando o ano corrente, e serial do Excel.
+ */
+export function parseDate(s: string | undefined | null): string | null {
+  if (!s) return null
+  const v = String(s).trim()
+  if (!v) return null
+
+  // AAAA-MM-DD
+  let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+
+  // DD/MM/AAAA, DD-MM-AAAA, DD.MM.AAAA
+  m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/)
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+
+  // DD/MM/AA → assume 20AA
+  m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2})$/)
+  if (m) return `20${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+
+  // "02 jan." ou "31 jul" — usa o ano corrente
+  m = v.match(/^(\d{1,2})\s+([a-zç]+)\.?$/i)
+  if (m) {
+    const mes = MESES_PT[m[2].toLowerCase().slice(0, 3)]
+    if (mes) {
+      const ano = new Date().getFullYear()
+      return `${ano}-${String(mes).padStart(2, '0')}-${m[1].padStart(2, '0')}`
+    }
+  }
+
+  // Serial do Excel (o `raw=false` já deveria ter convertido; isto é a rede)
+  const num = Number(v)
+  if (!Number.isNaN(num) && num > 25569 && num < 60000) {
+    const d = new Date(Date.UTC(1900, 0, 1) + (num - 2) * 86400000)
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+  }
+
+  return null
+}

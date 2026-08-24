@@ -10,7 +10,8 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import { UploadCloud, FileText, CheckCircle2, AlertCircle, X, ArrowRight } from 'lucide-react'
+import { buildImportTemplateCsv, downloadCsv, IMPORT_TEMPLATE_FILES } from '@/lib/csv-templates'
+import { UploadCloud, FileText, CheckCircle2, AlertCircle, X, ArrowRight, FileSpreadsheet } from 'lucide-react'
 
 const SOURCE_TYPES = [
   { value: 'bank', label: 'Extrato bancário', docType: 'statement', reportType: 'other' },
@@ -293,6 +294,29 @@ export function UploadForm({ orgId }: { orgId: string }) {
             </>
           )}
         </div>
+      </div>
+
+      {/*
+        O modelo é oferecido, nunca exigido. A promessa da Fase 2 é "qualquer
+        formato", e ela vale: quem arrasta o CSV do banco continua funcionando.
+        Quem usa o modelo ganha leitura determinística, sem chamada de IA.
+      */}
+      <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+        <FileSpreadsheet size={14} className="mt-0.5 shrink-0" />
+        <span>
+          Qualquer formato funciona — o expert lê e organiza. Se preferir tabular à mão, use o{' '}
+          <button
+            type="button"
+            onClick={() => downloadCsv(
+              IMPORT_TEMPLATE_FILES[isBp ? 'balanco' : 'movimentos'],
+              buildImportTemplateCsv(isBp ? 'balanco' : 'movimentos'),
+            )}
+            className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            modelo de {isBp ? 'balanço' : 'lançamentos'}
+          </button>
+          {' '}— arquivo no modelo é lido direto, sem consumir IA.
+        </span>
       </div>
 
       {isPdf && (

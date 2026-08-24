@@ -35,11 +35,12 @@
 // recebe um `external_id` derivado do próprio conteúdo, e o INSERT vai com
 // `ON CONFLICT DO NOTHING`. Reimportar o mesmo arquivo insere zero.
 
-import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { transactions, documents, dataSources, categories } from '@/db/schema'
+import { chavear } from '@/lib/import-dedup'
+import { norm as normalizar } from '@/lib/format'
 
 /**
  * Teto por chamada.
@@ -75,38 +76,24 @@ export type LinhaImportada = z.infer<typeof linhaImportadaSchema>
 // A chave de deduplicação
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Espaços colapsados, sem acento, minúsculo — o mesmo extrato baixado duas vezes casa. */
-function normalizar(s: string): string {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .toLowerCase().replace(/\s+/g, ' ').trim()
-}
-
 /**
- * A chave de uma linha.
+ * A chave de deduplicação mudou de casa para `@/lib/import-contract`.
  *
- * `ocorrencia` é o detalhe que faz isto funcionar: dois cafés idênticos de
- * R$ 15 no mesmo dia são DOIS lançamentos legítimos e precisam de duas chaves.
- * Numerando as repetições na ordem em que aparecem, o mesmo arquivo reimportado
- * produz exatamente as mesmas N chaves — e um arquivo com 3 linhas iguais
- * produz 3 chaves distintas. Sem isso, ou a dedup mataria lançamento de
- * verdade, ou não existiria.
+ * Motivo: ela precisa ser **a mesma nas duas portas de arquivo**. Enquanto vivia
+ * aqui, só o MCP deduplicava — subir pela tela o que a IA já importou duplicaria,
+ * e a dedup ficaria cega justamente entre os dois caminhos que ela precisa unir.
+ *
+ * O prefixo passou de `mcp:` para `arq:` lá. O hash **não** inclui o prefixo,
+ * então as linhas já gravadas migram por um `UPDATE` de troca de prefixo.
  */
-function chaveDaLinha(l: LinhaImportada, ocorrencia: number): string {
-  const bruto = [
-    l.data, l.valor.toFixed(2), l.sentido, normalizar(l.descricao), l.conta ?? '', ocorrencia,
-  ].join('|')
-  return `mcp:${createHash('sha256').update(bruto).digest('hex').slice(0, 40)}`
-}
-
-/** Numera as repetições de linhas idênticas e devolve a chave de cada uma. */
-function chavear(linhas: LinhaImportada[]): string[] {
-  const vistas = new Map<string, number>()
-  return linhas.map(l => {
-    const base = [l.data, l.valor.toFixed(2), l.sentido, normalizar(l.descricao), l.conta ?? ''].join('|')
-    const n = (vistas.get(base) ?? 0)
-    vistas.set(base, n + 1)
-    return chaveDaLinha(l, n)
-  })
+function chavearLinhas(linhas: LinhaImportada[]): string[] {
+  return chavear(linhas.map(l => ({
+    competencia: l.data,
+    valor: l.valor,
+    sentido: l.sentido,
+    descricao: l.descricao,
+    conta: l.conta ?? null,
+  })))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,7 +204,7 @@ export async function planejarImportacao(
     }
   }
 
-  const chaves = chavear(linhas)
+  const chaves = chavearLinhas(linhas)
 
   // Quais já existem. A busca é por `external_id` na organização inteira, não
   // só na fonte desta origem: o mesmo extrato importado ontem sob outro nome de

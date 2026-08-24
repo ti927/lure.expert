@@ -20,15 +20,11 @@ import type { RecorrenciaDetectada } from '@/server/fluxo'
 
 // ─── Normalização ─────────────────────────────────────────────────────────────
 
-/** minúsculo, sem acento, espaços colapsados — para casar nome digitado com cadastro. */
-export function norm(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')   // marcas de acento (mesma forma do categorizer.ts)
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+// `norm` mudou de casa para `@/lib/format`, ao lado de `parseAmount` e
+// `parseDate`, quando o contrato de importação passou a precisar dela. Segue
+// re-exportada para não quebrar quem já importava daqui.
+export { norm } from '@/lib/format'
+import { norm } from '@/lib/format'
 
 // ─── Contexto de busca ────────────────────────────────────────────────────────
 

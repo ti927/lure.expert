@@ -2,7 +2,7 @@ import { parse } from 'csv-parse/sync'
 import * as XLSX from 'xlsx'
 import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
 import { resolverAcessoIa } from '@/lib/ai-access'
-import { parseAmount } from '@/lib/format'
+import { parseAmount, parseDate } from '@/lib/format'
 import type { ParseContext } from './context'
 
 const MODELO = 'claude-haiku-4-5-20251001'
@@ -265,50 +265,9 @@ function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMappi
 // 3) NORMALIZAÇÃO DETERMINÍSTICA de campos
 // ─────────────────────────────────────────────────────────────────────
 
-const MONTH_PT: Record<string, number> = {
-  jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6,
-  jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12,
-}
-
-function normalizeDate(s: string | undefined | null): string | null {
-  if (!s) return null
-  const v = s.trim()
-  if (!v) return null
-
-  // YYYY-MM-DD
-  let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
-  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
-
-  // DD/MM/YYYY ou DD-MM-YYYY ou DD.MM.YYYY
-  m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/)
-  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
-
-  // DD/MM/YY → assume 20YY
-  m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2})$/)
-  if (m) return `20${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
-
-  // "02 jan." ou "31 jul" — usa ano atual
-  m = v.match(/^(\d{1,2})\s+([a-zç]+)\.?$/i)
-  if (m) {
-    const month = MONTH_PT[m[2].toLowerCase().slice(0, 3)]
-    if (month) {
-      const year = new Date().getFullYear()
-      return `${year}-${String(month).padStart(2, '0')}-${m[1].padStart(2, '0')}`
-    }
-  }
-
-  // Excel serial date (raw=false já deveria ter convertido, mas garante)
-  const num = Number(v)
-  if (!Number.isNaN(num) && num > 25569 && num < 60000) {
-    // Excel: dias desde 1900-01-01 (com bug do 1900 leap year)
-    const d = new Date(Date.UTC(1900, 0, 1) + (num - 2) * 86400000)
-    if (!Number.isNaN(d.getTime())) {
-      return d.toISOString().slice(0, 10)
-    }
-  }
-
-  return null
-}
+// `normalizeDate` foi movida para `@/lib/format` como `parseDate`, pelo mesmo
+// motivo que `parseAmount` foi movida na 9.5: este arquivo carrega o SDK da
+// Anthropic, e o contrato de importação precisa da função sem arrastar isso.
 
 function deriveDirection(
   row: string[],
@@ -416,8 +375,8 @@ export async function parseExcelOrCsv(
       rawData.__categoryMapping = map
     }
 
-    const date = mapping.date !== null ? normalizeDate(row[mapping.date]) : null
-    const effectiveDate = mapping.effectiveDate !== null ? normalizeDate(row[mapping.effectiveDate]) : null
+    const date = mapping.date !== null ? parseDate(row[mapping.date]) : null
+    const effectiveDate = mapping.effectiveDate !== null ? parseDate(row[mapping.effectiveDate]) : null
     const amount = mapping.amount !== null ? parseAmount(row[mapping.amount]) : null
     const description = mapping.description !== null
       ? (row[mapping.description] ?? '').slice(0, 200) || null

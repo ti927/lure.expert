@@ -5,6 +5,8 @@
  * baixar use `downloadTemplate()` em componente cliente.
  */
 
+import { colunasDe, type ColunaCanonica, type TipoDeRelatorio } from '@/lib/import-contract'
+
 const BOM = '﻿'
 
 export type DimensionKind =
@@ -121,6 +123,58 @@ export function buildBudgetTemplateCsv(): string {
     ...BUDGET_CSV.sampleRows.map((r) => r.join(';')),
   ]
   return BOM + lines.join('\r\n') + '\r\n'
+}
+
+// ─── Importação de lançamentos ────────────────────────────────────────────────
+//
+// Os cabeçalhos são **gerados a partir de `COLUNAS_*`** do contrato, nunca
+// redigitados: uma lista escrita à mão aqui viraria um segundo formato canônico
+// no primeiro dia, e a divergência só apareceria quando alguém usasse o modelo.
+
+const EXEMPLO_MOVIMENTOS: Record<string, string> = {
+  competencia: '2027-03-05', caixa: '', descricao: 'ALUGUEL MATRIZ MARCO',
+  valor: '8500,00', sentido: 'Saída', conta: 'Itaú C/C', tipoDeConta: 'C. Corrente',
+  numeroDaConta: '12345-6', natureza: '3.2.01',
+}
+
+const EXEMPLO_CARTAO: Record<string, string> = {
+  competencia: '2027-03-12', caixa: '2027-04-10', descricao: 'POSTO IPIRANGA',
+  valor: '320,55', sentido: 'Saída', conta: 'Cartão Itaú', tipoDeConta: 'Cartão',
+  numeroDaConta: '4489', natureza: '',
+}
+
+const EXEMPLO_ENTRADA: Record<string, string> = {
+  competencia: '2027-03-20', caixa: '2027-03-22', descricao: 'RECEBIMENTO CLIENTE ACME',
+  valor: '15000,00', sentido: 'Entrada', conta: 'Itaú C/C', tipoDeConta: 'C. Corrente',
+  numeroDaConta: '12345-6', natureza: '',
+}
+
+const EXEMPLO_SALDOS: Record<string, string>[] = [
+  { natureza: '1.1.01', valor: '84300,00' },
+  { natureza: '1.1.02', valor: '129500,00' },
+  { natureza: '2.1.01', valor: '37800,00' },
+]
+
+function linhaDoExemplo(colunas: ColunaCanonica[], ex: Record<string, string>): string[] {
+  return colunas.map(c => ex[c.campo] ?? '')
+}
+
+export function buildImportTemplateCsv(tipo: TipoDeRelatorio): string {
+  const colunas = colunasDe(tipo)
+  const exemplos = tipo === 'balanco'
+    ? EXEMPLO_SALDOS
+    : [EXEMPLO_MOVIMENTOS, EXEMPLO_CARTAO, EXEMPLO_ENTRADA]
+
+  const lines = [
+    colunas.map(c => c.canonico).join(';'),
+    ...exemplos.map(ex => linhaDoExemplo(colunas, ex).join(';')),
+  ]
+  return BOM + lines.join('\r\n') + '\r\n'
+}
+
+export const IMPORT_TEMPLATE_FILES: Record<TipoDeRelatorio, string> = {
+  movimentos: 'modelo-lancamentos.csv',
+  balanco: 'modelo-balanco.csv',
 }
 
 export function buildTemplateCsv(kind: DimensionKind): string {

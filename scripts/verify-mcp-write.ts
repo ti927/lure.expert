@@ -828,7 +828,9 @@ async function main() {
   const [conferido] = await db.execute<{ n: number; soma: string; comDoc: number; comChave: number }>(sql`
     SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::text AS soma,
            COUNT(*) FILTER (WHERE document_id = ${r1.documentId}::uuid)::int AS "comDoc",
-           COUNT(*) FILTER (WHERE external_id LIKE 'mcp:%')::int AS "comChave"
+           -- 'arq:' e nao 'mcp:': a chave passou a ser a MESMA nas duas portas
+           -- de arquivo, senao a dedup ficaria cega justamente entre elas.
+           COUNT(*) FILTER (WHERE external_id LIKE 'arq:%')::int AS "comChave"
       FROM transactions
      WHERE organization_id = ${ORG}::uuid AND date >= '2026-04-01'`)
   t(Number(conferido.n) === 5 && Math.abs(Number(conferido.soma) - 12870.55) < 0.01,
