@@ -914,3 +914,72 @@ deploy) e o campo `contadorConfiavel` **por linha**, mais um aviso na resposta d
 A alternativa — esconder o contador até ele ter história — foi descartada: a tela já o mostrava, e
 um dado marcado como não confiável vale mais que um dado ausente. A marcação some sozinha conforme
 as regras antigas forem sendo tocadas, o que é a propriedade certa para uma ressalva de migração.
+
+---
+
+## Decisão 20 — A importação pelo MCP não sobe arquivo: sobem as linhas (Sessão 3.3)
+
+### O que o plano dizia, e por que estava errado
+
+O plano de 23/ago escreveu: *"`iniciar_importacao` devolve **URL assinada de upload** — o arquivo
+nunca trafega em base64 dentro do JSON-RPC"*. A premissa está certa; a conclusão não.
+
+**O modelo não tem arquivo para subir.** Quem tem é a pessoa, na máquina dela — e ela já o anexa na
+própria conversa do claude.ai, que lê CSV, Excel e PDF. Uma URL assinada devolvida no chat só serve
+se alguém fizer um `curl` nela, o que é um passo manual fora da conversa para um público de PME.
+
+A conclusão certa: **o arquivo não trafega, ponto. As linhas trafegam.** O modelo tabula e chama
+`prever_importacao` com as linhas prontas.
+
+### O que isso apaga
+
+Este caminho **não usa** Supabase Storage, `transactions_staging`, o job `process-document`, a tela
+de revisão — e **não chama a Anthropic uma única vez**. Toda a camada de parsing existe porque o app
+não sabe ler arquivo arbitrário. Aqui, quem lê já leu, e melhor.
+
+### O que ele preserva, porque não é acessório
+
+| | Por quê |
+|---|---|
+| Registro em `documents` | Sem ele o lote não tem origem rastreável nem aparece no filtro "importação" de `/transacoes`. `storage_path` é NOT NULL e não há arquivo: o esquema `mcp://` é a fachada, e `deleteDocument` aprendeu a pular a remoção no Storage quando vê esse prefixo |
+| `data_sources` própria por origem | É ela que dá o rótulo da conta em `/transacoes` |
+| Camada 0 | `categoria` da linha (código ou nome) casada contra as folhas do plano de contas — é o que faz export de ERP entrar já classificado, sem IA |
+| Disparo da categorização | O que não casou vai para a fila, igual ao caminho da tela |
+
+### A deduplicação é o coração disto
+
+**O caminho de upload da tela nunca deduplicou nada.** Subir o mesmo extrato duas vezes dobra a
+contabilidade. Isso sobreviveu porque uma pessoa não reenvia o mesmo arquivo sem perceber. **Um
+modelo, sim** — ele tenta de novo quando a chamada *parece* ter falhado, que é exatamente quando ela
+costuma ter dado certo.
+
+Não precisou de migration: `idx_tx_dedup` já existe, único em `(data_source_id, external_id)` com
+`external_id IS NOT NULL`. Cada linha recebe:
+
+```
+external_id = 'mcp:' + sha256(data | valor | sentido | descrição normalizada | conta | ocorrência)
+```
+
+**`ocorrencia` é o que faz a coisa funcionar.** Dois cafés de R$ 15 no mesmo dia são dois lançamentos
+legítimos e precisam de duas chaves; numerando as repetições na ordem em que aparecem, o mesmo
+arquivo reimportado produz exatamente as mesmas N chaves, e um arquivo com 3 linhas iguais produz 3
+chaves distintas. Sem isso, ou a dedup mataria lançamento de verdade, ou não existiria.
+
+A busca de duplicatas é por organização inteira, não pela fonte desta origem: o mesmo extrato
+importado ontem sob outro nome continua sendo o mesmo lançamento.
+
+`ON CONFLICT DO NOTHING` é a segunda barreira — entre prever e aplicar alguém pode ter importado o
+mesmo arquivo pela tela. **O número relatado é o que entrou**, não o que foi prometido.
+
+Efeito colateral que importa: **arquivo grande entra em lotes**, com a mesma origem, e sobreposição
+entre lotes não duplica. O teto de 500 linhas por chamada deixa de ser uma limitação e vira um
+detalhe de transporte.
+
+### Desfazer continua sendo humano
+
+O plano põe exclusão em massa fora da v1, e isso não mudou. O que a ferramenta devolve é o
+`documentId` — `/transacoes` filtra por importação e apaga em lote até 1000. A escapatória existe e
+é operada por gente, que é a postura do plano para operação destrutiva.
+
+**Nota sobre `deleteDocument`:** ele **nulifica** `transactions.document_id` e apaga o documento —
+não apaga os lançamentos. Vale para qualquer importação, não só as do MCP.

@@ -37,6 +37,11 @@ import {
   listarRegras, planejarRegras, aplicarRegras, assinaturaDoPlano,
   regraDeLoteSchema, MAX_REGRAS_POR_LOTE, CONTADOR_VIVO_DESDE, type RegraDeLote,
 } from '@/lib/rules-write'
+import {
+  linhaImportadaSchema, planejarImportacao, aplicarImportacao,
+  MAX_LINHAS_IMPORTACAO, type LinhaImportada,
+} from '@/lib/import-write'
+import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
   registrarPrevia, consumirPrevia, divergiu, registrarAplicacao,
@@ -1265,6 +1270,176 @@ const aplicarRegrasFerramenta: Ferramenta = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Importação de lançamentos
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FERRAMENTA_IMPORTACAO = 'importacao_de_lancamentos'
+
+const entradaPreverImportacao = alvo.extend({
+  origem: z.string().trim().min(2).max(120).describe(
+    'Como esta importação se chama, para quem for olhar depois. Ex.: "Extrato Itaú — março/2026". ' +
+    'Vira o rótulo da conta em /transacoes e o nome do documento.',
+  ),
+  linhas: z.array(linhaImportadaSchema).min(1).max(MAX_LINHAS_IMPORTACAO),
+})
+
+const preverImportacao: Ferramenta = {
+  nome: 'prever_importacao',
+  titulo: 'Prever importação de lançamentos',
+  descricao:
+    'Importa lançamentos a partir de linhas que VOCÊ já tabulou — o arquivo não sobe para lugar ' +
+    'nenhum. Fluxo: o usuário anexa o extrato ou a planilha na conversa, você lê, converte em ' +
+    'linhas e chama esta ferramenta; ela mostra o que entraria, sem gravar. ' +
+    'DEDUPLICA: uma linha já presente no banco é ignorada, então reimportar o mesmo arquivo (ou ' +
+    'lotes que se sobrepõem) não duplica nada — a prévia diz quantas já existiam. ' +
+    'Cada linha pode trazer `categoria` com o código ou o nome do plano de contas; o que casar ' +
+    'entra já classificado, o que não casar vai para a fila de classificação. ' +
+    `Teto de ${MAX_LINHAS_IMPORTACAO} linhas por chamada — arquivo maior vai em chamadas seguidas ` +
+    'com a MESMA origem. Mostre o resumo ao usuário e obtenha o aceite antes de aplicar.',
+  entrada: entradaPreverImportacao,
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as z.infer<typeof entradaPreverImportacao>
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const plano = await planejarImportacao(scope.organizationId, a.linhas)
+    if ('error' in plano) throw new Error(plano.error)
+
+    const resumo = {
+      quantidade: plano.novas,
+      valorTotal: plano.entradas + plano.saidas,
+      duplicadasIgnoradas: plano.duplicadas,
+      entradas: plano.entradas,
+      saidas: plano.saidas,
+      periodo: plano.periodo,
+      comNatureza: plano.comNatureza,
+      amostra: plano.amostra,
+    }
+
+    if (plano.novas === 0) {
+      return {
+        previaId: null,
+        resumo,
+        aviso: plano.duplicadas > 0
+          ? `Todas as ${plano.duplicadas} linhas já estão no banco. Nada a importar — o arquivo ` +
+            'já tinha sido importado antes.'
+          : 'Nenhuma linha para importar.',
+      }
+    }
+
+    const { previaId, expiraEm } = await registrarPrevia({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_IMPORTACAO,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resumo,
+      pedido: { origem: a.origem, linhas: a.linhas },
+    })
+
+    const avisos: string[] = []
+    if (plano.duplicadas > 0) {
+      avisos.push(`${plano.duplicadas} linha(s) já existem no banco e serão ignoradas.`)
+    }
+    if (plano.naturezasNaoResolvidas.length > 0) {
+      avisos.push(
+        `Não achei no plano de contas: ${plano.naturezasNaoResolvidas.join(', ')}. ` +
+        'Esses lançamentos entram sem natureza e vão para a fila de classificação. ' +
+        'Use listar_categorias para conferir os códigos.',
+      )
+    }
+    if (plano.comNatureza < plano.novas) {
+      avisos.push(`${plano.novas - plano.comNatureza} lançamento(s) entram sem natureza e serão ` +
+        'classificados automaticamente depois.')
+    }
+
+    return {
+      previaId, expiraEm, resumo,
+      ...(avisos.length ? { avisos } : {}),
+      comoAplicar: `Mostre este resumo ao usuário — quantidade, período e totais. Com o aceite ` +
+        `dele, chame aplicar_importacao com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
+    }
+  },
+}
+
+const aplicarImportacaoFerramenta: Ferramenta = {
+  nome: 'aplicar_importacao',
+  titulo: 'Aplicar importação de lançamentos',
+  descricao:
+    'Grava os lançamentos de uma prévia. Exige previaId e a palavra literal "aplicar". Recalcula do ' +
+    'zero e recusa se o conjunto mudou. Depois de gravar, dispara a categorização automática do que ' +
+    'entrou sem natureza. Devolve o documentId, que é por onde /transacoes filtra este lote caso ' +
+    'seja preciso revisar ou apagar.',
+  entrada: alvo.extend({
+    previaId: z.string().uuid(),
+    confirmacao: z.string().describe('A palavra literal "aplicar".'),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; previaId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    const previa = await consumirPrevia({
+      previaId: a.previaId, ferramenta: FERRAMENTA_IMPORTACAO,
+      organizationId: scope.organizationId, userId: ctx.userId,
+    })
+    if (!previa.ok) throw new Error(previa.motivo)
+
+    const pedido = previa.pedido as { origem: string; linhas: LinhaImportada[] }
+
+    const agora = await planejarImportacao(scope.organizationId, pedido.linhas)
+    if ('error' in agora) throw new Error(agora.error)
+    const problema = divergiu(previa.resumo, {
+      quantidade: agora.novas, valorTotal: agora.entradas + agora.saidas,
+    })
+    if (problema) throw new Error(problema)
+
+    const inicio = Date.now()
+    const r = await aplicarImportacao(
+      scope.organizationId, ctx.userId, pedido.origem, pedido.linhas, agora,
+    )
+
+    // A categorização é assíncrona e pode falhar sem que a importação falhe —
+    // os lançamentos já estão no banco. Sinalizar é melhor que desfazer: quem
+    // ficou sem natureza aparece na fila de revisão de qualquer jeito.
+    let categorizacaoDisparada = true
+    if (r.paraCategorizar.length > 0) {
+      try {
+        await sendCategorizationEvents(r.paraCategorizar, scope.organizationId)
+      } catch (e) {
+        console.error('[mcp] sendCategorizationEvents falhou', (e as Error).message)
+        categorizacaoDisparada = false
+      }
+    }
+
+    await registrarAplicacao({
+      organizationId: scope.organizationId, ferramenta: FERRAMENTA_IMPORTACAO,
+      previaId: a.previaId, userId: ctx.userId, clientId: ctx.clientId,
+      resultado: { inseridos: r.inseridos, documentId: r.documentId }, duracaoMs: Date.now() - inicio,
+    })
+
+    return {
+      aplicado: true,
+      lancamentosInseridos: r.inseridos,
+      ignoradosPorDuplicidade: r.ignoradosPorDuplicidade,
+      jaClassificados: r.comNatureza,
+      documentId: r.documentId,
+      ...(r.paraCategorizar.length > 0 ? {
+        emClassificacao: r.paraCategorizar.length,
+        ...(categorizacaoDisparada ? {} : {
+          aviso: 'Os lançamentos entraram, mas a fila de categorização não aceitou o disparo. ' +
+            'O usuário pode rodar "Categorizar agora" em /transacoes.',
+        }),
+      } : {}),
+      observacao: 'Se este lote estiver errado, ele é separável: /transacoes filtra por importação ' +
+        'e apaga em lote. Reimportar o mesmo arquivo é seguro — as linhas repetidas são ignoradas.',
+    }
+  },
+}
+
 const CATALOGO: Ferramenta[] = [
   listarOrganizacoes,
   descreverOrganizacao,
@@ -1279,6 +1454,8 @@ const CATALOGO: Ferramenta[] = [
   aplicarClassificacao,
   preverRegrasFerramenta,
   aplicarRegrasFerramenta,
+  preverImportacao,
+  aplicarImportacaoFerramenta,
   preverRateio,
   aplicarRateio,
   preverLancamentoOrcado,

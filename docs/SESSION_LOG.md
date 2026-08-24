@@ -12,6 +12,66 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 3.3 (importação) — o sexto par, e a fase fecha
+
+**A pergunta do Julio que corrigiu o desenho:** *"qual é a dificuldade de eu subir um arquivo pro
+claude.ai, ele faz a tabulação, e depois importar pro expert?"* Nenhuma. Eu havia montado uma
+pergunta de escopo com três opções, todas girando em torno de como fazer o arquivo chegar ao
+servidor — quando o arquivo não precisa chegar.
+
+**Arquivos:** `src/lib/import-write.ts` (novo), duas ferramentas em `mcp/tools.ts`, e um guarda em
+`deleteDocument`.
+
+#### O que não existe neste caminho
+
+Storage, `transactions_staging`, job `process-document`, tela de revisão, e **nenhuma chamada à
+Anthropic**. O parser Haiku e a revisão em grade existem porque o app não sabe ler arquivo
+arbitrário. O claude.ai sabe.
+
+#### O que existe, e por quê
+
+Registro em `documents` (origem rastreável, filtro "importação" em `/transacoes`), `data_sources` por
+origem (rótulo da conta), camada 0 (`categoria` da linha casada contra as folhas do plano de contas,
+por código exato → nome normalizado → prefixo de código, com ambíguo não casando), e o disparo da
+categorização do que sobrou sem natureza.
+
+#### A deduplicação — o que o app nunca teve
+
+Levantado no banco durante a sessão: **não existe deduplicação nenhuma no caminho de upload da
+tela.** Subir o mesmo extrato duas vezes dobra a contabilidade. Aguentou porque gente não reenvia sem
+perceber; um modelo reenvia, e justamente quando a chamada pareceu falhar e tinha dado certo.
+
+Sem migration — `idx_tx_dedup` já é único em `(data_source_id, external_id)`. Cada linha ganha
+`external_id = mcp:sha256(data|valor|sentido|descrição normalizada|conta|ocorrência)`.
+
+**A `ocorrência` é o miolo:** dois cafés de R$ 15 no mesmo dia são dois lançamentos legítimos e
+precisam de duas chaves. Numerando as repetições na ordem, o mesmo arquivo reimportado gera as mesmas
+N chaves e um arquivo com 3 linhas iguais gera 3 chaves. Sem isso, ou a dedup mataria lançamento de
+verdade, ou não existiria.
+
+`ON CONFLICT DO NOTHING` é a segunda barreira, e o relatado é o que **entrou**. Consequência prática:
+arquivo grande entra em lotes com a mesma origem, e sobreposição entre lotes não duplica — o teto de
+500 linhas vira detalhe de transporte.
+
+#### Detalhes menores
+
+`documents.storage_path` é NOT NULL e não há arquivo: `mcp://<org>/<ts>` é a fachada, e
+`deleteDocument` passou a pular a remoção no Storage quando vê esse prefixo — senão cada exclusão
+logaria um aviso sobre um arquivo que nunca existiu.
+
+#### Verificação — 116/116, e duas asserções que passavam à toa
+
+Duas falhas eram aritmética minha (esqueci um dos dois cafés de R$ 15 na soma esperada). A terceira
+foi mais útil: os testes de recusa usavam `origem: 'x'`, abaixo do mínimo de 2 caracteres — então a
+primeira queixa do Zod era sobre a origem, e *"valor negativo é recusado"* passava sem nunca ter
+exercitado a regra do valor. Corrigido com uma origem válida, e ganhou um terceiro caso (sentido fora
+do enum).
+
+O teste mais importante importa o mesmo arquivo duas vezes (0 novas, 5 já existentes) e depois um
+lote de 3 linhas em que 2 se sobrepõem (insere 1, total 6 e não 11).
+
+---
+
 ### ✅ Sessão 3.3 (regras) — correções que o próprio MCP encontrou em uso — *commit `a67956c`*
 
 **Como apareceram:** Julio pediu ao claude.ai *"liste as regras da empresa e me diga quais nunca

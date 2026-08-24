@@ -191,12 +191,17 @@ export async function deleteDocument(
     .set({ documentId: null })
     .where(eq(transactions.documentId, documentId))
 
-  // Remove arquivo do storage (best-effort)
-  const { error: storageError } = await supabase.storage
-    .from('documents')
-    .remove([doc.storagePath])
-  if (storageError) {
-    console.warn('[deleteDocument] falha ao remover arquivo do storage:', storageError.message)
+  // Remove arquivo do storage (best-effort). Importação vinda do MCP não tem
+  // arquivo — as linhas chegaram já tabuladas — e `mcp://` é o caminho de
+  // fachada que satisfaz o NOT NULL. Pedir a remoção dele geraria um aviso a
+  // cada exclusão, para um arquivo que nunca existiu.
+  if (!doc.storagePath.startsWith('mcp://')) {
+    const { error: storageError } = await supabase.storage
+      .from('documents')
+      .remove([doc.storagePath])
+    if (storageError) {
+      console.warn('[deleteDocument] falha ao remover arquivo do storage:', storageError.message)
+    }
   }
 
   // Remove o registro do documento — staging rows em cascade pelo banco

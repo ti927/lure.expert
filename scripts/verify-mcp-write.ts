@@ -135,8 +135,8 @@ async function main() {
     'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
 
   const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
-  t(catalogoE.length === catalogoL.length + 10,
-    `com escrita, o catálogo ganha os CINCO pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
+  t(catalogoE.length === catalogoL.length + 12,
+    `com escrita, o catálogo ganha os SEIS pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
 
   // ═══ Naturezas ════════════════════════════════════════════════════════════
   console.log('\n── catálogos ──')
@@ -764,6 +764,143 @@ async function main() {
   t(Number(intocada.n) === Number(contado.n),
     'e a soma é presa à organização: id certo, organização errada, nada acontece')
 
+  // ═══ Importação ═══════════════════════════════════════════════════════════
+  console.log('\n── importação ──')
+
+  const [naturezaComCodigo] = await db.select({ id: categories.id, codigo: categories.code, nome: categories.name })
+    .from(categories)
+    .where(and(
+      eq(categories.organizationId, ORG),
+      isNotNull(categories.code),
+      sql`NOT EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = ${categories.id})`,
+    ))
+    .limit(1)
+
+  // Duas linhas IDÊNTICAS de propósito: dois cafés de R$ 15 no mesmo dia são
+  // dois lançamentos legítimos, e a dedup não pode matar o segundo.
+  const arquivo = [
+    { data: '2026-04-02', descricao: 'ALUGUEL ABRIL', valor: 3500, sentido: 'outflow',
+      categoria: naturezaComCodigo.codigo },
+    { data: '2026-04-05', descricao: 'CAFE', valor: 15, sentido: 'outflow' },
+    { data: '2026-04-05', descricao: 'CAFE', valor: 15, sentido: 'outflow' },
+    { data: '2026-04-10', descricao: 'RECEBIMENTO CLIENTE X', valor: 9000, sentido: 'inflow' },
+    { data: '2026-04-12', descricao: 'CONTA DE LUZ', valor: 340.55, sentido: 'outflow',
+      categoria: 'NATUREZA QUE NAO EXISTE' },
+  ]
+
+  const pi = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: 'Extrato de teste — abril/2026', linhas: arquivo,
+  })
+  const i1 = pi.dados as {
+    previaId: string
+    resumo: { quantidade: number; entradas: number; saidas: number; comNatureza: number
+              duplicadasIgnoradas: number; periodo: { de: string; ate: string } }
+    avisos?: string[]
+  }
+  t(i1.resumo.quantidade === 5 && i1.resumo.duplicadasIgnoradas === 0,
+    `5 linhas novas, nenhuma duplicada (as duas "CAFE" idênticas contam como 2)`)
+  // 3500 + 15 + 15 + 340,55 — os dois cafés contam os dois.
+  t(Math.abs(i1.resumo.entradas - 9000) < 0.01 && Math.abs(i1.resumo.saidas - 3870.55) < 0.01,
+    `entradas R$ ${i1.resumo.entradas.toFixed(2)} e saídas R$ ${i1.resumo.saidas.toFixed(2)}, separadas`)
+  t(i1.resumo.periodo.de === '2026-04-02' && i1.resumo.periodo.ate === '2026-04-12',
+    'e o período que o arquivo cobre')
+  t(i1.resumo.comNatureza === 1,
+    'a natureza casada pelo CÓDIGO do plano de contas entra já classificada')
+  t(i1.avisos?.some(a => a.includes('NATUREZA QUE NAO EXISTE')) === true,
+    'e a que não casou é nomeada no aviso, em vez de sumir em silêncio')
+
+  const semPalavraI = await chamar(comEscrita, 'aplicar_importacao', {
+    organizationId: ORG, previaId: i1.previaId, confirmacao: 'ok',
+  })
+  t(semPalavraI.isError, 'aplicar_importacao sem a palavra literal: recusa')
+
+  const ap = await chamar(comEscrita, 'aplicar_importacao', {
+    organizationId: ORG, previaId: i1.previaId, confirmacao: 'aplicar',
+  })
+  const r1 = ap.dados as {
+    lancamentosInseridos: number; jaClassificados: number; documentId: string
+    emClassificacao?: number
+  }
+  t(!ap.isError && r1.lancamentosInseridos === 5, `gravou ${r1.lancamentosInseridos} lançamentos`)
+  t(r1.jaClassificados === 1 && r1.emClassificacao === 4,
+    '1 já com natureza do arquivo, 4 na fila de classificação')
+
+  const [conferido] = await db.execute<{ n: number; soma: string; comDoc: number; comChave: number }>(sql`
+    SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::text AS soma,
+           COUNT(*) FILTER (WHERE document_id = ${r1.documentId}::uuid)::int AS "comDoc",
+           COUNT(*) FILTER (WHERE external_id LIKE 'mcp:%')::int AS "comChave"
+      FROM transactions
+     WHERE organization_id = ${ORG}::uuid AND date >= '2026-04-01'`)
+  t(Number(conferido.n) === 5 && Math.abs(Number(conferido.soma) - 12870.55) < 0.01,
+    `banco: 5 lançamentos somando R$ ${Number(conferido.soma).toFixed(2)}`)
+  t(Number(conferido.comDoc) === 5 && Number(conferido.comChave) === 5,
+    'todos carregam o documento de origem e a chave de deduplicação')
+
+  // ── O que o app NUNCA teve: reimportar não duplica ──────────────────────
+  const repetido = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: 'Extrato de teste — abril/2026 (de novo)', linhas: arquivo,
+  })
+  const i2 = repetido.dados as {
+    previaId: string | null; resumo: { quantidade: number; duplicadasIgnoradas: number }; aviso?: string
+  }
+  t(i2.resumo.quantidade === 0 && i2.resumo.duplicadasIgnoradas === 5,
+    'o MESMO arquivo de novo: 0 novas, 5 já existentes — o caminho da tela dobraria tudo')
+  t(i2.previaId === null && i2.aviso?.includes('já tinha sido importado') === true,
+    'e nem gera prévia — não há o que aplicar')
+
+  // ── Lote com sobreposição: o caso real de arquivo grande em pedaços ─────
+  const segundoLote = [
+    ...arquivo.slice(3),                                              // repetidas
+    { data: '2026-04-20', descricao: 'NOVA LINHA', valor: 77, sentido: 'outflow' },
+  ]
+  const pi3 = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: 'Extrato de teste — abril/2026', linhas: segundoLote,
+  })
+  const i3 = pi3.dados as { previaId: string; resumo: { quantidade: number; duplicadasIgnoradas: number } }
+  t(i3.resumo.quantidade === 1 && i3.resumo.duplicadasIgnoradas === 2,
+    'lote que se sobrepõe ao anterior: só a linha nova entra — é o que permite arquivo em pedaços')
+
+  await chamar(comEscrita, 'aplicar_importacao', {
+    organizationId: ORG, previaId: i3.previaId, confirmacao: 'aplicar',
+  })
+  const [aposSobreposicao] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM transactions
+     WHERE organization_id = ${ORG}::uuid AND date >= '2026-04-01'`)
+  t(Number(aposSobreposicao.n) === 6, `${aposSobreposicao.n} no total, não 11 — a sobreposição não dobrou`)
+
+  // ── Recusas ─────────────────────────────────────────────────────────────
+  // A `origem` aqui é VÁLIDA de propósito. Com `origem: 'x'` (abaixo do mínimo)
+  // a primeira queixa do Zod seria sobre ela, e estes dois testes passariam sem
+  // nunca ter exercitado a regra da linha.
+  const ORIGEM_OK = 'Recusas — teste'
+
+  const negativo = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: ORIGEM_OK,
+    linhas: [{ data: '2026-04-01', descricao: 'X', valor: -50, sentido: 'outflow' }],
+  })
+  t(negativo.isError && negativo.texto.includes('valor'),
+    'valor negativo é recusado — o sinal vem do sentido, e -50 numa saída seria entrada disfarçada')
+
+  const dataRuim = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: ORIGEM_OK,
+    linhas: [{ data: '01/04/2026', descricao: 'X', valor: 50, sentido: 'outflow' }],
+  })
+  t(dataRuim.isError && dataRuim.texto.includes('AAAA-MM-DD'),
+    'data em formato brasileiro é recusada dizendo qual é o formato')
+
+  const sentidoRuim = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: ORIGEM_OK,
+    linhas: [{ data: '2026-04-01', descricao: 'X', valor: 50, sentido: 'saida' }],
+  })
+  t(sentidoRuim.isError && sentidoRuim.texto.includes('sentido'),
+    'sentido fora de inflow/outflow é recusado apontando o campo')
+
+  const alheia = await chamar(soLeitura, 'prever_importacao', {
+    organizationId: ORG, origem: 'x', linhas: arquivo,
+  })
+  t(alheia.erroProtocolo?.code === -32601,
+    'e um consentimento só de leitura não enxerga a importação')
+
   // ═══ Auditoria ════════════════════════════════════════════════════════════
   console.log('\n── auditoria ──')
 
@@ -771,9 +908,9 @@ async function main() {
     SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
            COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
     FROM agent_events WHERE organization_id = ${ORG}::uuid`)
-  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 6,
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 8,
     `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — classificação, dois rateios, ` +
-    'um lançamento orçado, uma cópia do realizado e um lote de regras')
+    'um lançamento orçado, uma cópia do realizado, um lote de regras e duas importações')
 
   const [carimbo] = await db.execute<{ tem: boolean }>(sql`
     SELECT (payload ? 'confirmed_at' AND payload ? 'applied_at') AS tem
