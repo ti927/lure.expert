@@ -225,7 +225,11 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** Fase 10 — Dimensões (cliente/fornecedor + rateio) **concluída** (10.0 a 10.5 ✅).
+**Status:** em andamento o **plano de 23/ago/2026** (motor de consulta + chave de IA por
+organização + OAuth/MCP + dashboard), na sessão **3.3** — cinco dos seis pares de escrita entregues,
+falta a importação. Ver a tabela em *Próximo passo*.
+
+Fase 10 — Dimensões (cliente/fornecedor + rateio) **concluída** (10.0 a 10.5 ✅).
 Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.8 ✅). Fases 0–7 **100% concluídas**.
 Fase 8 (Adquirentes) pausada em 8.1.
 
@@ -259,10 +263,21 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 2.1 | Tela de cadastro da chave e do teto | ✅ (aguardando confirmação na tela) |
 | 3.0 | Miolo do OAuth: tabelas `mcp_oauth_*` (migration 0030), tokens com hash, PKCE, validação de cliente | ✅ migration aplicada e conferida |
 | 3.1 | Endpoints OAuth: descoberta, registro dinâmico, `/authorize` com consentimento, `/token`, `/revoke` + tela de conexões | ✅ (aguardando confirmação na tela) |
-| 3.2 | Servidor MCP + ferramentas de leitura | ✅ 6 ferramentas: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
-| 3.3 | Ferramentas de escrita com preview→confirm | ◐ máquina pronta (`lib/mcp/preview.ts`) + cinco pares: classificação, rateio, lançamento de orçamento, cópia do realizado e regras. Falta importação |
+| 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
+| 3.3 | Ferramentas de escrita com preview→confirm | ◐ máquina pronta (`lib/mcp/preview.ts`) + **cinco pares**: classificação, rateio, lançamento de orçamento, cópia do realizado e regras. **Falta importação** — a mais cara das que sobraram: precisa de URL assinada de upload (arquivo não trafega em base64 dentro do JSON-RPC) e de acompanhamento assíncrono do job do Inngest |
 | 4 | Convites e papéis | 🔲 |
 | 5 | Dashboard configurável | 🔲 |
+
+**Catálogo hoje: 19 ferramentas** — 9 de leitura + 10 de escrita (os cinco pares). Um consentimento
+só de leitura enxerga 9; com escrita, 19. O catálogo é lido a cada conexão, então ferramenta nova
+não exige reconsentimento — só reconectar quando o **escopo** muda.
+
+**Confirmações na tela que Julio ainda deve** (nada bloqueia, mas nenhuma foi vista por olho humano):
+diálogo de rateio em lote em `/transacoes` (o aviso *"N já rateados"* voltou a aparecer com o fix do
+`jaRateado`), diálogo de classificação em lote (o caminho mudou para `/lib`), `/orcamento` (criar
+lançamento e copiar do realizado agora passam pelo mesmo código do MCP), `/configuracoes/regras`
+(criar/editar mudaram de caminho, e o badge `aplicada N×` passa a aparecer **depois da próxima
+categorização**), `/configuracoes/consumo` e `/configuracoes/conexoes`.
 
 **A regra de roteamento que a 3.1 estabeleceu** — vale para tudo que vier no MCP:
 

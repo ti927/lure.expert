@@ -824,3 +824,93 @@ em branco recusado, peso zero e negativo recusados, peso de 9 dígitos aceito, c
 lançamentos e não partes, e apagar o modelo zerando o carimbo sem tocar nas partes. Aritmética:
 19/19, incluindo 2.500 aplicações sobre 500 valores reais fechando o centavo exato e o ciclo
 rateio → modelo → rateio devolvendo as mesmas partes nos 500.
+
+---
+
+## Decisão 18 — `${tabela.coluna}` dentro de subconsulta correlacionada (Sessão 3.3)
+
+Não é decisão de schema: é uma armadilha do Drizzle que **já quebrou duas features em produção, em
+silêncio**, e mora aqui porque este é o único documento sempre carregado.
+
+### A regra, medida com `toSQL()`
+
+| Onde o `${tabela.coluna}` aparece | O que o Drizzle emite |
+|---|---|
+| lista do SELECT, consulta **sem** join | `"id"` — **sem qualificar** |
+| lista do SELECT, consulta **com** join | `"categories"."id"` |
+| cláusula WHERE, **sempre** | `"categories"."id"` |
+
+### Por que falha calada
+
+```sql
+EXISTS (SELECT 1 FROM transaction_allocations a WHERE a.transaction_id = "id")
+```
+
+O `"id"` sem qualificação é resolvido pelo escopo **interno** sempre que a tabela de dentro tiver
+uma coluna com esse nome. A correlação vira `a.transaction_id = a.id` — sintaxe válida, resultado
+constante, nenhum erro. O booleano fica preso em `false` (ou em `true`, num `NOT EXISTS`) para
+sempre.
+
+### As duas mordidas
+
+| Onde | Sintoma | Quanto tempo |
+|---|---|---|
+| `jaRateado` de `preverLoteDeRateio` | O aviso *"N já rateados serão substituídos"* do diálogo de rateio em lote vivia **zerado** | desde a 10.4 |
+| `atribuivel` de `listar_categorias` | `true` para **toda** natureza — o MCP anunciava natureza pai como destino válido. Medido: 152 de 180 são folha, e a ferramenta dizia 180 | desde a 3.2 |
+
+Nos dois casos o defeito atravessou revisão porque a construção *parece* certa e o tipo é
+`boolean`. Só aparece imprimindo o SQL ou testando o caso negativo — que é exatamente o caso que
+ninguém escreve.
+
+### A correção, e o que auditar
+
+Escreva `${tabela}.coluna`, não `${tabela.coluna}`: `${transactions}` renderiza `"transactions"` e o
+`.id` literal completa a qualificação, em qualquer posição.
+
+Sites auditados e o veredito de cada um:
+
+| Site | Posição | Veredito |
+|---|---|---|
+| `allocations-write.ts` · `jaRateado` | SELECT sem join | **corrigido** |
+| `mcp/tools.ts` · `atribuivel` | SELECT sem join | **corrigido** |
+| `rules-write.ts` · `folha` | SELECT sem join | nasceu corrigido |
+| `server/transactions.ts` · `isAllocated` | SELECT **com** join | seguro |
+| `transactions-write.ts` · `semRateio` | WHERE | seguro |
+| `sql-dimensions.ts` · `dimensionExistsFilter` | WHERE | seguro — e **também** porque `transaction_lines` não tem coluna `id`. Se a view ganhar `id`, o segundo motivo evapora; o primeiro sobrevive |
+
+A nota completa vive em `src/lib/sql-dimensions.ts`, junto do código que mais depende dela.
+
+---
+
+## Decisão 19 — `match_count` ganhou um escritor, e o passado fica declarado (Sessão 3.3)
+
+`categorization_rules.match_count` nasceu na Fase 1 com `DEFAULT 0 NOT NULL` e **nunca foi
+incrementada por nada**. No dia em que isso foi descoberto: **518 regras no banco, 518 com zero.**
+
+O custo não foi o badge morto da tela (`aplicada N×`, invisível desde a Fase 6). Foi o dia em que a
+ferramenta `listar_regras` publicou o contador como se fosse dado e o modelo concluiu, com toda a
+lógica correta, que *"500 de 500 regras nunca foram aplicadas"* — resposta que teria saído idêntica
+se cada uma pegasse mil lançamentos por dia. **Um número que sempre vale zero não é um número: é
+ruído com aparência de evidência.**
+
+### Como passou a ser escrito
+
+`CategorizationResult.ruleId` é preenchido **só** pela camada 1. O job acumula num `Map` durante o
+bloco e chama `somarMatchCount` uma vez, com um `UPDATE ... FROM (VALUES ...)`. Um UPDATE por
+lançamento seriam 50 idas por bloco e 7.762 numa importação grande.
+
+**`updated_at` fica de fora.** A tela e o MCP ordenam a lista de regras por ele; tocá-lo aqui faria
+toda importação embaralhar a ordem que a pessoa usa para achar o que editou por último.
+
+**Falha aqui não derruba a categorização.** O contador é informativo; perder uma contagem vale muito
+menos que perder o lote de classificações.
+
+### O passado não volta, e isso é dito
+
+Uma regra da Fase 6 que pegou mil lançamentos continua marcando zero. Por isso `CONTADOR_VIVO_DESDE`
+(`'2026-08-24'`, borda conservadora — regra criada mais cedo no mesmo dia ainda é anterior ao
+deploy) e o campo `contadorConfiavel` **por linha**, mais um aviso na resposta da ferramenta.
+
+A alternativa — esconder o contador até ele ter história — foi descartada: a tela já o mostrava, e
+um dado marcado como não confiável vale mais que um dado ausente. A marcação some sozinha conforme
+as regras antigas forem sendo tocadas, o que é a propriedade certa para uma ressalva de migração.

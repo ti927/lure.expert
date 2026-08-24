@@ -4,6 +4,140 @@ Arquivo de arquivo. Contém os detalhes completos (arquivos alterados, bugs corr
 
 Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempre carregado).
 
+> **Lacuna conhecida:** as sessões do plano de 23/ago/2026 (motor de consulta, chave de IA
+> por organização, OAuth e MCP — Fases 0, 1.0–1.4, 2.0–2.1, 3.0–3.2) **não têm entrada aqui**.
+> O que existe delas são as linhas da tabela de histórico do `CLAUDE.md`, que nessas sessões
+> foram escritas com detalhe incomum e carregam a substância. Escrever entradas completas
+> agora seria reconstruir, não registrar. A partir da 3.3 o log volta a ser escrito na hora.
+
+---
+
+### ✅ Sessão 3.3 (regras) — correções que o próprio MCP encontrou em uso — *commit `a67956c`*
+
+**Como apareceram:** Julio pediu ao claude.ai *"liste as regras da empresa e me diga quais nunca
+foram aplicadas"*. O modelo respondeu com três ressalvas, duas certas e uma que ele não tinha como
+enxergar.
+
+#### 1. `match_count` nunca teve escritor — o pior dos três
+
+A coluna nasceu na Fase 1 (`db/schema/categorization-rules.ts`) com `DEFAULT 0 NOT NULL` e **nada,
+em lugar nenhum do código, jamais a incrementou**. Conferido no banco:
+
+| | |
+|---|---|
+| Regras no banco inteiro | **518** |
+| Com `match_count > 0` | **0** |
+| "Empresa Testes 1" | 510 regras, 3 auto-geradas, primeira em 21/mai |
+
+Consequências que estavam no ar: `rules-manager.tsx` mostra `aplicada N×` desde a Fase 6 num badge
+que nunca apareceu para ninguém; e `listar_regras`, criada horas antes, publicava o contador como
+se fosse dado. O modelo concluiu *"das 500, todas as 500 nunca foram aplicadas"* — aritmeticamente
+correto e **vazio**: sairia idêntico se cada regra pegasse mil lançamentos por dia.
+
+**Correção.** `CategorizationResult` ganhou `ruleId`, preenchido só pela camada 1 (`applyRules`
+devolve `rule.id`). O job acumula num `Map` durante o bloco e chama `somarMatchCount` uma vez:
+
+```sql
+UPDATE categorization_rules AS r
+   SET match_count = r.match_count + v.n
+  FROM (VALUES (uuid, n), ...) AS v(id, n)
+ WHERE r.id = v.id AND r.organization_id = $org
+```
+
+Um UPDATE por lançamento seriam 50 idas ao banco por bloco e 7.762 numa importação grande.
+`updated_at` fica **de fora**: a tela e o MCP ordenam a lista por ele, e tocá-lo faria toda
+importação embaralhar a ordem que a pessoa usa para achar o que editou por último.
+
+`somarMatchCount` mora em `src/lib/rules-write.ts`, não no job — é lógica de regra, e em `/lib` é
+exercitável direto contra o banco.
+
+**O passado não volta.** Uma regra da Fase 6 que pegou mil lançamentos continua marcando zero. Daí
+`CONTADOR_VIVO_DESDE = '2026-08-24'` (borda conservadora: regra criada mais cedo no mesmo dia ainda
+é anterior ao deploy) e o campo `contadorConfiavel` por linha. A ferramenta diz, em letras, para não
+concluir que a regra é inútil a partir desse zero. Some sozinho conforme as regras antigas forem
+tocadas.
+
+#### 2. `total` mentia
+
+Devolvia `regras.length` — o tamanho da página. O modelo testou com `limite: 1` e recebeu
+`total: 1`. Isso é **pior que não ter total**: quem lê conclui que viu tudo, e o número parece
+confirmar. Virou `COUNT(*)` de verdade, com `exibidas` separado.
+
+#### 3. Faltava paginação, e o teto mordeu
+
+Teto de 500 sem `offset`. "Empresa Testes 1" tem **510** regras: 10 invisíveis, sem nenhum sinal.
+Ganhou `offset`, `temMais` e `avisoPaginacao` dizendo qual offset usar. O `orderBy` ganhou
+**desempate por `id`** — um lote de regras nasce no mesmo instante, e `updated_at` empatado faria
+páginas repetirem e pularem linhas.
+
+#### Verificação — 98/98
+
+O teste mais valioso prova a cadeia inteira num vão só: regra gravada pelo MCP →
+`categorizeTransaction` decidindo por ela na camada 1 (`llmCost` nulo, sem chamar IA) e dizendo
+**qual** → `somarMatchCount` subindo o contador. Mais a soma recusada com o id certo e a organização
+errada.
+
+**Defeito meu, achado ao escrever isso:** o `sed` de renomeação da sessão anterior deixou uma linha
+para trás, e o teste *"a mesma prévia não aplica duas vezes"* estava conferindo a prévia do
+**rateio**, não a de regras. Passava pelo motivo errado.
+
+---
+
+### ✅ Sessão 3.3 (regras) — quinto par de escrita + `listar_regras` — *commit `212a370`*
+
+**Arquivo novo:** `src/lib/rules-write.ts`. `src/server/categorization-rules.ts` perdeu ~175 linhas;
+`createRule`/`updateRule` viraram casca de três linhas. `validateTargetsBelongToOrg` (55 linhas
+escritas por extenso) foi substituída por `validarDimensoes` de `allocations-write.ts` + a checagem
+de folha — unificando com o caminho do rateio.
+
+**Ferramentas:** `listar_regras` (leitura), `prever_regras`, `aplicar_regras`.
+
+#### O defeito que o teste achou, e a regra que faltava saber
+
+Uma asserção de "só natureza folha" falhou. Causa: a mesma armadilha do `jaRateado` da sessão do
+rateio, agora **medida com `toSQL()`**:
+
+| Onde o `${tabela.coluna}` aparece | O que o Drizzle emite |
+|---|---|
+| lista do SELECT, consulta **sem** join | `"id"` — **sem qualificar** |
+| lista do SELECT, consulta **com** join | `"categories"."id"` |
+| cláusula WHERE, **sempre** | `"categories"."id"` |
+
+Dentro de `EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = "id")`, o `"id"` puro é capturado
+pelo alias `f` — a correlação vira `f.parent_id = f.id`, nunca verdadeira. Sem erro: só um booleano
+constante.
+
+**Estava no ar desde a 3.2:** o campo `atribuivel` de `listar_categorias` vivia `true` para tudo. É
+o campo pelo qual o modelo decide o que pode receber lançamento, então o MCP anunciava natureza
+**pai** como destino válido. Medido em produção: **152 de 180** naturezas são folha, e a ferramenta
+dizia 180.
+
+Correção: `${categories}.id`. A regra completa foi escrita em `src/lib/sql-dimensions.ts`, que já
+era onde o projeto documentava essa armadilha. Auditados os outros três sites: `isAllocated` de
+`getTransactions` (SELECT com join → seguro), `semRateio` de `transactions-write` (WHERE → seguro),
+`dimensionExistsFilter` (WHERE → seguro, e por acidente também porque a view não tem `id`).
+
+#### Decisões do par
+
+- **A prévia conta o ALCANCE.** Regra casa por *trecho*, não por igualdade: `"UBER"` alcança 5
+  lançamentos onde `"UBER *TRIP 001"` alcança 1. Sem esse número ninguém enxerga que pediu largo
+  demais. Acima de 200, vem aviso. Contado numa consulta só, com `position(lower(v.descricao) in
+  lower(t.description))` — literalmente o que `applyRules` faz em JS, e sem tratar `%` da descrição
+  como curinga.
+- **Piso de 3 caracteres.** A tela aceita 1, inofensivo num formulário; em lote, `"a"` mandaria a
+  base inteira para uma natureza só.
+- **A assinatura, não só a contagem.** Se alguém criar a mesma regra entre prever e aplicar, um
+  `criar` vira `atualizar`: quantidade idêntica, efeito passa a ser **sobrescrever** algo que o
+  humano nunca viu. `assinaturaDoPlano` compara `indice:acao:regraExistenteId`. `lancamentosQueCasam`
+  fica **fora** da assinatura — muda a cada importação e não altera o que será gravado.
+- **Regra não reclassifica o passado**, dito na descrição e no resultado.
+- **Linha inválida não derruba o lote** (princípio da 9.5). Das 5 do teste, 4 saíram com motivo:
+  natureza pai, sem alvo, duplicata apontando a posição da primeira, dimensão de outra empresa.
+- **Só natureza folha agora vale no servidor.** A tela nunca ofereceu outra coisa (`CellCombobox`
+  filtra), mas o servidor não conferia — buraco fechado de graça pela unificação.
+
+**Verificação:** 88/88 escrita, 36/36 leitura, 56/56 OAuth.
+
 ---
 
 ### ✅ Sessão de infraestrutura — a função rodava nos EUA e o banco no Brasil — *deployada*
