@@ -52,6 +52,8 @@ import { deleteTransactions } from '@/server/transactions'
 import { createClient } from '@/lib/supabase/client'
 import type { PendingSource, OrgConnection } from '@/server/connections'
 import { AdquirentesTab } from './adquirentes-tab'
+import { ManualAccounts } from './manual-accounts'
+import type { ContaManualComUso } from '@/lib/accounts'
 import type { AcquirerConnectionWithEntity } from '@/server/acquirer-connections'
 
 const PluggyConnect = dynamic(
@@ -68,9 +70,10 @@ interface ContasClientProps {
   pendingSources: PendingSource[]
   orgId: string
   acquirerConnections: AcquirerConnectionWithEntity[]
+  manualAccounts: ContaManualComUso[]
 }
 
-export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources, orgId, acquirerConnections }: ContasClientProps) {
+export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources, orgId, acquirerConnections, manualAccounts }: ContasClientProps) {
   const router = useRouter()
   const [connectToken, setConnectToken] = useState<string | null>(null)
   const [isWidgetOpen, setIsWidgetOpen] = useState(false)
@@ -214,11 +217,11 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
             </a>
           )}
 
-          {connections.length === 0 ? (
+          {connections.length === 0 && manualAccounts.length === 0 ? (
             <EmptyState
               icon={<Landmark className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
               title="Nenhuma conta conectada"
-              description="Conecte seu banco via Open Finance para sincronizar extratos automaticamente."
+              description="Conecte seu banco via Open Finance para sincronizar extratos automaticamente — ou crie uma conta manual para caixa e contas que o Open Finance não alcança."
             />
           ) : (
             <div className="grid gap-3">
@@ -236,6 +239,8 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
               ))}
             </div>
           )}
+
+          <ManualAccounts contas={manualAccounts} />
         </TabsContent>
 
         {/* Aba: Extrato pendente */}

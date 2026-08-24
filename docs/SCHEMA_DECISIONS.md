@@ -1098,3 +1098,67 @@ regra e para aí.
 
 **A conta é do DOCUMENTO, não da linha.** Um extrato é de uma conta só; `account_type` e
 `account_number` nunca variam entre linhas do mesmo arquivo.
+
+---
+
+## Decisão 22 — Conta manual é uma `data_sources`, não uma tabela nova (Sessão 4.5.B)
+
+**A pergunta que originou a decisão**, do Julio: *"tem que existir um cadastro de contas em algum
+lugar, onde está puxando essa lista de contas na página /contas?"*
+
+### A resposta medida: existe cadastro de CONEXÃO, não de conta
+
+| Onde | O quê | Quem escreve | Quem lê |
+|---|---|---|---|
+| `data_sources` (a linha) | a **conexão** (um item do Pluggy), não a conta | Pluggy, upload, MCP | `/contas`, filtrando `provider='pluggy'` |
+| `data_sources.metadata.accounts` | array JSON com as contas daquela conexão | **só** `sync-pluggy-item.ts` | a sub-linha dos cards de `/contas` |
+| `transactions.account_id/name/type/number` | 4 colunas de texto, **sem FK** | pluggy, adquirente, MCP | o filtro de `/transacoes`, por `GROUP BY t.account_id` |
+
+**Nada liga o segundo ao terceiro.** `metadata.accounts[].id` e `transactions.account_id` batem
+porque o mesmo job escreve os dois; não há FK nem constraint que perceba se divergirem.
+
+Consequências medidas em 24/ago: **13 contas na base, todas do Pluggy**; **7.762 de 7.762**
+lançamentos importados por arquivo sem conta nenhuma; e **conta caixa não tinha como existir**,
+nem conta corrente que o Open Finance não alcança — o único escritor do array era o sync.
+
+### A escolha: `provider='manual'`, sem tabela nova e sem migration
+
+`data_sources` **já é** "uma fonte de lançamentos" — é o que ela significa para o Pluggy e para o
+upload. Uma conta manual é uma fonte cujo sync não existe, e só isso.
+
+O argumento que decidiu: `getDataSourcesWithTransactions` (o filtro de `/transacoes`) já faz
+`JOIN data_sources` para pegar o nome da instituição. Com a conta manual sendo uma fonte própria
+com `institutionName`, **o rótulo sai certo sem tocar naquela query**. A alternativa — conta só nas
+colunas de `transactions` — faria o filtro exibir a palavra **"Banco"** literal, porque `?? 'Banco'`
+é o fallback de quem não tem instituição.
+
+O `metadata.accounts` da conta manual usa o **mesmo formato do Pluggy**, de propósito: é o que
+`/contas` já sabe desenhar.
+
+### A identidade é o slug do nome, não o texto
+
+`accountId = arq:<slug de norm(nome)>`. É o que faz "Itaú PJ", "itau pj" e "  ITAU PJ  " serem a
+mesma conta em arquivos diferentes. Grafias realmente distintas ("Itaú PJ" × "Itaú Pessoa
+Jurídica") continuam sendo duas contas — é risco inerente a não ter cadastro forte, e a mitigação é
+a tela **oferecer as existentes** antes de aceitar nome novo.
+
+### A conta existente vence no nome
+
+`garantirContaManual` é idempotente, mas **não renomeia**. Importar um arquivo que escreve "caixa"
+não pode mudar em silêncio o rótulo "Caixa" que a pessoa vê em `/contas` e no filtro. Tipo e número
+só são preenchidos quando faltavam: o arquivo **completa** o cadastro, nunca o sobrescreve.
+
+### Apagar conta com lançamento é recusado, com o número
+
+`transactions.data_source_id` é `NOT NULL` e a FK não tem `ON DELETE` — o banco recusaria de
+qualquer forma, com um erro de constraint em vez de uma frase. A alternativa (apagar os lançamentos
+junto) transformaria "arrumei o nome da conta" em "apaguei a contabilidade". Há uma segunda barreira
+em `try/catch` porque a contagem é fotografia e a FK é a verdade.
+
+### O que esta decisão NÃO faz
+
+Não cria tabela `accounts`, não põe FK em `transactions.account_id`, e **não migra as 13 contas do
+Pluggy** de `metadata.accounts` para linhas. Isso seria o cadastro estruturalmente correto — e exige
+migration, backfill de 2.594 lançamentos, mudança no sync do Pluggy e reescrita de `/contas`. Fica
+como fase própria, com a desconexão entre `metadata.accounts` e `transactions.account_id` registrada
+aqui.

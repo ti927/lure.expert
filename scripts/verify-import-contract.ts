@@ -68,11 +68,18 @@ async function main() {
   const upload = portas.find(p => p.provider === 'upload')
   const mcp = portas.find(p => p.provider === 'mcp')
 
+  // As duas medidas abaixo são sobre o DADO, não sobre o código. A 4.5.B fez
+  // `approveAndInsert` gravar `external_id` e os campos de conta; os 7.762
+  // lançamentos anteriores continuam sem, porque ligar a dedup não alcança o
+  // passado (risco declarado na migration 0031). O número só se move quando um
+  // arquivo novo passar pela tela — e é exatamente isso que se quer medir.
   if (upload) {
     t(Number(upload.dedup) === Number(upload.n),
-      `upload: deduplicação em ${pct(Number(upload.dedup), Number(upload.n))} — Sessão B`)
+      `upload: deduplicação em ${pct(Number(upload.dedup), Number(upload.n))} — ` +
+      'código corrigido na 4.5.B; o antigo não é alcançado. Suba um arquivo para o número andar')
     t(Number(upload.conta_id) === Number(upload.n),
-      `upload: campos de conta em ${pct(Number(upload.conta_id), Number(upload.n))} — Sessão B`)
+      `upload: campos de conta em ${pct(Number(upload.conta_id), Number(upload.n))} — ` +
+      'código corrigido na 4.5.B; depende de o arquivo declarar a conta na revisão')
   }
   if (mcp) {
     t(Number(mcp.conta_nome) === Number(mcp.n),
@@ -84,7 +91,8 @@ async function main() {
      WHERE effective_date IS NOT NULL AND effective_date <> date`)
   t(Number(caixa.n) > 0,
     `data de caixa realmente diferente da competência: ${caixa.n} lançamento(s) na base inteira — ` +
-    'enquanto for 0, o campo está sendo descartado no insert do staging (process-document.ts)')
+    'a linha que descartava o campo em `process-document.ts` foi corrigida na 4.5.B; ' +
+    'só um arquivo NOVO com data de caixa move este número')
 
   // ═══ 2. Conformidade linha a linha ════════════════════════════════════════
   console.log('\n── o que o contrato recusaria, por porta ──')
@@ -184,7 +192,9 @@ async function main() {
             WHERE d2.report_type = 'balance_sheet') AS linhas
       FROM documents WHERE report_type = 'balance_sheet'`)
   t(Number(bp.docs) > 0,
-    `documentos de balanço: ${bp.docs} (${bp.linhas} linhas) — enquanto for 0, /balanco nunca teve dado`)
+    `documentos de balanço: ${bp.docs} (${bp.linhas} linhas) — o defeito da TELA (filtro ` +
+    '`date && amount && direction`, que engolia toda linha de balanço) foi corrigido na 4.5.B. ' +
+    'Faltam dois: `reportType: other` cravado no MCP (Sessão C) e o seed não criar naturezas de BP (produto)')
 
   const [prefixos] = await db.execute<{ antigo: number; novo: number }>(sql`
     SELECT COUNT(*) FILTER (WHERE external_id LIKE 'mcp:%')::int AS antigo,

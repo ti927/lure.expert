@@ -9,6 +9,10 @@ import { eq, and, isNotNull, ne, inArray, desc } from 'drizzle-orm'
 import { getPluggyClient, createConnectToken as pluggyCreateToken, isGenericPluggyConnector } from '@/lib/pluggy'
 import { revalidatePath } from 'next/cache'
 import { inngest } from '@/lib/inngest'
+import {
+  listarContasManuais, garantirContaManual, apagarContaManual,
+  type ContaManualComUso,
+} from '@/lib/accounts'
 
 async function getAuthContext() {
   const supabase = createClient()
@@ -125,10 +129,16 @@ export interface DataSourceOption {
   txCount: number
 }
 
+// ACQUIRER já é escrito por `sync-acquirer-item` desde a Fase 8 e faltava aqui —
+// o filtro mostraria a string crua. OTHER é o tipo das contas que não são de
+// banco nem de cartão (caixa, por exemplo), possíveis desde que conta manual
+// passou a existir.
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   CHECKING_ACCOUNT: 'C. Corrente',
   SAVINGS_ACCOUNT:  'Poupança',
   CREDIT_CARD:      'Cartão',
+  ACQUIRER:         'Adquirente',
+  OTHER:            'Outra',
 }
 
 export async function getDataSourcesWithTransactions(): Promise<DataSourceOption[]> {
@@ -166,15 +176,53 @@ export async function getDataSourcesWithTransactions(): Promise<DataSourceOption
   `)
 
   return rows.map(r => {
-    const bank      = r.institution_name ?? 'Banco'
+    // `account_name` era selecionado, agrupado e NUNCA usado. Para o Pluggy isso
+    // passava despercebido — a instituição sempre existe. Para conta que veio de
+    // arquivo, não: a fonte não tem `institutionName` e o rótulo saía como a
+    // palavra "Banco", literal. O nome da conta é a identidade dela.
+    const bank      = r.institution_name ?? r.account_name ?? 'Banco'
     const typeLabel = r.account_type ? (ACCOUNT_TYPE_LABELS[r.account_type] ?? r.account_type) : ''
     const numLabel  = r.account_number ? ` · ${r.account_number}` : ''
     return {
       accountId: r.account_id,
-      label:     `${bank} · ${typeLabel}${numLabel}`,
+      label:     [bank, typeLabel].filter(Boolean).join(' · ') + numLabel,
       txCount:   Number(r.tx_count),
     }
   })
+}
+
+// ─── Contas manuais ──────────────────────────────────────────────────────────
+// As que não vêm de conexão bancária: caixa, conta corrente que o Open Finance
+// não alcança, conta declarada num arquivo importado. Antes disto elas não
+// tinham como existir — o único escritor de conta era o sync do Pluggy.
+// Detalhe do desenho em `src/lib/accounts.ts`.
+
+export async function getManualAccounts(): Promise<ContaManualComUso[]> {
+  const { organizationId } = await getAuthContext()
+  return listarContasManuais(organizationId)
+}
+
+export async function createManualAccount(input: {
+  nome: string
+  tipo: string | null
+  numero: string | null
+}): Promise<{ error: string } | { success: true }> {
+  const { organizationId } = await getAuthContext()
+  const result = await garantirContaManual(organizationId, input.nome, input.tipo, input.numero)
+  if ('error' in result) return result
+  revalidatePath('/contas')
+  revalidatePath('/transacoes')
+  return { success: true }
+}
+
+export async function deleteManualAccount(
+  dataSourceId: string,
+): Promise<{ error: string } | { success: true }> {
+  const { organizationId } = await getAuthContext()
+  const result = await apagarContaManual(organizationId, dataSourceId)
+  if ('error' in result) return result
+  revalidatePath('/contas')
+  return { success: true }
 }
 
 export type OrgConnection = DataSource & { customLogoUrl: string | null }

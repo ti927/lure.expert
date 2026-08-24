@@ -94,6 +94,14 @@ export const processDocument = inngest.createFunction(
                 rowIndex: row.rowIndex,
                 rawData: row.rawData,
                 date: row.date,
+                // A data de caixa é extraída pelos DOIS parsers desde sempre e era
+                // descartada exatamente aqui — este insert listava date/amount/
+                // direction/description e nada mais. `approveAndInsert` fazia
+                // `r.effectiveDate ?? r.date` e caía no `date` em 100% das linhas,
+                // porque o valor nunca chegava. É a explicação mecânica de "caixa
+                // nunca difere da competência em toda a base" (medido em 24/ago:
+                // 0 lançamentos em 10.365).
+                effectiveDate: row.effectiveDate,
                 amount: row.amount !== null ? String(row.amount) : null,
                 direction: FORCE_INFLOW_SOURCES.has(sourceType)
                   ? 'inflow'

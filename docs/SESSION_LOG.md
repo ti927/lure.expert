@@ -12,6 +12,93 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 4.5.B — a tela cumpre o contrato
+
+**O critério era o DoD literal da Sessão 2.8 do `GUIA_OPERACIONAL.md`**, escrito em 2026 e nunca
+construído: *"reuploadar mesmo arquivo, ver 0 inserções"*. Verificado: **54/54**.
+
+**Arquivos:** `src/lib/staging-import.ts` (novo), `src/lib/accounts.ts` (novo),
+`scripts/verify-staging-import.ts` (novo), `db/migrations/rls/0031_dedup_prefix_arq.sql` (novo),
+`account-header.tsx` e `manual-accounts.tsx` (novos), mais `process-document.ts`, `staging.ts`,
+`connections.ts`, `categorizer.ts`, `review-client.tsx`, `contas-client.tsx` e as duas `page.tsx`.
+
+#### A linha que explicava tudo
+
+`src/jobs/process-document.ts` montava o insert do staging com `date`, `amount`, `direction`,
+`description` e **nada mais**. Os **dois** parsers já produziam `effectiveDate` no `StagingRow` — o
+Excel/CSV desde o redesenho e o PDF desde a Fase 2.5 — e a coluna existia desde a migration 0021.
+`approveAndInsert` fazia `r.effectiveDate ?? r.date` e caía no `date` em 100% das linhas porque o
+valor era descartado antes de chegar. **É a explicação mecânica de "caixa nunca difere da
+competência em toda a base": 0 em 10.365.**
+
+#### Sem migration para o que importa
+
+Levantado antes de escrever qualquer SQL: `transactions_staging.effective_date` (0021), as quatro
+colunas de conta (0018), `documents.reference_date` (Fase 6) e o índice único `idx_tx_dedup`
+(Fase 1) **já existiam**. A migration 0031 faz uma coisa só — trocar o prefixo `mcp:` por `arq:`,
+hoje 0 linhas — e existe para que "a chave é a mesma nas duas portas" seja verdade sobre a base
+inteira, não só sobre o que vier a partir de agora. Validada com `ROLLBACK`: 5/5.
+
+#### O balanço, e o terceiro defeito que o teste achou
+
+`approveAndInsert` filtrava `r.date && r.amount && r.direction`. Uma linha de balanço **não tem
+data nem sentido próprios** — tem a data do arquivo, e o lado vem da natureza. Toda linha caía em
+`skipped`, e é por isso que nunca existiu um BP no banco.
+
+Escrevendo o teste apareceu um terceiro motivo, que nenhuma leitura de código teria dado:
+**`seed_categories_for_org` não cria uma única natureza de BP.** Conferido no banco — a função não
+menciona nenhum dos cinco tipos patrimoniais, e das 6 organizações só "Empresa Testes 1" tem
+naturezas de BP, criadas à mão. Uma organização nova importaria o balanço e `/balanco` continuaria
+vazio, porque `getBpData` soma por tipo de categoria. É decisão de produto (qual plano patrimonial
+padrão), então a sessão **avisa na tela** em vez de decidir sozinha.
+
+Camada 0 nova para o balanço: `findCategoryByText` (código exato → nome exato → prefixo de código).
+Sem ela a linha entra sem natureza e o BP importado seria inútil.
+
+#### O defeito da Decisão 18, escrito por mim de novo
+
+`listarContasManuais` tinha `WHERE tx.data_source_id = ${dataSources.id}` dentro de subconsulta sem
+join. O Drizzle emite `"id"` sem qualificar, o escopo interno vence, e a correlação vira
+`tx.data_source_id = tx.id` — constante falsa, sem erro. A contagem de uso dava **0 para toda
+conta**, e `apagarContaManual` passaria a autorizar apagar conta em uso (o teste bateu na FK).
+Correção: `${dataSources}.id`. **Terceira vez que esta armadilha morde.**
+
+O teste pegou porque a asserção era *"a contagem SOBE"*, e não *"a contagem existe"*.
+
+#### E um defeito meu no casamento por código
+
+`findCategoryByText` usava `normalizeForMatch` para tudo. Ela colapsa não-alfanumérico em espaço —
+certo para nome, desastroso para código: `"1.1.01 Caixa"` viraria `"1 1 01 caixa"` e o prefixo seria
+`"1"`. Agora código usa `norm` (preserva pontuação) e nome usa `normalizeForMatch`. O teste só
+pegaria isso com códigos que tivessem ponto, então os códigos do teste têm ponto de propósito.
+
+#### Conta manual — a resposta à pergunta do Julio
+
+*"onde está puxando essa lista de contas na página /contas?"* De `data_sources` com
+`provider='pluggy'`. Ou seja: existe cadastro de **conexão**, não de conta, e as contas de cada
+conexão são um array JSON que só o sync do Pluggy escreve. Detalhe e o porquê da escolha em
+`SCHEMA_DECISIONS.md` Decisão 22.
+
+#### Verificado
+
+**54/54** no banco de verdade, numa organização criada só para o teste e apagada no fim — incluindo
+o mesmo arquivo duas vezes dando 0 na segunda, lote sobreposto inserindo só a linha nova, três cafés
+idênticos gerando três chaves distintas, o balanço herdando a data do arquivo e **não** deduplicando
+(reenviar o balanço corrigido precisa entrar, senão o documento novo ficaria vazio e `/balanco`
+mostraria o vazio), e apagar conta em uso sendo recusado com o número na mensagem.
+
+Também: migration 5/5 com ROLLBACK, `verify-mcp-write` **116/116**, `verify-mcp` **36/36**, `tsc`,
+`next lint` e `next build` limpos.
+
+**Não verificado na tela** (nada bloqueia, mas nenhum olho humano viu): a coluna Data de caixa, o
+modo de balanço, o bloco de conta na revisão, a seção "Contas manuais" em `/contas`, e o aviso de
+duplicadas.
+
+**Continua pendente, declarado:** a dedup **não alcança o passado**. Os 7.762 lançamentos já
+importados não têm `external_id`, então reimportar aquele arquivo específico ainda duplica.
+
+---
+
 ### ✅ Sessão 4.5.A — o contrato de importação, sem tocar em nenhum insert
 
 **O critério da sessão era literal, e foi conferido literalmente:**

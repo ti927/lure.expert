@@ -2,19 +2,20 @@ import type { Metadata } from 'next'
 import { ContasClient } from './contas-client'
 
 export const metadata: Metadata = { title: 'Contas' }
-import { getOrgConnections, getPendingTransactionsBySource, getCurrentOrgId } from '@/server/connections'
+import { getOrgConnections, getPendingTransactionsBySource, getCurrentOrgId, getManualAccounts } from '@/server/connections'
 import { getReconciliationCount } from '@/server/reconciliation'
 import { getAcquirerConnections } from '@/server/acquirer-connections'
 
 export const dynamic = 'force-dynamic'
 
 export default async function ContasPage() {
-  const [connections, reconciliationCount, pendingSources, orgId, acquirerConnections] = await Promise.all([
+  const [connections, reconciliationCount, pendingSources, orgId, acquirerConnections, manualAccounts] = await Promise.all([
     getOrgConnections(),
     getReconciliationCount(),
     getPendingTransactionsBySource(),
     getCurrentOrgId(),
     getAcquirerConnections(),
+    getManualAccounts(),
   ])
   const includeSandbox = process.env.PLUGGY_ENVIRONMENT === 'sandbox'
 
@@ -27,6 +28,7 @@ export default async function ContasPage() {
         pendingSources={pendingSources}
         orgId={orgId}
         acquirerConnections={acquirerConnections}
+        manualAccounts={manualAccounts}
       />
     </div>
   )

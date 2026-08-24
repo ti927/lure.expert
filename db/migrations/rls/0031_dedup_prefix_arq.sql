@@ -1,0 +1,44 @@
+-- ============================================================================
+-- 0031 — A chave de deduplicação de arquivo troca de prefixo: `mcp:` → `arq:`
+-- ----------------------------------------------------------------------------
+-- Sessão 4.5.B. Esta é a ÚNICA mudança de banco da sessão: tudo o mais que a
+-- normalização da importação precisava já existia no schema —
+-- `transactions_staging.effective_date` (migration 0021), as quatro colunas de
+-- conta em `transactions` (0018), `documents.reference_date` (Fase 6) e o índice
+-- único `idx_tx_dedup` (Fase 1).
+--
+-- POR QUE O PREFIXO MUDA
+--
+-- `mcp:` nomeava o TRANSPORTE. A chave precisa ser a mesma nas duas portas de
+-- arquivo — a tela e o MCP — senão subir pela tela o mesmo extrato que a IA já
+-- importou duplicaria tudo, e a deduplicação ficaria cega justamente entre os
+-- dois caminhos que ela existe para unir. `arq:` nomeia o que a chave
+-- identifica: uma linha que veio de arquivo, seja qual for a porta.
+--
+-- O hash NÃO inclui o prefixo (ver `src/lib/import-dedup.ts`), então migrar é
+-- trocar os 4 primeiros caracteres. `substr(external_id, 5)` devolve o hash a
+-- partir do 5º caractere, que é exatamente o fim de 'mcp:'.
+--
+-- CUSTO HOJE: ZERO LINHAS. A escrita pelo MCP entrou em 24/ago e nenhuma
+-- importação por lá chegou a ser gravada. A migration existe para o caso de o
+-- deploy da 4.5.B vir depois de alguém usar a ferramenta — e para que a
+-- afirmação "a chave é a mesma nas duas portas" seja verdadeira sobre TODA a
+-- base, não só sobre o que vier a partir de agora.
+--
+-- SEGURANÇA: o índice único é `(data_source_id, external_id)` parcial em
+-- `external_id IS NOT NULL`. A troca de prefixo é injetora — `mcp:X` e `mcp:Y`
+-- viram `arq:X` e `arq:Y` — então não pode criar colisão entre linhas migradas.
+-- Colisão com uma chave `arq:` preexistente na MESMA fonte também não pode
+-- ocorrer: uma fonte `provider='mcp'` só contém chaves `mcp:`.
+--
+-- NÃO FAZ BACKFILL DOS 7.762 LANÇAMENTOS JÁ IMPORTADOS PELA TELA. Eles não têm
+-- `external_id` e continuam sem. Ligar a deduplicação não alcança o passado:
+-- reimportar aquele arquivo específico ainda duplica. É risco declarado, não
+-- esquecimento — calcular as chaves retroativamente exigiria a ordem original
+-- do arquivo e a conta, que aquelas linhas nunca tiveram, e uma chave errada é
+-- pior que chave nenhuma (bloquearia importação legítima em silêncio).
+-- ============================================================================
+
+UPDATE transactions
+   SET external_id = 'arq:' || substr(external_id, 5)
+ WHERE external_id LIKE 'mcp:%';

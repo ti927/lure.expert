@@ -255,9 +255,11 @@ organização + OAuth/MCP + dashboard). A Fase 3 **fechou** com os seis pares de
 **Fase 4.5** (normalização da importação) está na **sessão A de três**. Ver a tabela em
 *Próximo passo*.
 
-**Próxima sessão: 4.5.B — a tela cumpre o contrato.** É a primeira desta fase que mexe em código
-quente (`approveAndInsert`, por onde entraram os 7.762 lançamentos) e a primeira que precisa de
-migration. Ver *Fase 4.5* adiante.
+**Próxima sessão: 4.5.C — o asfalto do MCP.**
+
+⚠️ **Migration `0031_dedup_prefix_arq.sql` aguarda aplicação no Supabase Studio.** Uma sentença só
+(`mcp:` → `arq:`), 0 linhas hoje, validada com `ROLLBACK` (5/5). Nada quebra sem ela — só a
+afirmação "a chave é a mesma nas duas portas" deixaria de valer se alguém importar pelo MCP antes.
 
 Fase 10 — Dimensões (cliente/fornecedor + rateio) **concluída** (10.0 a 10.5 ✅).
 Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.8 ✅). Fases 0–7 **100% concluídas**.
@@ -297,8 +299,8 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
 | 4 | Convites e papéis | 🔲 |
 | **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
-| **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP passa a funcionar, dedup liga. DoD: mesmo arquivo duas vezes → 0 inserções na segunda | 🔲 **próxima** |
-| **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido sem Haiku, `prever_importacao` publica o contrato, BP pelo MCP vira possível | 🔲 |
+| **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
+| **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido sem Haiku, `prever_importacao` publica o contrato, BP pelo MCP vira possível (`reportType: 'other'` cravado) | 🔲 **próxima** |
 | 5 | Dashboard configurável | 🔲 |
 
 ### Fase 4.5 — o formato padrão de colunas
@@ -337,20 +339,22 @@ arquivo** declare o que a linha não carrega (que é um balanço, e a data de re
 mesmas chaves, a segunda importação deduplicaria inteira, e `getBpAllDates` — que escolhe o documento
 **mais recente** da data — passaria a ler o vazio. Snapshot se substitui, não se acumula.
 
-**O BP está quebrado nas DUAS portas, e eu tinha escrito que só numa.** A frase anterior aqui era
-*"a tela cobre BP; a IA externa não"* — **falso**, e a varredura mostrou:
+**O BP estava quebrado em TRÊS lugares, não num.** A frase original aqui era *"a tela cobre BP; a IA
+externa não"* — falso nos dois sentidos:
 
-- **Pelo MCP:** `aplicarImportacao` crava `reportType: 'other'`, então BP importado pelo MCP nunca
-  vira BP; e pior, em silêncio, `domainFromReportType('other')` → `'dre'` e a camada 0 só oferece
-  naturezas de DRE
-- **Pela tela:** `src/server/staging.ts:227` filtra `r.date && r.amount && r.direction`. Um balanço
-  não tem data **por linha** — tem uma data de arquivo. `process-document.ts:22` já força
-  `direction='inflow'` para `balance_sheet`, mas **ninguém preenche a data**, então toda linha cai em
-  `skipped` e o documento entra com zero
+| # | Onde | Estado |
+|---|---|---|
+| 1 | **Tela:** `approveAndInsert` filtrava `r.date && r.amount && r.direction`, e uma linha de balanço não tem data nem sentido próprios — tem a data do ARQUIVO. Toda linha caía em `skipped` | ✅ corrigido na 4.5.B |
+| 2 | **MCP:** `aplicarImportacao` crava `reportType: 'other'`, então BP pelo MCP nunca vira BP; e em silêncio, `domainFromReportType('other')` → `'dre'` | 🔲 Sessão C |
+| 3 | **Plano de contas:** `seed_categories_for_org` **não cria uma única natureza de BP** — conferido no banco, a função não menciona nenhum dos 5 tipos patrimoniais. Das 6 organizações, só "Empresa Testes 1" tem (26, criadas à mão) | 🔲 **decisão de produto** |
+
+O terceiro só apareceu ao escrever o teste, e é o mais consequente: uma organização nova importaria
+o balanço com sucesso e `/balanco` continuaria vazio, porque `getBpData` soma por tipo de categoria e
+ignoraria toda linha sem natureza. A 4.5.B **avisa na tela** ("esta organização não tem nenhuma
+natureza de Balanço") em vez de decidir sozinha qual é o plano patrimonial padrão.
 
 **É por isso que nunca existiu um BP no banco:** 0 documentos `balance_sheet`, os 10.353 lançamentos
-todos de natureza DRE, e `/balanco` devolvendo `null` desde sempre. O caminho existe e **nunca foi
-exercitado com dado real** — a 4.5.B é a primeira vez que será.
+todos de natureza DRE, e `/balanco` devolvendo `null` desde sempre.
 
 **Sobre datas, que é a dúvida que originou a fase: só duas importam.** `date` = competência
 (quando o fato ocorreu; compra no cartão = data da compra), `effective_date` = caixa (quando o
@@ -382,28 +386,35 @@ a data divergir de verdade é `sync-acquirer-item` (`saleDate` × `settlementDat
 certo já existe, num código pausado que nunca rodou. Mais **1.361 lançamentos do Pluggy com
 `effective_date` nulo** (21–22/mai, antes da migration 0021), que um backfill resolve.
 
-**A causa mecânica de "a caixa nunca difere" é UMA LINHA.** `src/jobs/process-document.ts:90` monta o
-insert do staging com `date`, `amount`, `direction`, `description` e **nada mais**.
-`row.effectiveDate` existe no `StagingRow`, a coluna existe desde a migration 0021, e
-`approveAndInsert` faz `r.effectiveDate ?? r.date` — que **sempre** cai no `date` porque o valor foi
-descartado antes de chegar. Eu havia escrito que "os parsers já extraem, a staging já guarda,
-`approveAndInsert` já copia": o meio era falso. Mostrar a coluna na tela sem consertar isto exibiria
-a mesma data duas vezes em 100% das linhas.
+**A causa mecânica de "a caixa nunca difere" era UMA LINHA, e está corrigida (4.5.B).**
+`src/jobs/process-document.ts` montava o insert do staging com `date`, `amount`, `direction`,
+`description` e **nada mais**. Os **dois** parsers já produziam `effectiveDate` no `StagingRow` e a
+coluna existia desde a migration 0021; `approveAndInsert` fazia `r.effectiveDate ?? r.date` e caía
+sempre no `date` porque o valor era descartado antes de chegar. Eu havia escrito que "os parsers já
+extraem, a staging já guarda, `approveAndInsert` já copia" — o **meio** era falso.
 
-**O que a 4.5.B precisa entregar** (a sessão pede migration, então segue o ritual da casa — validar
-com `ROLLBACK`, colar verbatim, conferir o catálogo depois):
+**O número na base só anda com arquivo NOVO.** Os 10.365 lançamentos existentes continuam com caixa
+= competência; nada os alcança retroativamente.
+
+**O que a 4.5.B entregou:**
 
 1. `process-document.ts` — a linha do `effectiveDate`
-2. Migration `0031`: `transactions_staging.account_name`, `documents.imported_at`, e o `UPDATE` do
-   prefixo `mcp:` → `arq:` (hoje 0 linhas, então é grátis)
-3. `approveAndInsert` — `.orderBy(rowIndex)` **crítico**, porque a numeração de ocorrência da chave de
-   dedup tem de ser determinística; data de BP herdando `documents.reference_date`; normalização pelo
-   contrato; `external_id` + `onConflictDoNothing`; contar `rows.length` do `.returning()` e não
-   `valid.length`
-4. `review-client.tsx` — coluna Data de caixa (mostrando "= competência" em cinza quando vazia, nunca
-   repetindo a data), bloco de conta no cabeçalho, modo BP
-5. **A conciliação obrigatória:** rodar o `approveAndInsert` antigo (via `git show`) contra o novo,
-   sobre o mesmo staging, exigindo igualdade linha a linha
+2. `src/lib/staging-import.ts` — `planejarStaging`, **o mesmo código** que a tela usa para avisar e
+   que o insert usa para gravar. Calcular por caminhos diferentes faria o aviso mentir justamente
+   sobre o número que decide o clique
+3. `approveAndInsert` — `.orderBy(rowIndex)` (**crítico**: a numeração de ocorrência da chave de dedup
+   precisa ser determinística), data de BP herdando `documents.reference_date`, normalização pelo
+   contrato, `external_id` + `onConflictDoNothing`, e o relatado passando a ser o que **entrou**
+4. `src/lib/accounts.ts` — conta manual como `data_sources` com `provider='manual'` (Decisão 22)
+5. `review-client.tsx` — coluna Data de caixa ("= competência" em cinza quando vazia, nunca repetindo
+   a data), bloco de conta, modo de balanço, aviso de duplicadas e preenchimento de caixa em lote
+6. `/contas` — seção **Contas manuais**, com criar e apagar
+
+**A conciliação prevista foi substituída por algo melhor.** O plano pedia rodar o `approveAndInsert`
+antigo contra o novo exigindo igualdade — mas o comportamento **precisa** divergir (é o ponto da
+sessão: antes não deduplicava, agora deduplica; antes engolia balanço, agora não). O que vale é o
+`scripts/verify-staging-import.ts`, que exercita cada divergência declarada contra o banco real numa
+organização descartável: **54/54**.
 
 Plano completo em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
 
@@ -427,6 +438,14 @@ diálogo de rateio em lote em `/transacoes` (o aviso *"N já rateados"* voltou a
 lançamento e copiar do realizado agora passam pelo mesmo código do MCP), `/configuracoes/regras`
 (criar/editar mudaram de caminho, e o badge `aplicada N×` passa a aparecer **depois da próxima
 categorização**), `/configuracoes/consumo` e `/configuracoes/conexoes`.
+
+**Da 4.5.B**, todas em `/upload/[id]/review` e `/contas`: a coluna **Data de caixa** (mostra
+"= competência" em cinza quando vazia, e o preenchimento em lote aparece quando há linhas sem ela);
+o bloco **Conta deste arquivo**, que oferece as contas existentes e aceita nome novo; o **modo de
+balanço** (sem coluna de data nem Direção, "Valor" vira "Saldo", "Descrição" vira "Conta", a data de
+referência no cabeçalho); o **aviso de duplicadas** antes do clique; e a seção **Contas manuais** em
+`/contas`. O caminho mais rápido de conferir o DoD: subir um CSV, importar, subir **o mesmo arquivo**
+de novo e ver o aviso azul dizendo que nada é novo.
 
 **A regra de roteamento que a 3.1 estabeleceu** — vale para tudo que vier no MCP:
 
@@ -547,6 +566,7 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ `db/migrations/rls/0023_acquirer_connections.sql` — tabela `acquirer_connections` + RLS
 - ✅ `db/migrations/rls/0024_budget.sql` — `budget_versions`, `budget_series`, `budget_entries` + índices + CHECKs + RLS (12 policies) + 3 triggers `updated_at`
 - ✅ `db/migrations/rls/0026_transaction_allocations.sql` — `transaction_allocations` + view `transaction_lines` + RLS + os gatilhos da invariante do rateio. Aplicação conferida contra o banco (22/22): 12 colunas, 2 CHECKs, 6 índices, RLS com as 4 policies, os 2 gatilhos com `tgdeferrable` e `tginitdeferred` verdadeiros, `security_invoker=true` na view, e as regras exercitadas de verdade — soma que não fecha, dimensão no pai, edição do valor e 51 partes recusadas, tudo revertido ao fim
+- 🔲 **`db/migrations/rls/0031_dedup_prefix_arq.sql` — A APLICAR.** Uma sentença: `UPDATE transactions SET external_id = 'arq:' || substr(external_id, 5) WHERE external_id LIKE 'mcp:%'`. **0 linhas hoje** — a escrita pelo MCP entrou em 24/ago e nenhuma importação chegou a ser gravada por lá. Existe para que "a chave de dedup é a mesma nas duas portas de arquivo" seja verdade sobre a base inteira, não só sobre o futuro. O hash **não** inclui o prefixo, então a troca é injetora e não pode criar colisão no índice único. **Não faz backfill** dos 7.762 lançamentos já importados pela tela — eles não têm `external_id` e continuam sem; reimportar aquele arquivo ainda duplica, e isso é risco declarado. Validada com ROLLBACK (5/5): a linha semeada vira `arq:` com o **mesmo hash**, nenhuma `mcp:` sobra, `idx_tx_dedup` segue de pé, e nada persistiu fora da transação
 - ✅ `db/migrations/rls/0030_oauth_mcp.sql` — `mcp_oauth_clients`, `mcp_oauth_access_grants`, `mcp_oauth_authorization_codes`, `mcp_oauth_tokens` + 5 índices + 6 CHECKs + 4 FKs + RLS (2 policies, só em `access_grants`). **Prefixo `mcp_` obrigatório:** o Supabase já tem `auth.oauth_clients`, `auth.oauth_consents` e `auth.oauth_authorizations` — conferido no banco. Validada antes (45/45 com ROLLBACK) e conferida depois contra o banco (33/33): os **3 guardas de array vazio usando `cardinality`** e não `array_length`, `S256` preso no CHECK, os 2 índices parciais, `token_hash` UNIQUE, 3 FKs em CASCADE e `replaced_by` em SET NULL — e as regras exercitadas de verdade: PKCE `plain` recusado, consentimento sem organização e sem escopo recusados, hash duplicado recusado, apagar o token substituído deixando o novo vivo, e apagar o cliente levando consentimentos, códigos e tokens pela cadeia
 - ✅ `db/migrations/rls/0029_organization_ai_settings.sql` — `organization_ai_settings` (chave cifrada, teto, alerta) + 5 CHECKs + RLS (4 policies) + trigger + **backfill das organizações existentes em `'platform'`**. Validada antes (22/22 com ROLLBACK) e conferida depois contra o banco: `numeric(10,2)` no teto, os 5 CHECKs, as 4 policies, e o backfill com 6/6 organizações em `platform` e nenhuma chave cadastrada
 - ✅ `db/migrations/rls/0028_dashboards.sql` — `dashboards` + `dashboard_blocks` + `dashboard_shares` + 8 índices + RLS (12 policies) + 2 triggers `updated_at`. Validada antes (24/24 com ROLLBACK) e conferida depois contra o banco (27/27 no total das duas): índice parcial do painel padrão, índice único do alvo de compartilhamento, CASCADE do painel para blocos, e as regras de coerência recusando de verdade
@@ -582,6 +602,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Motor + MCP (plano de 23/ago)** | |
+| 4.5.B (a tela) | **O DoD da Sessão 2.8 do guia, escrito em 2026 e nunca construído, foi cumprido:** subir o mesmo arquivo duas vezes dá **0 inserções na segunda**. A causa de "a caixa nunca difere" era **uma linha** — `process-document.ts` montava o insert do staging com date/amount/direction/description e nada mais, enquanto os DOIS parsers já produziam `effectiveDate` e a coluna existia desde a 0021; `approveAndInsert` fazia `r.effectiveDate ?? r.date` e caía sempre no `date` porque o valor era descartado antes. **Sem migration para o que importa:** staging, campos de conta, `reference_date` e o índice único de dedup já existiam; a 0031 troca só o prefixo (0 linhas). `lib/staging-import.ts` é **o mesmo código** que a tela usa para avisar e o insert para gravar — calcular separado faria o aviso mentir justamente sobre o número que decide o clique. **O balanço estava quebrado em TRÊS lugares, não num:** o filtro `date && amount && direction` na tela (corrigido), o `reportType: 'other'` do MCP (Sessão C) e — achado ao escrever o teste — **o seed não cria uma única natureza de BP**, então uma organização nova importaria com sucesso e `/balanco` continuaria vazio; a tela passa a avisar em vez de eu decidir o plano patrimonial padrão. **Conta manual passa a existir** (`data_sources` com `provider='manual'`, Decisão 22), respondendo à pergunta do Julio: `/contas` lê cadastro de **conexão**, não de conta, e o array de contas é JSON que só o Pluggy escreve. **A Decisão 18 mordeu pela terceira vez** — `${dataSources.id}` em subconsulta sem join zerava a contagem de uso e teria autorizado apagar conta em uso; o teste pegou porque a asserção era "a contagem SOBE". Verificado: **54/54** contra o banco numa organização descartável, migration 5/5 com ROLLBACK, 116/116 e 36/36 no MCP |
 | 4.5.A (contrato) | O contrato de importação, **sem mexer em nenhum insert** — critério da sessão cumprido literalmente (`git diff` não toca `staging.ts`, `sync-pluggy-item.ts`, `sync-acquirer-item.ts` nem `process-document.ts`). `docs/FORMATO_DE_IMPORTACAO.md` + `src/lib/import-contract.ts` (colunas com aliases, dois níveis — arquivo e linha —, `resolverCabecalho`, `contaCanonica`, `normalizarLancamento`) + `src/lib/import-dedup.ts`. **A chave de dedup mudou de casa e de prefixo** (`mcp:` → `arq:`): ela precisa ser a MESMA nas duas portas de arquivo, senão subir pela tela o que a IA importou duplicaria — a dedup ficaria cega justamente entre os dois caminhos que ela une; o hash não inclui o prefixo, então migrar é um `UPDATE`. **Separação por empacotamento:** o hash saiu do contrato porque `csv-templates.ts` roda no cliente e `node:crypto` não existe lá — o `tsc` não pega, o `next build` pega. `parseDate` e `norm` mudaram para `format.ts` (a 3ª e 4ª cópias; `normalizeForMatch` do categorizador fica quieta de propósito — ela decide classificação). Planilha modelo **gerada a partir das colunas**, nunca redigitada. `scripts/verify-import-contract.ts` mede as portas e **já achou coisa**: `caixa ≠ competência = 0 em toda a base` (o campo é descartado no insert do staging), upload com 0% de dedup e 0% de conta, e os cabeçalhos reais do único ERP importado — que renderam 3 aliases novos (`data venda`, `nome produto`, `num nf`). Verificado: 116/116 escrita, 36/36 leitura, build limpo |
 | 3.3 (importação) | Sexto par, e a 3.3 fecha. **O arquivo não trafega — as linhas trafegam.** Quem tem o arquivo é a pessoa, e ela já o anexa no claude.ai, que lê CSV/Excel/PDF melhor que o parser Haiku; a URL assinada do plano resolvia um problema que ninguém tinha, porque o modelo não tem arquivo para subir. Sem Storage, sem `transactions_staging`, sem `process-document`, **sem uma chamada à Anthropic**. **A deduplicação é o coração:** o caminho da tela nunca deduplicou nada — subir o mesmo extrato duas vezes dobra a contabilidade — e isso sobreviveu porque gente não reenvia sem perceber; modelo, sim, justamente quando a chamada pareceu falhar e deu certo. Sem migration: o índice único `idx_tx_dedup` em `(data_source_id, external_id)` já existia, e cada linha ganha `external_id = mcp:sha256(data|valor|sentido|descrição normalizada|conta|**ocorrência**)`. A **ocorrência** é o que faz funcionar: dois cafés de R$ 15 no mesmo dia são dois lançamentos legítimos e recebem chaves distintas, enquanto o mesmo arquivo reimportado produz as mesmas N chaves. `ON CONFLICT DO NOTHING` é a segunda barreira, e o relatado é o que **entrou**, não o prometido. `deleteDocument` aprendeu a pular o Storage quando o caminho é `mcp://` (fachada para o NOT NULL de um documento sem arquivo). Verificado: **116/116**, incluindo o mesmo arquivo duas vezes dando 0 novas e lote sobreposto de 3 linhas inserindo só 1 |
 | 3.3 (regras, correções) | Três defeitos que o próprio MCP encontrou em uso, e o pior deles ele não podia ver. **`match_count` nunca teve escritor** — a coluna nasceu na Fase 1 com `DEFAULT 0 NOT NULL`, e o banco tinha 518 regras com 518 zeros. A tela mostrava "aplicada N×" que jamais apareceu, e o modelo concluiu "500 de 500 nunca aplicadas" — resposta idêntica à que sairia se cada uma pegasse mil por dia. Agora `applyRules` devolve `ruleId`, o job agrega por bloco e `somarMatchCount` faz **um** `UPDATE ... FROM (VALUES …)` (não 7.762), **sem tocar `updated_at`** — a lista ordena por ele, e mexer embaralharia a ordem a cada importação. O passado não volta, então cada regra declara `contadorConfiavel`; anterior a `CONTADOR_VIVO_DESDE`, o zero dela não prova nada, e a ferramenta diz isso. **`total` mentia:** devolvia `regras.length`, o tamanho da página — pior que não ter total, porque quem lê conclui que viu tudo e o número parece confirmar. **Sem `offset`:** "Empresa Testes 1" tem 510 regras e o teto de 500 cortava 10 em silêncio; o `orderBy` ganhou desempate por `id`, senão `updated_at` empatado (um lote nasce no mesmo instante) faria páginas repetirem e pularem linhas. Verificado: **98/98 escrita** — incluindo a cadeia inteira, regra gravada pelo MCP → `categorizeTransaction` decidindo por ela na camada 1 sem IA → contador subindo, e a soma recusada com a organização errada |

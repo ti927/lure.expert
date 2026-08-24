@@ -12,6 +12,7 @@ import { eq, and, ne, ilike, asc, desc, inArray } from 'drizzle-orm'
 import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
 import { resolverAcessoIa } from '@/lib/ai-access'
 import { BP_TYPES } from '@/lib/bp-types'
+import { norm } from '@/lib/format'
 
 const MODELO_CATEGORIZACAO = 'claude-haiku-4-5-20251001'
 
@@ -268,6 +269,56 @@ export function findCategoryByCsvMapping(
   }
 
   return candidates.length === 1 ? candidates[0].id : null
+}
+
+/**
+ * Camada 0 quando o arquivo traz a natureza num campo SÓ — código ou nome.
+ *
+ * `findCategoryByCsvMapping` acima resolve o formato de CSV com colunas
+ * separadas (Pai / Filho / Tipo) e desempate cumulativo. Este resolve o caso em
+ * que existe um texto apenas, que é o do balanço (a linha É a conta patrimonial)
+ * e o da importação por MCP.
+ *
+ * Ordem: **código exato → nome exato → prefixo de código**. A terceira existe
+ * porque "1.1.01 Caixa e Equivalentes" — código e nome na mesma célula — é o que
+ * sai de ERP e é o formato que a própria ferramenta `listar_categorias` devolve.
+ *
+ * **Ambíguo não casa.** Dois nomes iguais em tipos diferentes devolvem `null` e
+ * o lançamento vai para a fila de classificação, que é o comportamento honesto
+ * quando o arquivo não foi claro — adivinhar aqui erra silenciosamente numa
+ * linha de demonstrativo.
+ */
+export function findCategoryByText(
+  texto: string | null | undefined,
+  leaves: LeafCategory[],
+): string | null {
+  const bruto = (texto ?? '').trim()
+  if (!bruto) return null
+
+  // ATENÇÃO às duas normalizações, que NÃO são intercambiáveis aqui.
+  //
+  // `norm` (de format.ts) preserva a pontuação — "1.1.01" continua "1.1.01".
+  // `normalizeForMatch` (acima) colapsa qualquer não-alfanumérico em espaço, o
+  // que é certo para NOME ("AC3 – Porcelanato / Flex" casa com "AC3 - ...") e
+  // desastroso para CÓDIGO: "1.1.01 Caixa" viraria "1 1 01 caixa" e o prefixo
+  // seria "1", que casaria com a natureza errada ou com nenhuma.
+  const codigo = norm(bruto)
+  const porCodigo = leaves.filter(c => c.code && norm(c.code) === codigo)
+  if (porCodigo.length === 1) return porCodigo[0].id
+
+  const nome = normalizeForMatch(bruto)
+  if (nome) {
+    const porNome = leaves.filter(c => normalizeForMatch(c.name) === nome)
+    if (porNome.length === 1) return porNome[0].id
+  }
+
+  const prefixo = codigo.split(' ')[0]
+  if (prefixo && prefixo !== codigo) {
+    const porPrefixo = leaves.filter(c => c.code && norm(c.code) === prefixo)
+    if (porPrefixo.length === 1) return porPrefixo[0].id
+  }
+
+  return null
 }
 
 // ─── Camada 1: Regras explícitas ─────────────────────────────────────────────
