@@ -266,7 +266,33 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
 | 4 | Convites e papéis | 🔲 |
+| **4.5** | **Normalização de arquivos importados & conexão bancária** — criada em 24/ago. Contrato único do lançamento, conta como cadastro, dedup no caminho da tela, data de caixa do cartão | 🔲 |
 | 5 | Dashboard configurável | 🔲 |
+
+**A Fase 4.5, e por que ela é pré-requisito do dashboard.** Julio notou que a coluna Banco/Conta
+vem vazia em tudo que foi importado por arquivo. A checagem mostrou que a coluna é o sintoma:
+**existem dois formatos de lançamento na mesma tabela**, o que o Pluggy escreve e o que a
+importação escreve, e o segundo é um subconjunto empobrecido do primeiro. Medido em 24/ago:
+
+| | Pluggy | Upload |
+|---|---:|---:|
+| `account_id` / `type` / `number` / `name` | 2.592 de 2.592 | **0** de 7.762 |
+| `external_id` (dedup) | 2.592 | **0** — subir o mesmo extrato duas vezes dobra a contabilidade |
+| logo e badge | automáticos | **0**, e inatingíveis: `/contas` filtra `provider='pluggy'` |
+| `currency` | do provedor (12 em USD) | fixo `BRL` |
+
+Consequência que não é cosmética: a identidade da regra é `(descrição, conta)`, então **em base
+importada toda regra é global** — "PAGSEGURO no cartão" e "PAGSEGURO na conta" não se separam.
+
+**Dois achados da mesma medição, maiores que a importação:**
+- **`effective_date` nunca difere de `date`. Em nenhuma linha da base.** A separação competência ×
+  caixa, com `COALESCE` em seis queries, nunca produziu número diferente. Pior onde mais importa:
+  **752 lançamentos de cartão, R$ 204.446,74**, todos com caixa = competência — a compra sai do
+  fluxo na data da compra e o pagamento da fatura sai de novo, contra o princípio 13.
+- **1.361 lançamentos do Pluggy com `effective_date` nulo**, criados em 21–22/mai (antes da
+  migration 0021). O `COALESCE` os salva; um backfill resolve.
+
+Plano completo da fase em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
 
 **Catálogo hoje: 21 ferramentas** — 9 de leitura + 12 de escrita (os seis pares). Um consentimento
 só de leitura enxerga 9; com escrita, 21. O catálogo é lido a cada conexão, então ferramenta nova
