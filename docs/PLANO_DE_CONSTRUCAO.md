@@ -17,6 +17,39 @@ Este é o seu **mapa**. Antes de qualquer sessão de desenvolvimento, abra este 
 
 ---
 
+## Leia isto antes de confiar num número de fase (24/ago/2026)
+
+Este documento ficou **seis dias e cerca de quatorze sessões atrás da realidade** — parado na
+v2.1, de 18/ago. A varredura de 24/ago achou as divergências abaixo. Elas estão corrigidas no
+corpo do texto; ficam listadas aqui porque quem leu a versão anterior levou informação errada.
+
+**1. A numeração das fases divergiu do `CLAUDE.md`, e a divergência era silenciosa.**
+
+| | Este documento dizia | Realidade |
+|---|---|---|
+| Fase 10 | Agente Proativo | **Dimensões** (cliente/fornecedor + rateio) — concluída |
+| Fase 11 | Onboarding/Billing | **Agente Proativo** |
+| Fase 12 | — | **Onboarding/Billing** |
+
+**2. Existem DOIS sistemas de numeração vivos, e eles colidem.** O plano aprovado em
+23/ago/2026 (motor de consulta, chave de IA por organização, OAuth/MCP, dashboard
+configurável) tem **fases próprias, de 0 a 5**. Quando uma sessão recente é chamada de "3.3",
+é a **Fase 3 daquele plano** (MCP), não a Fase 3 deste documento (Categorização). O mesmo vale
+para a "Fase 0" (corte do chat) e a "Fase 2" (chave de IA). O plano completo vive em
+`C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`; o resumo está mais abaixo.
+
+**3. A Fase 2 está marcada ✅ e três das doze sessões que o `GUIA_OPERACIONAL.md` especificou
+nunca vieram.** Ver o bloco *"A dívida declarada"* dentro da Fase 2.
+
+**4. O chat do expert (Fase 5.E) foi removido do produto** em 23/ago. Estava marcado ✅ sem
+ressalva.
+
+**Onde está o status vivo:** no `CLAUDE.md`, seção *Fase atual*. Este documento é o mapa e o
+porquê; o `CLAUDE.md` é o onde-estamos-agora. Quando os dois divergirem, o `CLAUDE.md` vence, e
+a divergência é defeito deste arquivo.
+
+---
+
 ## Parte 1 — O Produto em Uma Página
 
 **Nome do produto:** **Lure** — domínio: **lure.expert**
@@ -419,6 +452,35 @@ Esse documento especifica, pra cada uma das 11 tabelas:
 
 **Objetivo:** cliente sobe relatório (qualquer formato), sistema extrai e estrutura.
 
+#### ⚠️ A dívida declarada — três sessões do guia que nunca vieram (medido em 24/ago/2026)
+
+O `GUIA_OPERACIONAL.md` subdividiu esta fase em **12 sessões**. Três nunca foram construídas, e
+esta seção foi marcada ✅ mesmo assim. Não é revisionismo: são as sessões, com o DoD que o guia
+escreveu, contra o que o banco mostra hoje.
+
+| Sessão | O que o guia pediu | Estado real |
+|---|---|---|
+| **2.1** | Cliente declara o período do arquivo (`period_start`, `period_end`) | Os campos existem no formulário e vão para `documents.metadata`. **Nenhuma tela os lê** |
+| **2.8** | Dedup em duas camadas. DoD literal: *"reuploadar mesmo arquivo, ver 0 inserções"* | **Nunca implementada na tela.** `external_id`: Pluggy 2.592 de 2.592; upload **0** de 7.762. Subir o mesmo extrato duas vezes **dobra a contabilidade** |
+| **2.10** | Fila de pendências (campo ausente, data inválida) | Linha sem data/valor/direção é **silenciosamente pulada**, com um toast de contagem |
+
+**Por que o DoD passou mesmo assim.** O último item — *"parser LLM lida com qualquer formato BR"*
+— é verdade sobre **extrair colunas**, e foi verificado assim. Não é verdade sobre **produzir um
+lançamento completo**: nenhum dos formatos exercitados trazia conta, id de origem ou data de
+caixa, então nada nos testes exigiu esses campos.
+
+**Consequência medida em 24/ago**, a mesma tabela que abre a Fase 4.5:
+
+| | Pluggy | Upload |
+|---|---:|---:|
+| `account_id` / `type` / `number` / `name` | 2.592 de 2.592 | **0** de 7.762 |
+| `external_id` (dedup) | 2.592 | **0** |
+| `currency` | do provedor (12 em USD) | fixo `BRL` |
+| data de caixa diferente da competência | 0 | 0 — **em toda a base** |
+
+A quitação está planejada na **Fase 4.5** (do plano de 23/ago), mais abaixo. Ela não reabre a
+decisão de matar os templates — ver, lá, *"A distinção que desfaz a contradição aparente"*.
+
 **Deliverables:**
 - ✅ Tela de upload de arquivo (drag-and-drop)
 - ✅ Pipeline assíncrono (com Inngest): arquivo → storage → parsing → tabela transactions
@@ -683,7 +745,10 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 5 — Analytics + Expert Chat (Semanas 11-13)
+### FASE 5 — Analytics + ~~Expert Chat~~ (Semanas 11-13)
+
+> **O chat foi removido do produto em 23/ago/2026.** As telas analíticas (Dashboard, DRE,
+> Indicadores, Fluxo) continuam vivas e são o núcleo do app. Detalhe em 5.E, adiante.
 
 > **Nota de execução:** esta fase foi recortada diferente do plano original. O que foi chamado de "Fase 5" no desenvolvimento cobre as funcionalidades de analytics financeiro (Dashboard, DRE, Indicadores, Fluxo de Caixa) e um chat expert com contexto KPI. A interface conversacional com tool use (consultas via SQL dinâmico) fica para fase futura.
 
@@ -712,11 +777,17 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - Card no dashboard com semáforo por indicador (verde/âmbar/vermelho); `null` exibe "—" com hint contextual
 - Thresholds: EBITDA ≥15%/5%; Liquidez/DCSR ≥1,5x/1,0x
 
-**✅ 5.E — Expert drawer com chat real**
-- `src/server/expert.ts`: `getOrCreateConversation()`, `sendExpertMessage()`, `startNewConversation()`
-- System prompt: nome da org, AI_VOICE.md, KPIs do mês com variação % vs. mês anterior
-- `ExpertChat` client component: histórico, otimismo, auto-scroll, "Nova conversa"
-- Modelo: `claude-sonnet-4-6`; custo interno (não exposto ao cliente)
+**~~✅ 5.E — Expert drawer com chat real~~ — REMOVIDO DO PRODUTO em 23/ago/2026**
+- Era: `src/server/expert.ts` (3 actions) + `ExpertChat` com histórico, system prompt com AI_VOICE.md
+  e os KPIs do mês, modelo `claude-sonnet-4-6`
+- **Por que morreu:** enxergava **4 números** e custava Sonnet por conversa. Consumo real medido
+  antes do corte: **~US$ 0,05 em 12 respostas** — o chat nunca foi usado o bastante para justificar
+  a manutenção, e era o único consumidor de Sonnet do projeto
+- **O que ficou no lugar:** o expert virou um **Project do claude.ai** com `docs/AI_VOICE.md` como
+  instrução e o **MCP** como ferramentas — e passou a enxergar DRE completa, orçado e lançamento
+  individual, o que o chat nunca teve
+- `conversations`, `messages` e `organization_facts` ficaram **sem escritor**. O `DROP` das três
+  (têm FK entre si, saem juntas) aguarda decisão sobre o histórico
 
 **✅ 5.F — Fluxo de Caixa Projetado em `/fluxo`**
 - `src/server/fluxo.ts`: `getFluxoData()` detecta recorrências via SQL (CTE em 3 passos: deduplicação por dia, agrupamento, intervalo médio)
@@ -725,14 +796,19 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - Gráfico de barras: histórico (60d, cores escuras) + projeção (90d, cores claras), empilhados por `stackId`
 - Tabela de recorrências: descrição, tipo, valor médio, próxima data, intervalo
 
-**Fase futura** — Expert com tool use real (queries dinâmicas ao banco via Anthropic tool use): `search_transactions`, `aggregate_by_period`, `forecast_cashflow`, etc. — funcionalidade prevista no plano original, diferida por complexidade.
+**~~Fase futura~~ — ✅ ENTREGUE, por fora:** o "expert com tool use real" previsto aqui existe desde
+23/ago, mas **não dentro do app**. É o servidor **MCP** (`/api/mcp`, 21 ferramentas) consumido pelo
+claude.ai. `search_transactions` e `aggregate_by_period` viraram uma ferramenta só, `consultar`, sobre
+o motor de consulta de `src/lib/query/**`. Ver o bloco do plano de 23/ago, adiante.
 
-**Nota:** relatório de fechamento mensal (5.G original) movido para a **Fase 9** — pertence ao agente proativo (age sem o cliente pedir), não ao chat interativo.
+**Nota:** relatório de fechamento mensal (5.G original) movido para o **agente proativo** — hoje a
+**Fase 11**, depois de duas renumerações. Pertence a quem age sem o cliente pedir, não ao chat
+interativo (que, aliás, morreu).
 
 **Definition of Done — ✅ FASE 5 COMPLETA:**
 - ✅ Dashboard com KPIs, gráfico de fluxo e indicadores financeiros em tempo real
 - ✅ DRE 12 meses com filtros por dimensão, drill-down e coluna Total
-- ✅ Expert no drawer com contexto financeiro da org, histórico persistente
+- ~~✅ Expert no drawer com contexto financeiro da org, histórico persistente~~ — **removido em 23/ago**, ver 5.E
 - ✅ Fluxo de Caixa projetado 30/60/90 dias baseado em recorrências detectadas
 
 **Tempo:** ~3 semanas (5.0 a 5.F concluídas)
@@ -808,7 +884,7 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 **Objetivo:** o cliente declara o que deveria acontecer, e o sistema mostra a variação contra o que aconteceu. É a camada que faltava para o produto responder "vamos fechar o ano dentro do previsto?".
 
-**Inserida fora da ordem original** (a pedido do cliente, com a Fase 8 pausada em 8.1). As fases antes numeradas 9 e 10 passaram a **10** e **11**.
+**Inserida fora da ordem original** (a pedido do cliente, com a Fase 8 pausada em 8.1). As fases antes numeradas 9 e 10 passaram a **10** e **11** — e depois, com a entrada da Fase 10 (Dimensões), a **11** e **12**.
 
 **Deliverables entregues:**
 - Três tabelas separadas de `transactions`: `budget_versions` (exercício + versão nomeada), `budget_series` (a regra de repetição), `budget_entries` (as ocorrências materializadas)
@@ -860,7 +936,201 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 10 — Agente Proativo e Notificações (ex-Fase 9)
+### FASE 10 — Dimensões: cliente/fornecedor e rateio ✅ CONCLUÍDA
+
+**Objetivo:** fechar a lacuna de que um lançamento pertence a **uma** dimensão de cada tipo — o que
+é falso para o aluguel do prédio que serve três centros de custo — e transformar contato em cadastro
+de verdade.
+
+**Inserida fora da ordem original**, a pedido do cliente. Empurrou Agente Proativo para **11** e
+Onboarding/Billing para **12** — a renumeração que este documento não tinha registrado.
+
+**Deliverables entregues:**
+- **Contato vira a 4ª dimensão.** `contacts` existia desde a Fase 1, com FK em 5 tabelas, e **nunca
+  teve uma linha escrita** fora do orçamento. Ganhou CRUD, rota, import CSV, papel duplo
+  (`is_customer` / `is_supplier` — o mesmo CNPJ costuma ser os dois), e entrou em filtro, coluna,
+  classificação em lote, regras e no prompt do Haiku
+- **Rateio como sub-lançamento.** Um lançamento de R$ 999 vira N partes com valor próprio, e **cada
+  parte carrega as quatro dimensões**. A natureza **não** é rateada — um lançamento tem uma
+  categoria só, então nenhuma linha da DRE se parte
+- **As regras vivem no banco**, num `CONSTRAINT TRIGGER` deferido até o commit: ou zero partes, ou
+  soma exata; com rateio as dimensões do pai ficam vazias; teto de 50 partes
+- **Modelos de rateio reutilizáveis**, guardando **proporção** e nunca valor — o mesmo modelo serve
+  ao aluguel de R$ 12.000 e à luz de R$ 340
+- **Nove leituras migradas** para a view `transaction_lines`, separando leitura analítica de
+  operacional
+
+**Sessões:** 10.0 contatos · 10.1 4ª dimensão · 10.2 schema do rateio · 10.3 as leituras ·
+10.4 UI · 10.5 modelos.
+
+**Migrations:** 0025, 0026, 0027 — todas validadas com `ROLLBACK` antes e conferidas contra o
+catálogo depois.
+
+**A decisão que mudou no meio:** o modelo original era rateio **independente por dimensão**, cruzado
+por uma view. Foi descartado ao ser explicado em voz alta: cruzar 60/40 de centro de custo com 70/30
+de contato **inventa** a célula "Admin + Cliente B", que ninguém afirmou, e a multiplicação das
+proporções reintroduz fração de centavo. Ver `SCHEMA_DECISIONS.md` Decisão 16.
+
+**Tempo real:** 6 sessões.
+
+---
+
+### O plano de 23/ago/2026 — motor de consulta, MCP e dashboard (EM ANDAMENTO)
+
+> ⚠️ **Este plano tem numeração PRÓPRIA, de 0 a 5, que colide com a deste documento.** Quando o
+> `CLAUDE.md` fala em "sessão 3.3", é a Fase 3 **daqui** (MCP), não a Fase 3 de lá
+> (Categorização). Plano completo em
+> `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
+
+**A tese:** tirar a IA de dentro do app e conectar o claude.ai por **MCP**. O gatilho foi o
+diagnóstico do Julio — *"nem todo cliente quer top 5 despesas, alguns querem top 5 UENs"* — e a
+constatação de que **nenhuma consulta do app agrupava por unidade de negócio**. O trabalho não era
+desenhar gráfico: era construir a camada de consulta que não existia.
+
+**Duas decisões do `CLAUDE.md` foram revogadas aqui**, e ficam registradas como revogadas, com a
+razão, em vez de sumirem:
+- *"Custo de IA é interno (Lure paga). Sem BYO API key"* → **chave por organização, obrigatória**.
+  Motivo: havia clientes usando o app sem supervisão, consumindo os créditos da Lure, sem teto,
+  alerta nem atribuição
+- *Princípio 14, "não expor tokens ao cliente"* → passa a **depender de quem paga**
+
+| Fase | Entrega | Status |
+|---|---|---|
+| 0 | Corte do chat + medição de IA em `agent_events` + tela de consumo + fix do `forceRun` | ✅ |
+| 1.0–1.4 | Motor de consulta (`src/lib/query/**`): escopo por tipo marcado, spec Zod, fontes `realizado`/`orcado`/`nfe`, `runQuery`, cascata do P&L. Tabelas de dashboard antecipadas | ✅ |
+| 2.0–2.1 | Chave de IA por organização (AES-256-GCM), teto, alerta e degradação + tela | ✅ |
+| 3.0–3.3 | OAuth 2.1 + PKCE, servidor MCP e o catálogo de **21 ferramentas** (9 de leitura + 6 pares de escrita com preview→confirm) | ✅ |
+| 4 | Convites e papéis | 🔲 |
+| **4.5** | **Normalização da importação** — ver abaixo | 🔄 sessão A de 3 entregue |
+| 5 | Dashboard configurável | 🔲 |
+
+**O que o motor mudou de estrutural:** a regra que separa leitura **analítica** (agrega, agrupa,
+soma → passa pelo motor → lê `transaction_lines`, conta com `COUNT(DISTINCT transaction_id)`) de
+leitura **operacional** (uma linha por lançamento → lê `transactions` → filtra dimensão com
+`dimensionExistsFilter`). Sem rateio a view degenera na linha de hoje; com rateio o número conserta.
+
+**O que o MCP mudou de estrutural:** `/oauth/*` é **humano** (cookie, middleware, pode redirecionar);
+`/api/oauth/*` e `/api/mcp` são **máquina** (credencial no corpo, fora do matcher do middleware). E a
+barreira `src/lib/mcp/**` → `src/server/**` virou regra de ESLint, testada quebrando de propósito —
+sem ela um `redirect()` de server action viraria exceção crua numa resposta JSON-RPC.
+
+---
+
+### FASE 4.5 — Normalização da importação: o formato padrão de colunas (EM ANDAMENTO)
+
+> **O número é 4.5 do plano de 23/ago**, não deste documento. Está fora de ordem cronológica de
+> propósito: é **pré-requisito do dashboard**, não sucessora dele. Um painel que agrupa por conta
+> mostraria "—" para 7.762 dos 10.354 lançamentos da base.
+
+**O que o Julio pediu, nas palavras dele:**
+
+> *"o arquivo para importar precisa ter um FORMATO PADRONIZADO DE COLUNAS, podem até estar em
+> branco, mas precisa ter o formato; e assim uma IA conectada no MCP sabe como parsear, e se um
+> usuário não usar uma IA no MCP, ele sabe como tabular."*
+
+**O artefato central é a PLANILHA, não o código.** Uma especificação de colunas, **três leitores**:
+a pessoa que tabula à mão, a IA do MCP que converte qualquer extrato *para este formato*, e o parser
+do app. Hoje os três produzem coisas diferentes — e é por isso que existem **quatro `INSERT INTO
+transactions` independentes, com zero código compartilhado** (`sync-pluggy`, `approveAndInsert`,
+`import-write`, `sync-acquirer`). O contrato interno é **consequência** do formato do arquivo, não
+premissa.
+
+#### A distinção que desfaz a contradição aparente
+
+A Fase 2 matou o sistema de templates e registrou como vitória — *"LLM lida com qualquer formato sem
+template"*. Parece que padronizar formato reabre decisão fechada. **Não reabre**, porque são
+problemas opostos:
+
+| | O que a Fase 2 matou | O que foi pedido agora |
+|---|---|---|
+| Direção | O **sistema** infere o formato do arquivo do cliente | O **produtor** do arquivo escreve no formato do sistema |
+| Custo recai sobre | o parser | o artefato |
+| Quem produz | ninguém — é adivinhação | a pessoa, a IA no MCP, ou o ERP |
+
+Precedente no próprio projeto: quando o dado é de **cadastro** ou **planejamento**, o formato **já
+é** especificado (o CSV de categorias; a grade de 12 meses do orçamento). Só o dado **transacional**
+ficou sem. E o formato canônico é **caminho rápido, nunca requisito** — cabeçalho desconhecido
+continua caindo no parser LLM, inalterado. A promessa da Fase 2 ao dono de PME fica de pé.
+
+**O princípio que isto restaura:** o nº 2 do `CLAUDE.md`, *"LLM é última opção"*. Ler cabeçalho
+canônico de forma determinística é o princípio sendo cumprido.
+
+#### DRE, DFC e BP não são três importações — são duas
+
+- **DRE e DFC são o MESMO lançamento, lido duas vezes.** Competência alimenta a DRE, caixa alimenta
+  o fluxo. **Não existe "importar uma DFC"**
+- **BP é fotografia por documento** — `getBpAllDates` agrupa por `documents.reference_date` e soma
+  `transactions WHERE document_id = <doc>`. É o desenho **deliberado** da migration 0015
+
+Logo o contrato tem **dois níveis, não dois layouts**: o **arquivo** declara origem, tipo de
+relatório, data de referência e conta; a **linha** traz as 17 colunas canônicas.
+
+#### O modelo de colunas — 17 colunas, 4 obrigatórias
+
+Competência · descrição · valor **positivo** · sentido são obrigatórios. Data de caixa (em branco =
+igual à competência) · moeda · conta · tipo de conta · número da conta · natureza · centro de custo ·
+unidade de negócio · entidade · contato · documento/NF · id de origem · observação são opcionais.
+**Coluna em branco é legítima**: vazio significa "não sei", e o pipeline segue — sem natureza vai
+para a fila de classificação, sem conta a regra nasce global, sem data de caixa o fluxo usa a
+competência.
+
+Ficam de fora `confidence`, `method`, `needs_review`, `status`, `duplicate_of`, `embedding`,
+`raw_data`, `metadata`, `document_id`, `data_source_id` — são estado interno.
+
+#### Sessões
+
+| Sessão | Entrega | Status |
+|---|---|---|
+| **A** | `docs/FORMATO_DE_IMPORTACAO.md` + `src/lib/import-contract.ts` + `import-dedup.ts` + planilha modelo + `scripts/verify-import-contract.ts`. **Sem tocar em nenhum insert** | ✅ |
+| **B** | A tela cumpre o contrato: data de caixa chega na staging, BP funciona, dedup liga. DoD literal da 2.8: *subir o mesmo arquivo duas vezes dá 0 inserções na segunda* | 🔲 |
+| **C** | O asfalto do MCP: cabeçalho canônico lido sem Haiku, `prever_importacao` publica o contrato, BP pelo MCP passa a ser possível | 🔲 |
+
+#### Os defeitos que a varredura de 24/ago achou
+
+Todos medidos contra o banco, não inferidos:
+
+1. **`effective_date` nunca chega na staging — e é UMA LINHA.** `src/jobs/process-document.ts:90`
+   monta o insert com `date`, `amount`, `direction`, `description` e nada mais. `row.effectiveDate`
+   existe no `StagingRow`, a coluna existe desde a migration 0021, e `approveAndInsert` faz
+   `r.effectiveDate ?? r.date` — que sempre cai no `date` porque o valor foi descartado antes. **É a
+   explicação mecânica de "a data de caixa nunca difere em toda a base"**
+2. **O BP pela TELA também está quebrado, não só pelo MCP.** `src/server/staging.ts:227` filtra
+   `r.date && r.amount && r.direction`. Um balanço não tem data por linha — tem uma data de arquivo.
+   Toda linha cai em `skipped`. **É por isso que nunca existiu um BP no banco:** 0 documentos
+   `balance_sheet`, 10.353 lançamentos todos de natureza DRE, `/balanco` devolvendo `null` desde
+   sempre
+3. **BP pelo MCP é impossível:** `aplicarImportacao` crava `reportType: 'other'`, e
+   `domainFromReportType('other')` devolve `'dre'` **em silêncio** — a camada 0 só oferece naturezas
+   de DRE
+4. **Campos mortos**, nunca tiveram escritor: `cleaned_description` (só lida, sempre nula) e
+   **`credit_card_invoice_id`**, que é justamente o que resolveria a data de caixa do cartão
+5. **1.361 lançamentos do Pluggy com `effective_date` nulo** (21–22/mai, antes da migration 0021) —
+   um backfill resolve
+
+#### A decisão que precisa do Julio antes de codificar
+
+**Data de caixa do cartão de crédito.** São **752 lançamentos, R$ 204.446,74**, todos com caixa =
+competência. O princípio 13 diz que a compra impacta a DRE na data da compra e que o dinheiro só sai
+no pagamento da fatura; hoje a compra sai do fluxo na data da compra **e** o pagamento da fatura sai
+de novo. Ironia útil: o **único** escritor que faz a data divergir de verdade é `sync-acquirer-item`
+(`saleDate` × `settlementDate`) — o desenho certo já existe, num código pausado que nunca rodou.
+
+#### Fora de escopo, declarado
+
+Pluggy e adquirente (não são subida de arquivo, e o Pluggy é a porta **mais completa** — o contrato é
+modelado a partir dele) · multi-moeda (proibição da Parte 8; as 12 linhas em USD são ruído do Pluggy)
+· obrigar o formato canônico · conta como cadastro · reconciliação entre extrato importado e conexão
+sincronizada.
+
+#### Risco declarado
+
+**A dedup não alcança o passado.** Os 7.762 lançamentos já importados não têm `external_id`. Ligar a
+dedup **não** os cobre — reimportar aquele arquivo específico ainda duplicaria. Precisa ser dito ao
+usuário, não escondido.
+
+---
+
+### FASE 11 — Agente Proativo e Notificações (ex-Fase 9, ex-Fase 10)
 
 **Objetivo:** o sistema não espera o cliente perguntar — proativamente envia alertas, insights e o fechamento mensal narrado.
 
@@ -877,7 +1147,7 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 
 ---
 
-### FASE 11 — Onboarding, Billing e Lançamento (ex-Fase 10)
+### FASE 12 — Onboarding, Billing e Lançamento (ex-Fase 10, ex-Fase 11)
 
 **Objetivo:** produto vendável, cliente novo se cadastra e configura sozinho.
 
@@ -1107,18 +1377,29 @@ Manter foco é mais difícil do que escrever código. Esta lista te protege.
 
 ```
 Mês 1: Scaffolding + Fundações de Design/Voz + Schema + Multi-tenancy   ✅
-Mês 2: Ingestão de arquivos + Categorização IA                          ✅
-Mês 3: Open Finance + Conversa                                          ✅
+Mês 2: Ingestão de arquivos + Categorização IA                          ✅  (com dívida — ver Fase 2)
+Mês 3: Open Finance + Conversa                                          ✅  (a conversa morreu em 23/ago)
 Mês 4: Dashboard + BP gerencial + SEFAZ                                 ✅
 Mês 5: Cartões/Adquirentes ⏸ (pausado em 8.1) → Orçamento e Previsão    ✅
        + Orçado dentro da DRE                                           ✅
-Mês 6: Retomar adquirentes (8.2–8.5) + Agente Proativo + Onboarding/Billing
+       + Dimensões: contatos e rateio (Fase 10)                         ✅
+Mês 6: Motor de consulta + chave de IA por org + OAuth/MCP              ✅
+       + Normalização da importação (4.5)                               🔄  1 de 3 sessões
+       + Convites (4) · Dashboard configurável (5)                      🔲
+       Empurrados: adquirentes 8.2–8.5 · Agente Proativo · Onboarding/Billing
 ```
 
-**Onde o roadmap divergiu:** o Mês 5 trocou de conteúdo. Os connectors de adquirente pararam
-em 8.1 (Stone) e o cliente pediu **Orçamento e Previsão**, que não estava no plano de 6 meses —
-e que se provou a peça que faltava para o produto responder "vamos fechar o ano dentro do
-previsto?". A Fase 8 volta para o Mês 6.
+**Onde o roadmap divergiu.** Duas vezes, e as duas por pedido do cliente depois de usar o produto:
+
+- **Mês 5:** os connectors de adquirente pararam em 8.1 (Stone) e entrou **Orçamento e Previsão**,
+  que não estava no plano de 6 meses — e se provou a peça que faltava para responder "vamos fechar o
+  ano dentro do previsto?". Depois entrou também **Dimensões** (Fase 10)
+- **Mês 6:** trocou inteiro. Em vez de agente proativo e billing, entrou a virada de **tirar a IA de
+  dentro do app** — motor de consulta, chave por organização e MCP. O que era "o expert conversa
+  dentro do app" virou "o claude.ai opera o app por fora", com 21 ferramentas
+
+**O custo dessa divergência:** as três frentes empurradas para o Mês 6 original — adquirentes,
+agente proativo, onboarding/billing — continuam empurradas. **A Fase 12 é a que destrava vender.**
 
 Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em diante é refinamento, novos connectors, e expansão de ICP.
 
@@ -1140,8 +1421,22 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
 - **v2.0** — **Fase 9 (Orçamento e Previsão) fechada** em 6 sessões, inserida fora da ordem original a pedido do cliente e com a Fase 8 pausada em 8.1. Três tabelas separadas de `transactions`, lançamento com recorrência em 4 modos de valor, duas datas por lançamento, três escopos de edição, e quatro aceleradores (copiar do realizado, duplicar versão, importar planilha, aceitar recorrências detectadas). As fases antes numeradas 9 e 10 passaram a **10** e **11**. Decisões estruturais em `SCHEMA_DECISIONS.md` Decisão 13 (13.1–13.13).
 - **v2.1** — **Orçado dentro da DRE (9.6–9.8) fechado**, pedido depois de o cliente usar a Fase 9. Cada mês da `/dre` ganhou uma terceira coluna que existe sempre e troca de significado: análise vertical (AV% sobre a Receita Líquida) com o orçamento oculto, desvio sobre o orçado com ele visível. Inclui união realizado ∪ orçado (categoria orçada e não realizada aparece), seletor de versão na barra de filtros, e drill-down do orçado com edição do lançamento sem sair da tela. Decisões em `SCHEMA_DECISIONS.md` 13.14 e 13.15. Roadmap de 6 meses atualizado com a divergência real do Mês 5.
 
+- **v2.2** — **Sincronização com a realidade após seis dias de deriva.** Este documento estava
+  parado na v2.1 (18/ago) enquanto ~14 sessões aconteciam, e a divergência era silenciosa: ele
+  numerava `FASE 10 = Agente Proativo` enquanto o `CLAUDE.md` já numerava `FASE 10 = Dimensões`.
+  Entram: (a) o bloco de abertura *"Leia isto antes de confiar num número de fase"*, que lista as
+  divergências e estabelece que **o `CLAUDE.md` vence** quando os dois discordarem; (b) a **dívida
+  declarada da Fase 2** — sessões 2.1, 2.8 e 2.10 do `GUIA_OPERACIONAL.md` nunca construídas, com
+  a fase marcada ✅ mesmo assim, e a explicação de por que o DoD passou; (c) a **Fase 10 —
+  Dimensões**, que faltava inteira, e a renumeração de Agente Proativo para **11** e
+  Onboarding/Billing para **12**; (d) o **plano de 23/ago** (motor de consulta, chave de IA por
+  organização, OAuth/MCP, dashboard), com o aviso de que ele tem numeração própria de 0 a 5 que
+  **colide** com a deste documento; (e) a **Fase 4.5**, com os cinco defeitos medidos contra o
+  banco; (f) a morte do **chat do expert** (5.E), que estava ✅ sem ressalva, e o registro de que o
+  "tool use real" previsto como fase futura foi entregue **por fora**, no MCP.
+
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-08-18*
-*Versão: 2.1*
+*Última atualização: 2026-08-24*
+*Versão: 2.2*

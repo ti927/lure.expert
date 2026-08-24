@@ -12,6 +12,98 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 4.5.A — o contrato de importação, sem tocar em nenhum insert
+
+**O critério da sessão era literal, e foi conferido literalmente:**
+`git diff --stat src/server/staging.ts src/jobs/sync-pluggy-item.ts src/jobs/sync-acquirer-item.ts src/jobs/process-document.ts`
+devolveu **vazio**. Nenhuma gravação mudou de comportamento.
+
+**Arquivos:** `docs/FORMATO_DE_IMPORTACAO.md` (novo), `src/lib/import-contract.ts` (novo),
+`src/lib/import-dedup.ts` (novo), `scripts/verify-import-contract.ts` (novo),
+`src/lib/csv-templates.ts`, `src/lib/format.ts`, `src/lib/parsers/excel-csv.ts`,
+`src/lib/budget-import.ts`, `src/lib/import-write.ts`, `upload-form.tsx`.
+
+#### A correção de enquadramento que veio antes do código
+
+Escrevi esta fase **duas vezes errado**. Primeiro centrada nos campos de conta bancária; depois no
+formato de colunas como se fosse ideia nova. A correção do Julio foi dura e certa — *"parece que vc
+pegou o bonde andando, nao leu o que se trata o lure.expert"* — e era verdade: eu não tinha lido
+`PLANO_DE_CONSTRUCAO.md`, `GUIA_OPERACIONAL.md` nem `SCHEMA_INICIAL.md`, e tinha **inventado e
+numerado uma fase sozinho**, contra a regra que o próprio guia escreve: *"Você é o gerente, Claude
+Code é o engenheiro. Você decide o quê. Ele propõe o como."*
+
+Lidos os documentos, o enquadramento certo apareceu: **isto não é fase nova, é dívida declarada da
+Fase 2** — sessões 2.1, 2.8 e 2.10, com o DoD da 2.8 dizendo literalmente *"reuploadar mesmo
+arquivo, ver 0 inserções"*.
+
+#### Dois níveis, não dois layouts
+
+Eu havia proposto um segundo layout de planilha, "Saldos", para o BP. **Desnecessário e contra o
+desenho existente:** a migration 0015 diz no próprio comentário que o BP viria *"via importação de
+relatórios classificados como transações com categorias de tipo BP, **igual ao fluxo do DRE**"*. O
+que o balanço precisa não é outro conjunto de colunas — é que o **arquivo** declare duas coisas que
+a linha não carrega: que é um balanço, e a data de referência.
+
+| Nível | O que carrega |
+|---|---|
+| **Arquivo** | origem, `tipoDeRelatorio` (movimentos \| balanço), `dataDeReferencia`, conta |
+| **Linha** | as 17 colunas canônicas |
+
+#### A chave de dedup mudou de casa e de prefixo (`mcp:` → `arq:`)
+
+Não é cosmético. A chave precisa ser **a mesma nas duas portas de arquivo** — senão subir pela tela
+o que a IA importou duplicaria, e a dedup ficaria cega justamente entre os dois caminhos que ela
+existe para unir. O hash **não inclui o prefixo**, então migrar o passado é um `UPDATE` de string.
+Hoje é grátis: 0 linhas com `mcp:`.
+
+#### A separação por empacotamento, que o `tsc` não pegaria
+
+`src/lib/csv-templates.ts` roda **no cliente**, e importa o contrato para gerar a planilha modelo.
+O contrato tinha `node:crypto` dentro. **O type-check passa limpo; o `next build` quebra.** Daí
+`import-dedup.ts` existir como arquivo separado — a divisão é por onde o código roda, não por
+assunto.
+
+#### O que mudou de casa (movido, não copiado)
+
+`parseDate` saiu de `parsers/excel-csv.ts` (era o `normalizeDate` privado) e `norm` saiu de
+`budget-import.ts`, ambos para `format.ts` — eram a 3ª e a 4ª cópias da mesma coisa.
+**`normalizeForMatch` do categorizador ficou quieta de propósito**, com o motivo escrito no arquivo:
+ela decide **classificação**, e unificá-la faria uma mudança de formatação alterar em que natureza um
+lançamento cai.
+
+#### A planilha modelo é gerada, nunca redigitada
+
+`buildImportTemplateCsv(tipo)` monta o cabeçalho a partir de `colunasDe(tipo)`. Redigitar faria
+nascer **dois formatos canônicos no primeiro dia**, e a diferença só apareceria quando alguém usasse
+o modelo.
+
+#### O script de conformidade já achou coisa
+
+`scripts/verify-import-contract.ts` é somente leitura e mede as portas contra o contrato:
+
+```
+porta   | lançamentos | dedup | conta id | caixa ≠ compet. | caixa nulo
+upload  | 7762        | 0%    | 0%       | 0               | 0
+pluggy  | 2603        | 100%  | 100%     | 0               | 1361
+```
+
+**`caixa ≠ competência = 0` em toda a base** — a prova mecânica de que o campo é descartado no
+insert do staging (`process-document.ts:90`). Minha primeira versão do script usava
+`IS DISTINCT FROM`, que conta nulo como "diferente" e teria devolvido 1.361; corrigido para
+`IS NOT NULL AND <> date`, com os nulos em coluna própria.
+
+Também reportou os **cabeçalhos reais do único ERP já importado** (`NUM NF`, `DATA VENDA`,
+`NUM PEDIDO`, `Natureza pai`, `Nome Produto`, `Natureza filho`), que renderam **3 aliases novos** —
+não suposição minha, saíram do arquivo do cliente. E confirmou que aquele arquivo **não casaria** com
+o caminho rápido, por não ter coluna de sentido, o que é o comportamento correto.
+
+**Resultado:** 11 ok, 6 pendências — e as 6 são o mapa das Sessões B e C.
+
+**Verificado:** 116/116 escrita do MCP, 36/36 leitura, `tsc --noEmit` limpo, `next lint` limpo,
+`next build` compilando. **Não verificado na tela:** o link da planilha modelo em `/upload`.
+
+---
+
 ### ✅ Sessão 3.3 (importação) — o sexto par, e a fase fecha
 
 **A pergunta do Julio que corrigiu o desenho:** *"qual é a dificuldade de eu subir um arquivo pro

@@ -202,6 +202,22 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 
 **Atenção: coluna vertebral do produto. Invista tempo. Se uma sessão estourar pra duas, está OK.**
 
+> ### ⚠️ Conferido em 24/ago/2026: três destas doze sessões nunca foram construídas
+>
+> A fase está marcada ✅ no `PLANO_DE_CONSTRUCAO.md`. **2.1** (período do arquivo), **2.8**
+> (deduplicação) e **2.10** (fila de pendências) não existem no código. Elas seguem escritas
+> abaixo como foram especificadas — o texto não foi alterado — mas cada uma leva uma nota do que
+> foi medido no banco.
+>
+> **A lição de método, que vale para toda fase futura:** o DoD da Fase 2 foi dado por cumprido com
+> o item *"parser LLM lida com qualquer formato BR"*, que é verdade sobre **extrair colunas** e
+> falso sobre **produzir um lançamento completo**. Nenhum arquivo dos testes trazia conta, id de
+> origem ou data de caixa — então nada exigiu esses campos, e a ausência deles não apareceu como
+> falha. **Fase só fecha contra a lista de sessões deste arquivo, uma por uma, não contra o
+> resumo de deliverables do plano.**
+>
+> A quitação está na **Fase 4.5** do plano de 23/ago.
+
 **Texto pro CLAUDE.md:**
 > Iniciando Fase 2 — Ingestão e parsing. Pipeline completo de upload → parsing → staging → revisão → inserção em transactions. 5 áreas (ERP, banco, adquirente, cartão de crédito corporativo, SEFAZ-placeholder), formato livre (PDF/Excel/CSV), templates híbridos global/específico, deduplicação em duas camadas, reconciliação automática AP×banco.
 
@@ -210,6 +226,10 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 - Campo pra cliente declarar período do arquivo (`period_start`, `period_end`)
 - Upload pro Supabase Storage, registro em `documents`
 - DoD: subir arquivo, ver registro em `documents`, baixar do Storage
+
+> **🔲 Parcial (24/ago).** Upload, Storage e `documents` existem. O período **não**: os campos vão
+> para `documents.metadata` e **nenhuma tela os lê**. Escrever sem ninguém ler é o mesmo que não
+> coletar, com o custo extra de parecer coletado.
 
 **Sessão 2.2 — Inngest setup + pipeline base**
 - Conta Inngest criada, SDK configurado
@@ -248,6 +268,15 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 - Diff inteligente: nova insere, existente atualiza, sumida marca como cancelada/removida
 - DoD: reuploadar mesmo arquivo, ver 0 inserções; alterar 1 linha no arquivo e reuploadar, ver 1 update
 
+> **🔲 Não construída na tela (24/ago).** `external_id`: Pluggy 2.592 de 2.592, upload **0** de
+> 7.762. Subir o mesmo extrato duas vezes **dobra a contabilidade**, e sempre dobrou. Sobreviveu
+> porque gente não reenvia sem perceber — modelo, sim, justamente quando a chamada pareceu falhar
+> e deu certo. A camada 2 (hash de conteúdo) foi construída em 23/ago, mas **só no caminho do
+> MCP**; levá-la à tela é a Sessão B da Fase 4.5, com este DoD literal.
+>
+> **Risco que o DoD não previa:** os 7.762 lançamentos já importados não têm `external_id`, então
+> ligar a dedup **não alcança o passado**.
+
 **Sessão 2.9 — Reconciliação automática AP×banco**
 - Heurística: valor exato + janela de data ±5 dias + similaridade de descrição/fornecedor
 - Match >85% casa automaticamente, preenche `effective_date` da transação do ERP
@@ -259,6 +288,12 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 - Tela com linhas problemáticas (campo ausente, data inválida) + casos ambíguos de reconciliação
 - Cliente aprova ou edita
 - DoD: ter pelo menos 5 casos diferentes, revisar manualmente
+
+> **🔲 Não construída (24/ago).** Linha sem data, valor ou direção é **silenciosamente pulada** em
+> `approveAndInsert`, com um toast de contagem. O caso ambíguo de reconciliação ganhou fila
+> (`/transacoes/revisao`, Fase 7); o caso de **campo ausente** não. O efeito mais caro disso é o
+> balanço: uma linha de BP não tem data própria, cai no filtro, e **por isso nunca existiu um BP
+> no banco** — 0 documentos `balance_sheet` em toda a base.
 
 **Sessão 2.11 — Histórico de uploads por organização**
 - Tela `/uploads/history` listando documentos por data, mostrando status e quantas linhas geraram

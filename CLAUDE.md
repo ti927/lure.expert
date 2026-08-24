@@ -29,6 +29,30 @@ Antes de qualquer mudança estrutural (schema, fase, decisão de produto),
 LER o documento correspondente. Se houver conflito entre o que peço e
 o que está documentado, PARAR e me consultar.
 
+### Quem vence quando dois documentos discordam (estabelecido em 24/ago/2026)
+
+A varredura de 24/ago achou o `PLANO_DE_CONSTRUCAO.md` **seis dias e ~14 sessões atrás** — ele
+numerava `FASE 10 = Agente Proativo` enquanto este arquivo já numerava `FASE 10 = Dimensões`, e a
+divergência era silenciosa. Foi corrigido, e a hierarquia ficou escrita nos dois lados:
+
+| Documento | Autoridade sobre |
+|---|---|
+| **`CLAUDE.md`** (este) | **onde estamos agora** — fase corrente, status, próximo passo. **Vence sempre** |
+| `PLANO_DE_CONSTRUCAO.md` | o mapa e o **porquê** de cada fase. Divergiu do status → é defeito dele |
+| `GUIA_OPERACIONAL.md` | a **lista de sessões** de cada fase, com o DoD de cada uma |
+| `SCHEMA_DECISIONS.md` | o **porquê** de decisão não-óbvia já tomada |
+| `SESSION_LOG.md` | o que foi feito, sessão a sessão |
+
+**A regra de método que saiu daquela varredura:** **fase só fecha contra a lista de sessões do
+`GUIA_OPERACIONAL.md`, uma por uma** — nunca contra o resumo de deliverables do plano. A Fase 2 foi
+dada por concluída pelo resumo, e três das doze sessões (2.1, 2.8, 2.10) nunca existiram. O item que
+"provou" o DoD — *"parser LLM lida com qualquer formato BR"* — é verdade sobre **extrair colunas** e
+falso sobre **produzir um lançamento completo**.
+
+⚠️ **Duas numerações de fase convivem hoje.** As deste arquivo (0 a 12) e as do **plano de
+23/ago/2026** (0 a 5, incluindo a 4.5). "Sessão 3.3" é a Fase 3 **do plano de 23/ago** (MCP), não a
+Fase 3 daqui (Categorização).
+
 ## Nomenclatura crítica
 - Os agentes/IA dentro do app são SEMPRE chamados de **expert** (minúsculo,
   sem aspas, sem itálico). Nunca "IA", "assistente", "Lure", "AI" ou similares.
@@ -227,8 +251,13 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 ## Fase atual
 
 **Status:** em andamento o **plano de 23/ago/2026** (motor de consulta + chave de IA por
-organização + OAuth/MCP + dashboard), na sessão **3.3** — cinco dos seis pares de escrita entregues,
-falta a importação. Ver a tabela em *Próximo passo*.
+organização + OAuth/MCP + dashboard). A Fase 3 **fechou** com os seis pares de escrita; a
+**Fase 4.5** (normalização da importação) está na **sessão A de três**. Ver a tabela em
+*Próximo passo*.
+
+**Próxima sessão: 4.5.B — a tela cumpre o contrato.** É a primeira desta fase que mexe em código
+quente (`approveAndInsert`, por onde entraram os 7.762 lançamentos) e a primeira que precisa de
+migration. Ver *Fase 4.5* adiante.
 
 Fase 10 — Dimensões (cliente/fornecedor + rateio) **concluída** (10.0 a 10.5 ✅).
 Fase 9 — Orçamento e Previsão **concluída** (9.0 a 9.8 ✅). Fases 0–7 **100% concluídas**.
@@ -267,7 +296,9 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
 | 4 | Convites e papéis | 🔲 |
-| **4.5** | **Normalização da importação: o formato padrão de colunas** — criada em 24/ago | 🔲 |
+| **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
+| **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP passa a funcionar, dedup liga. DoD: mesmo arquivo duas vezes → 0 inserções na segunda | 🔲 **próxima** |
+| **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido sem Haiku, `prever_importacao` publica o contrato, BP pelo MCP vira possível | 🔲 |
 | 5 | Dashboard configurável | 🔲 |
 
 ### Fase 4.5 — o formato padrão de colunas
@@ -280,24 +311,46 @@ parser do app. Hoje os três produzem coisas diferentes — e é por isso que ex
 formato do arquivo, não premissa.
 
 **O trabalho de fundo:** `transactions` tem 28 colunas e ninguém nunca decidiu quais o arquivo
-carrega. Proposta: **17 colunas, 5 obrigatórias** (competência, descrição, valor, sentido +
-data de caixa opcional; conta/tipo/número; natureza, CC, UEN, entidade, contato; documento; id
-de origem; moeda; observação). Coluna em branco é legítima — vazio significa "não sei", e o
+carrega. Entregue na 4.5.A: **17 colunas, 4 obrigatórias** (competência, descrição, valor **positivo**
+e sentido). Opcionais: data de caixa; moeda; conta/tipo/número; natureza, CC, UEN, entidade, contato;
+documento; id de origem; observação. Coluna em branco é legítima — vazio significa "não sei", e o
 pipeline segue.
 
 **DRE, DFC e BP não são três importações — são duas.** DRE e DFC são o **mesmo lançamento lido
 duas vezes**: competência alimenta a DRE, caixa alimenta o fluxo. Não existe "importar uma DFC". Já
 o **BP é fotografia por documento**: `getBpData` acha o documento de balanço mais recente com
-`reference_date <= X` e soma `transactions WHERE document_id = <esse doc>`. Uma linha de balanço é
-*conta + saldo numa data* — sem descrição, sem sentido, sem data de caixa. Logo a especificação tem
-**dois layouts**: **Movimentos** (17 colunas → DRE e DFC) e **Saldos** (→ BP, com data de referência
-no arquivo, não na linha).
+`reference_date <= X` e soma `transactions WHERE document_id = <esse doc>`.
 
-**Buraco a fechar:** `aplicarImportacao` do MCP crava `reportType: 'other'`, então (a) BP importado
-pelo MCP nunca vira BP, e (b) silenciosamente `domainFromReportType('other')` → `'dre'`, e a camada
-0 só oferece naturezas de DRE. **A tela cobre BP; a IA externa não.** Contexto: nunca foi importado
-um BP — 0 documentos `balance_sheet`, e os 10.353 lançamentos são todos de natureza DRE, então
-`/balanco` devolve `null` desde sempre.
+**Correção da 4.5.A — são dois NÍVEIS, não dois layouts.** Eu havia proposto um segundo layout de
+planilha, "Saldos". É desnecessário e contraria o desenho existente: a migration 0015 diz no próprio
+comentário que o BP viria *"via importação de relatórios classificados como transações com categorias
+de tipo BP, **igual ao fluxo do DRE**"*. O balanço não precisa de outras colunas — precisa que **o
+arquivo** declare o que a linha não carrega (que é um balanço, e a data de referência). Ver
+`docs/SCHEMA_DECISIONS.md` Decisão 21.
+
+| Nível | O que carrega |
+|---|---|
+| **Arquivo** | origem, `tipoDeRelatorio` (movimentos \| balanço), `dataDeReferencia`, conta, moeda |
+| **Linha** | as 17 colunas canônicas |
+
+**Correlato: documento de BP não deduplica.** Reenviar o balanço de janeiro corrigido geraria as
+mesmas chaves, a segunda importação deduplicaria inteira, e `getBpAllDates` — que escolhe o documento
+**mais recente** da data — passaria a ler o vazio. Snapshot se substitui, não se acumula.
+
+**O BP está quebrado nas DUAS portas, e eu tinha escrito que só numa.** A frase anterior aqui era
+*"a tela cobre BP; a IA externa não"* — **falso**, e a varredura mostrou:
+
+- **Pelo MCP:** `aplicarImportacao` crava `reportType: 'other'`, então BP importado pelo MCP nunca
+  vira BP; e pior, em silêncio, `domainFromReportType('other')` → `'dre'` e a camada 0 só oferece
+  naturezas de DRE
+- **Pela tela:** `src/server/staging.ts:227` filtra `r.date && r.amount && r.direction`. Um balanço
+  não tem data **por linha** — tem uma data de arquivo. `process-document.ts:22` já força
+  `direction='inflow'` para `balance_sheet`, mas **ninguém preenche a data**, então toda linha cai em
+  `skipped` e o documento entra com zero
+
+**É por isso que nunca existiu um BP no banco:** 0 documentos `balance_sheet`, os 10.353 lançamentos
+todos de natureza DRE, e `/balanco` devolvendo `null` desde sempre. O caminho existe e **nunca foi
+exercitado com dado real** — a 4.5.B é a primeira vez que será.
 
 **Sobre datas, que é a dúvida que originou a fase: só duas importam.** `date` = competência
 (quando o fato ocorreu; compra no cartão = data da compra), `effective_date` = caixa (quando o
@@ -328,6 +381,29 @@ pagamento da fatura sai de novo, contra o princípio 13. Ironia útil: o **únic
 a data divergir de verdade é `sync-acquirer-item` (`saleDate` × `settlementDate`) — o desenho
 certo já existe, num código pausado que nunca rodou. Mais **1.361 lançamentos do Pluggy com
 `effective_date` nulo** (21–22/mai, antes da migration 0021), que um backfill resolve.
+
+**A causa mecânica de "a caixa nunca difere" é UMA LINHA.** `src/jobs/process-document.ts:90` monta o
+insert do staging com `date`, `amount`, `direction`, `description` e **nada mais**.
+`row.effectiveDate` existe no `StagingRow`, a coluna existe desde a migration 0021, e
+`approveAndInsert` faz `r.effectiveDate ?? r.date` — que **sempre** cai no `date` porque o valor foi
+descartado antes de chegar. Eu havia escrito que "os parsers já extraem, a staging já guarda,
+`approveAndInsert` já copia": o meio era falso. Mostrar a coluna na tela sem consertar isto exibiria
+a mesma data duas vezes em 100% das linhas.
+
+**O que a 4.5.B precisa entregar** (a sessão pede migration, então segue o ritual da casa — validar
+com `ROLLBACK`, colar verbatim, conferir o catálogo depois):
+
+1. `process-document.ts` — a linha do `effectiveDate`
+2. Migration `0031`: `transactions_staging.account_name`, `documents.imported_at`, e o `UPDATE` do
+   prefixo `mcp:` → `arq:` (hoje 0 linhas, então é grátis)
+3. `approveAndInsert` — `.orderBy(rowIndex)` **crítico**, porque a numeração de ocorrência da chave de
+   dedup tem de ser determinística; data de BP herdando `documents.reference_date`; normalização pelo
+   contrato; `external_id` + `onConflictDoNothing`; contar `rows.length` do `.returning()` e não
+   `valid.length`
+4. `review-client.tsx` — coluna Data de caixa (mostrando "= competência" em cinza quando vazia, nunca
+   repetindo a data), bloco de conta no cabeçalho, modo BP
+5. **A conciliação obrigatória:** rodar o `approveAndInsert` antigo (via `git show`) contra o novo,
+   sobre o mesmo staging, exigindo igualdade linha a linha
 
 Plano completo em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
 

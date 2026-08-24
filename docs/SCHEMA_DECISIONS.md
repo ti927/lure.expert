@@ -957,8 +957,14 @@ Não precisou de migration: `idx_tx_dedup` já existe, único em `(data_source_i
 `external_id IS NOT NULL`. Cada linha recebe:
 
 ```
-external_id = 'mcp:' + sha256(data | valor | sentido | descrição normalizada | conta | ocorrência)
+external_id = 'arq:' + sha256(data | valor | sentido | descrição normalizada | conta | ocorrência)
 ```
+
+> **O prefixo mudou de `mcp:` para `arq:` na Sessão 4.5.A**, e a função mudou de casa (de
+> `import-write.ts` para `import-dedup.ts`). Motivo na Decisão 21: a chave tem de ser **a mesma nas
+> duas portas de arquivo**, e `mcp:` nomeava o transporte em vez do que a chave identifica. O hash
+> **não inclui o prefixo**, então migrar o passado é `UPDATE ... SET external_id = 'arq:' ||
+> substr(external_id, 5)` — hoje grátis, porque nenhuma linha com `mcp:` chegou a ser gravada.
 
 **`ocorrencia` é o que faz a coisa funcionar.** Dois cafés de R$ 15 no mesmo dia são dois lançamentos
 legítimos e precisam de duas chaves; numerando as repetições na ordem em que aparecem, o mesmo
@@ -983,3 +989,112 @@ O plano põe exclusão em massa fora da v1, e isso não mudou. O que a ferrament
 
 **Nota sobre `deleteDocument`:** ele **nulifica** `transactions.document_id` e apaga o documento —
 não apaga os lançamentos. Vale para qualquer importação, não só as do MCP.
+
+---
+
+## Decisão 21 — O contrato de importação tem dois NÍVEIS, não dois layouts (Sessão 4.5.A)
+
+**Contexto:** o pedido foi *"o arquivo para importar precisa ter um FORMATO PADRONIZADO DE COLUNAS,
+podem até estar em branco, mas precisa ter o formato"*. Uma especificação, **três leitores**: a
+pessoa que tabula à mão, a IA do MCP que converte qualquer extrato para este formato, e o parser do
+app.
+
+### O formato canônico é caminho rápido, nunca requisito
+
+Esta é a cláusula que impede a decisão de se contradizer com a Fase 2. A Fase 2 matou o sistema de
+templates registrando que *"LLM lida com qualquer formato sem template"*, e a promessa ao dono de PME
+é *"sobe relatório, qualquer formato"*. **A promessa fica de pé:** cabeçalho desconhecido continua
+caindo no parser LLM, inalterado. O que muda é que quem **pode** produzir o formato — a IA, o ERP, a
+pessoa que baixa o modelo — ganha um caminho determinístico e sem custo de IA.
+
+Os dois não são o mesmo problema:
+
+| | O que a Fase 2 matou | O que a 4.5 constrói |
+|---|---|---|
+| Direção | o **sistema** infere o formato do arquivo do cliente | o **produtor** escreve no formato do sistema |
+| Custo recai sobre | o parser | o artefato |
+
+### Dois níveis: arquivo e linha
+
+O desenho inicial tinha **dois layouts de planilha** — "Movimentos" e "Saldos" — e estava errado. A
+migration 0015 já dizia, no próprio comentário, que o BP viria *"via importação de relatórios
+classificados como transações com categorias de tipo BP, **igual ao fluxo do DRE**"*.
+
+O balanço não precisa de outras colunas. Precisa que **o arquivo** declare duas coisas que a linha
+não carrega:
+
+| Nível | Campos | Quem preenche |
+|---|---|---|
+| **Arquivo** | origem, `tipoDeRelatorio` (`movimentos` \| `balanco`), `dataDeReferencia`, conta (nome, tipo, número), moeda | o formulário de `/upload` já coleta quase tudo; **o MCP não coletava nada** |
+| **Linha** | 17 colunas canônicas, **4 obrigatórias** | o parser, a IA, ou a pessoa |
+
+**Consequência imediata:** `aplicarImportacao` do MCP cravava `reportType: 'other'`, o que tornava
+**BP pelo MCP impossível** — e pior, em silêncio, porque `domainFromReportType('other')` devolve
+`'dre'` e a camada 0 passa a oferecer só naturezas de DRE.
+
+**Correlato: documento de BP não deduplica.** Reenviar o balanço de janeiro corrigido geraria as
+mesmas chaves, a segunda importação deduplicaria inteira, e o documento novo ficaria com zero
+linhas — e `getBpAllDates` escolhe o documento **mais recente** da data, que passaria a ser o vazio.
+Snapshot se substitui, não se acumula. Daí `deduplica(tipoDeRelatorio)` existir como função, em vez
+de a dedup ser incondicional.
+
+### Só duas datas vêm do arquivo
+
+| Data | Coluna | Significa | Regra |
+|---|---|---|---|
+| **Competência** | `date` | quando o fato econômico ocorreu | obrigatória. Compra no cartão = data da compra |
+| **Caixa** | `effective_date` | quando o dinheiro se moveu | opcional. **Em branco = igual à competência.** Compra no cartão = vencimento da fatura |
+
+`created_at` / `updated_at` são de sistema. As datas de `documents` descrevem o **documento**, não a
+linha. Era exatamente esta a dúvida que originou a fase, e não estava escrita em lugar nenhum que o
+usuário veja.
+
+### A chave de dedup é a mesma nas duas portas — daí o prefixo `arq:`
+
+O prefixo `mcp:` nomeava o **transporte**. Se a tela usasse outro prefixo, subir pela tela o que a IA
+importou duplicaria — a dedup ficaria cega justamente entre os dois caminhos que ela existe para
+unir. `arq:` nomeia o que a chave identifica: **uma linha que veio de arquivo**, seja qual for a
+porta.
+
+### A divisão de arquivos é por onde o código RODA, não por assunto
+
+`src/lib/csv-templates.ts` roda **no navegador** e importa o contrato para gerar a planilha modelo. O
+contrato tinha `node:crypto`. **O `tsc --noEmit` passa limpo; o `next build` quebra.** Por isso o
+hash mora em `src/lib/import-dedup.ts`, separado de `src/lib/import-contract.ts`, que é isomórfico
+(sem `node:crypto`, sem `'use server'`, sem SDK).
+
+É a mesma classe de restrição que criou `src/lib/transactions-page-size.ts` na Fase 5 — lá porque
+`'use server'` não deixa exportar constante; aqui porque o bundle do cliente não tem Node.
+
+### A planilha modelo é gerada a partir das colunas, nunca redigitada
+
+`buildImportTemplateCsv(tipo)` monta o cabeçalho a partir de `colunasDe(tipo)`. Redigitar faria
+nascer **dois formatos canônicos no primeiro dia**, e a divergência só apareceria quando alguém
+usasse o modelo — isto é, no pior momento possível.
+
+### O que foi unificado, e o que ficou separado de propósito
+
+`parseDate` (de `parsers/excel-csv.ts`) e `norm` (de `budget-import.ts`) foram para `format.ts` —
+eram a 3ª e a 4ª cópias.
+
+**`normalizeForMatch` de `categorizer.ts` NÃO foi unificada**, e o motivo está escrito no arquivo:
+ela decide **classificação**. As outras normalizam para comparar texto; esta escolhe em que natureza
+um lançamento cai. Unificá-las faria uma mudança de formatação alterar o resultado contábil.
+
+### Compartilhar a normalização, não o insert
+
+Os quatro `INSERT INTO transactions` (`sync-pluggy`, `approveAndInsert`, `import-write`,
+`sync-acquirer`) têm envelopes irreconciliáveis: cursor e memoização do Inngest; lote de 100 com
+evento de categorização; `ON CONFLICT` sobre plano prévio. Um `inserirLancamentos()` comum absorveria
+os três e viraria o arquivo mais frágil do projeto. **O contrato entrega
+`normalizarLancamento(bruto, contexto)` e cada porta mantém o seu `db.insert`.**
+
+### O que NÃO é divergência a normalizar
+
+**`status`.** Pluggy grava `pending` porque nenhum humano viu aquelas linhas — o portão é
+`confirmPendingTransactions` em `/contas`. Upload e MCP gravam `confirmed` porque houve aceite
+explícito. **Uniformizar faria lançamento de banco entrar na DRE sem revisão.** O contrato declara a
+regra e para aí.
+
+**A conta é do DOCUMENTO, não da linha.** Um extrato é de uma conta só; `account_type` e
+`account_number` nunca variam entre linhas do mesmo arquivo.
