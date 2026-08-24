@@ -133,8 +133,8 @@ async function main() {
     'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
 
   const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
-  t(catalogoE.length === catalogoL.length + 8,
-    `com escrita, o catálogo ganha os QUATRO pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
+  t(catalogoE.length === catalogoL.length + 10,
+    `com escrita, o catálogo ganha os CINCO pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
 
   // ═══ Naturezas ════════════════════════════════════════════════════════════
   console.log('\n── catálogos ──')
@@ -158,6 +158,18 @@ async function main() {
       sql`EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = ${categories.id})`,
     ))
     .limit(1)
+
+  // `atribuivel` é o campo que diz ao modelo o que pode receber lançamento. Ele
+  // vivia TRUE para tudo — o `${categories.id}` sem qualificação era capturado
+  // pelo alias do EXISTS. Ver a nota em `lib/sql-dimensions.ts`.
+  const todas = await chamar(comEscrita, 'listar_categorias', { organizationId: ORG })
+  const cadastro = (todas.dados as { naturezas: { id: string; atribuivel: boolean }[] })?.naturezas ?? []
+  t(cadastro.find(n => n.id === paiComFilho.id)?.atribuivel === false,
+    'listar_categorias marca natureza PAI como atribuivel: false')
+  t(cadastro.find(n => n.id === folha.id)?.atribuivel === true,
+    'e a natureza FOLHA como atribuivel: true')
+  t(cadastro.some(n => !n.atribuivel) && cadastro.some(n => n.atribuivel),
+    `o plano tem os dois casos (${cadastro.filter(n => n.atribuivel).length} de ${cadastro.length} atribuíveis)`)
 
   const dims = await chamar(comEscrita, 'listar_dimensoes', { organizationId: ORG, quais: ['centro_de_custo'] })
   t(((dims.dados as { centrosDeCusto: unknown[] })?.centrosDeCusto ?? []).length === 1,
@@ -517,6 +529,150 @@ async function main() {
   t(Number(aposCopia.n) === pc2.resumo.quantidade,
     `${aposCopia.n} séries nasceram com source='copia_realizado' — separáveis do que foi lançado à mão`)
 
+  // ═══ Regras de categorização ══════════════════════════════════════════════
+  console.log('\n── regras ──')
+
+  const lista = await chamar(comEscrita, 'listar_regras', { organizationId: ORG })
+  const regrasExistentes = (lista.dados as { regras: { descricao: string; categoria: string | null }[] })?.regras ?? []
+  t(regrasExistentes.length >= 3,
+    `listar_regras devolve as ${regrasExistentes.length} regras que a classificação em lote criou`)
+  t(regrasExistentes.every(r => r.categoria !== null),
+    'e traz o alvo resolvido em NOME, não em id — um uuid não diz nada a quem lê')
+
+  const curta = await chamar(comEscrita, 'prever_regras', {
+    organizationId: ORG, regras: [{ descricao: 'AB', categoryId: folha.id }],
+  })
+  t(curta.isError,
+    'descrição de 2 letras é recusada — o casamento é por trecho, e "AB" pegaria a base inteira')
+
+  // As três recusas por linha, num lote só: elas SAEM, as boas ficam.
+  const misto = await chamar(comEscrita, 'prever_regras', {
+    organizationId: ORG,
+    regras: [
+      { descricao: 'MERCADO LIVRE', categoryId: folha.id },
+      { descricao: 'AMERICANAS', categoryId: paiComFilho.id },
+      { descricao: 'mercado livre' },
+      { descricao: 'MERCADO LIVRE', categoryId: folha.id },
+      { descricao: 'SHOPEE', costCenterId: '00000000-0000-0000-0000-000000000000' },
+    ],
+  })
+  const m = misto.dados as {
+    previaId: string
+    resumo: { quantidade: number; criar: number }
+    recusadas: { indice: number; motivo: string }[]
+  }
+  t(m.resumo.quantidade === 1 && m.recusadas.length === 4,
+    `linha inválida não derruba o lote: 1 válida, ${m.recusadas.length} recusadas com motivo`)
+  t(m.recusadas.some(r => r.indice === 1 && r.motivo.includes('subcategorias')),
+    'natureza PAI recusada — pendurar lançamento no pai duplicaria o valor na cascata da DRE')
+  t(m.recusadas.some(r => r.indice === 2 && r.motivo.includes('alvo')),
+    'regra sem nenhum alvo recusada')
+  t(m.recusadas.some(r => r.indice === 3 && r.motivo.includes('posição 0')),
+    'duplicata dentro do lote recusada, apontando a posição da primeira')
+  t(m.recusadas.some(r => r.indice === 4 && r.motivo.includes('Centro de custo')),
+    'dimensão de outra empresa recusada')
+
+  // ── O alcance: o número que revela regra larga demais ────────────────────
+  const alcance = await chamar(comEscrita, 'prever_regras', {
+    organizationId: ORG,
+    regras: [
+      { descricao: 'UBER', categoryId: folha.id },
+      { descricao: 'UBER *TRIP 001', categoryId: folha.id },
+    ],
+  })
+  const al = alcance.dados as {
+    previaId: string
+    resumo: { criar: number; atualizar: number; linhas: {
+      descricao: string; acao: string; alvosAtuais: string | null
+      lancamentosQueCasam: number; semNatureza: number
+    }[] }
+    avisoSobrescrita?: string
+    avisoAbrangencia?: string[]
+  }
+  const larga = al.resumo.linhas.find(l => l.descricao === 'UBER')!
+  const exata = al.resumo.linhas.find(l => l.descricao === 'UBER *TRIP 001')!
+  t(larga.lancamentosQueCasam === 5,
+    `"UBER" alcança os 5 lançamentos com esse trecho, não só um (${larga.lancamentosQueCasam})`)
+  t(exata.lancamentosQueCasam === 1,
+    'e "UBER *TRIP 001" alcança 1 — é assim que a prévia mostra a diferença entre as duas')
+  t(larga.semNatureza === 2,
+    `dos 5, ${larga.semNatureza} ainda estão sem natureza — os que a próxima passada pegaria`)
+  t(larga.acao === 'criar' && exata.acao === 'atualizar',
+    'a que já existe é ATUALIZAR, não criar — a identidade é o par (descrição, conta)')
+  t(exata.alvosAtuais !== null && al.avisoSobrescrita !== undefined,
+    `e a prévia diz para onde a existente aponta hoje ("${exata.alvosAtuais}") antes de sobrescrever`)
+  t(al.resumo.criar === 1 && al.resumo.atualizar === 1, 'resumo: 1 a criar, 1 a atualizar')
+
+  // ── O dente da assinatura ────────────────────────────────────────────────
+  // Contagem igual, efeito diferente: alguém criou "UBER" no intervalo, e o que
+  // seria uma regra nova virou sobrescrita de algo que o humano nunca viu.
+  await db.insert(categorizationRules).values({
+    organizationId: ORG, name: 'Intruso', conditions: { description: 'UBER' },
+    targetCategoryId: folha.id, autoGenerated: false, priority: 0,
+  })
+
+  const assinaturaVelha = await chamar(comEscrita, 'aplicar_regras', {
+    organizationId: ORG, previaId: al.previaId, confirmacao: 'aplicar',
+  })
+  t(assinaturaVelha.isError && assinaturaVelha.texto.includes('plano mudou'),
+    'a regra passou a existir entre prever e aplicar: RECUSA, mesmo com a contagem igual')
+
+  await db.delete(categorizationRules).where(and(
+    eq(categorizationRules.organizationId, ORG), eq(categorizationRules.name, 'Intruso'),
+  ))
+
+  // ── O caminho feliz ──────────────────────────────────────────────────────
+  const [antesRegras] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM categorization_rules WHERE organization_id = ${ORG}::uuid`)
+
+  const previaR = await chamar(comEscrita, 'prever_regras', {
+    organizationId: ORG,
+    regras: [
+      { descricao: 'MERCADO LIVRE', categoryId: folha.id, costCenterId: cc.id },
+      { descricao: 'UBER *TRIP 001', categoryId: folha.id },
+    ],
+  })
+  const prR = previaR.dados as { previaId: string; resumo: { criar: number; atualizar: number } }
+
+  const semPalavraR = await chamar(comEscrita, 'aplicar_regras', {
+    organizationId: ORG, previaId: prR.previaId, confirmacao: 'ok',
+  })
+  t(semPalavraR.isError, 'aplicar_regras sem a palavra literal: recusa')
+
+  const aplicR = await chamar(comEscrita, 'aplicar_regras', {
+    organizationId: ORG, previaId: prR.previaId, confirmacao: 'aplicar',
+  })
+  const rr = aplicR.dados as { criadas: number; atualizadas: number; observacao: string }
+  t(!aplicR.isError && rr.criadas === 1 && rr.atualizadas === 1,
+    `aplicou: ${rr.criadas} criada, ${rr.atualizadas} atualizada`)
+  t(rr.observacao.includes('não'),
+    'e o resultado avisa que o passado NÃO foi reclassificado — regra vale daqui pra frente')
+
+  const [depoisRegras] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM categorization_rules WHERE organization_id = ${ORG}::uuid`)
+  t(Number(depoisRegras.n) === Number(antesRegras.n) + 1,
+    `o banco confirma: ${antesRegras.n} → ${depoisRegras.n} regras (a atualizada não virou uma segunda)`)
+
+  const [gravada] = await db.execute<{ cc: string | null; cat: string | null }>(sql`
+    SELECT target_cost_center_id::text AS cc, target_category_id::text AS cat
+      FROM categorization_rules
+     WHERE organization_id = ${ORG}::uuid
+       AND conditions->>'description' = 'MERCADO LIVRE'`)
+  t(gravada?.cc === cc.id && gravada?.cat === folha.id,
+    'e a regra nova aponta para a natureza E o centro de custo pedidos')
+
+  const [semReclassificar] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM transactions
+     WHERE organization_id = ${ORG}::uuid AND category_id IS NULL`)
+  t(Number(semReclassificar.n) === 2,
+    'e os 2 lançamentos sem natureza continuam sem — criar regra não mexe no passado')
+
+  const reuso = await chamar(comEscrita, 'aplicar_regras', {
+    organizationId: ORG, previaId: pr.previaId, confirmacao: 'aplicar',
+  })
+  t(reuso.isError && reuso.texto.includes('já foi aplicada'),
+    'e a mesma prévia não aplica duas vezes')
+
   // ═══ Auditoria ════════════════════════════════════════════════════════════
   console.log('\n── auditoria ──')
 
@@ -524,9 +680,9 @@ async function main() {
     SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
            COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
     FROM agent_events WHERE organization_id = ${ORG}::uuid`)
-  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 5,
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 6,
     `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — classificação, dois rateios, ` +
-    'um lançamento orçado e uma cópia do realizado')
+    'um lançamento orçado, uma cópia do realizado e um lote de regras')
 
   const [carimbo] = await db.execute<{ tem: boolean }>(sql`
     SELECT (payload ? 'confirmed_at' AND payload ? 'applied_at') AS tem

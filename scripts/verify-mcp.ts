@@ -136,7 +136,7 @@ async function main() {
 
   const lista = await rpc(accessToken, 'tools/list')
   const tools = ((lista.json?.result ?? {}) as { tools?: { name: string; inputSchema: Record<string, unknown> }[] }).tools ?? []
-  t(tools.length === 8, `8 ferramentas de leitura (${tools.map(x => x.name).join(', ')})`)
+  t(tools.length === 9, `9 ferramentas de leitura (${tools.map(x => x.name).join(', ')})`)
   const consultarTool = tools.find(x => x.name === 'consultar')
   const props = (consultarTool?.inputSchema?.properties ?? {}) as Record<string, unknown>
   t(!!props.organizationId && !!props.medidas && !!props.periodo,
@@ -195,6 +195,36 @@ async function main() {
     name: 'descrever_organizacao', arguments: { organizationId: 'nao-e-uuid' },
   }))
   t(argRuim.isError, 'argumento fora do schema volta como isError, não como falha de transporte')
+
+  // `atribuivel` é o campo pelo qual o modelo decide o que pode receber
+  // lançamento. Conferido contra o plano de contas REAL, e não contra um
+  // sintético: num plano de 3 níveis a maioria das naturezas NÃO é folha, então
+  // "todas atribuíveis" é uma resposta impossível — que era exatamente a que
+  // vinha. Ver a nota do `${tabela.coluna}` em `lib/sql-dimensions.ts`.
+  const plano = saida(await rpc(accessToken, 'tools/call', {
+    name: 'listar_categorias', arguments: { organizationId: EMPRESA },
+  }))
+  const naturezas = (plano.dados as { naturezas: { id: string; atribuivel: boolean }[] })?.naturezas ?? []
+  const folhas = naturezas.filter(n => n.atribuivel).length
+  t(naturezas.length > 0 && folhas > 0 && folhas < naturezas.length,
+    `listar_categorias: ${folhas} de ${naturezas.length} naturezas são atribuíveis — não todas`)
+
+  const [conferencia] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM categories c
+     WHERE c.organization_id = ${EMPRESA}::uuid AND c.is_active = true
+       AND NOT EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = c.id)`)
+  t(folhas === Number(conferencia.n),
+    `e o número bate com o banco (${conferencia.n} folhas)`)
+
+  const regras = saida(await rpc(accessToken, 'tools/call', {
+    name: 'listar_regras', arguments: { organizationId: EMPRESA },
+  }))
+  const [regrasNoBanco] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM categorization_rules
+     WHERE organization_id = ${EMPRESA}::uuid AND conditions ? 'description'`)
+  const listadas = (regras.dados as { regras: unknown[] })?.regras ?? []
+  t(!regras.isError && listadas.length === Math.min(Number(regrasNoBanco.n), 200),
+    `listar_regras devolve ${listadas.length} das ${regrasNoBanco.n} regras da empresa`)
 
   // ═══ Consulta ═════════════════════════════════════════════════════════════
   console.log('\n── consulta ──')

@@ -95,13 +95,30 @@ export function dimensionExistsFilter(
     preds.push(sql`${col} IN (${sql.join(f.ids.map(id => sql`${id}::uuid`), sql`, `)})`)
   }
 
-  // Este EXISTS funciona hoje por um detalhe frágil: `transaction_lines` não tem
-  // coluna `id`, então o `"id"` que o Drizzle emite sem qualificação não acha
-  // nada no escopo interno e cai no externo. A mesma construção em
-  // `transaction_allocations` — que TEM `id` — comparava `a.transaction_id =
-  // a.id` e vivia falsa. Se a view um dia ganhar `id`, todo filtro de dimensão
-  // de `/transacoes` quebra em silêncio; quem chamar daqui em diante deve passar
-  // a coluna já qualificada.
+  // ───────────────────────────────────────────────────────────────────────────
+  // A ARMADILHA DO `${tabela.coluna}` DENTRO DE SUBCONSULTA
+  //
+  // Medida com `toSQL()`, a regra do Drizzle é esta:
+  //
+  //   posição no SELECT, consulta SEM join → `"id"`               (sem qualificar)
+  //   posição no SELECT, consulta COM join → `"categories"."id"`  (qualificado)
+  //   posição no WHERE, sempre             → `"categories"."id"`  (qualificado)
+  //
+  // Dentro de `EXISTS (SELECT … FROM outra_tabela a WHERE a.x = "id")`, um `"id"`
+  // sem qualificação é capturado pelo escopo INTERNO sempre que a tabela de
+  // dentro tiver uma coluna `id` — e a correlação vira `a.x = a.id`, que nunca é
+  // verdade. Falha em silêncio: nenhum erro, só um booleano constante.
+  //
+  // Já mordeu duas vezes: `jaRateado` do rateio em lote (sempre falso, aviso
+  // zerado desde a 10.4) e `atribuivel` de `listar_categorias` (sempre
+  // verdadeiro, o MCP oferecendo natureza pai como destino). A correção é
+  // `${tabela}.coluna`, que emite `"tabela".coluna` em qualquer posição.
+  //
+  // Aqui embaixo a construção é segura por DOIS motivos independentes: está no
+  // WHERE, e `transaction_lines` não tem coluna `id`. Ainda assim, quem chamar
+  // daqui em diante deve passar a coluna já qualificada — o segundo motivo
+  // evapora no dia em que a view ganhar um `id`.
+  // ───────────────────────────────────────────────────────────────────────────
   return sql`EXISTS (
     SELECT 1 FROM transaction_lines tl
     WHERE tl.transaction_id = ${txIdColumn}

@@ -33,6 +33,10 @@ import {
 } from '@/lib/allocations-write'
 import { normalizeWeights, formatProportion } from '@/lib/allocation-math'
 import { preverSerie, criarSerie, preverCopia, aplicarCopia } from '@/lib/budget-write'
+import {
+  listarRegras, planejarRegras, aplicarRegras, assinaturaDoPlano,
+  regraDeLoteSchema, MAX_REGRAS_POR_LOTE, type RegraDeLote,
+} from '@/lib/rules-write'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
   registrarPrevia, consumirPrevia, divergiu, registrarAplicacao,
@@ -238,8 +242,13 @@ const listarCategorias: Ferramenta = {
         tipo: categories.type,
         paiId: categories.parentId,
         opexCapex: categories.opexCapex,
+        // `${categories}.id` e NÃO `${categories.id}` — ver a nota em
+        // `lib/sql-dimensions.ts`. Nesta consulta não há join, então o Drizzle
+        // emitiria `"id"` puro na lista do SELECT, e dentro do EXISTS o alias
+        // `f` venceria: `f.parent_id = f.id`, sempre falso. `atribuivel` vivia
+        // TRUE para tudo, e o modelo recebia natureza pai como destino válido.
         atribuivel: sql<boolean>`NOT EXISTS (
-          SELECT 1 FROM ${categories} f WHERE f.parent_id = ${categories.id}
+          SELECT 1 FROM ${categories} f WHERE f.parent_id = ${categories}.id
         )`,
       })
       .from(categories)
@@ -1074,6 +1083,164 @@ const aplicarCopiaDoRealizado: Ferramenta = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Regras de categorização
+// ─────────────────────────────────────────────────────────────────────────────
+
+const listarRegrasFerramenta: Ferramenta = {
+  nome: 'listar_regras',
+  titulo: 'Listar regras de categorização',
+  descricao:
+    'As regras que classificam sozinhas o que é importado. Uma regra é "descrição contém X (na ' +
+    'conta Y) → vai para estes destinos", e o casamento é por trecho da descrição, sem diferenciar ' +
+    'maiúsculas. É por aqui que se responde "por que este lançamento foi parar em SG&A?".',
+  entrada: alvo.extend({
+    busca: z.string().trim().min(2).max(60).optional()
+      .describe('Filtra pela descrição da regra.'),
+    limite: z.number().int().min(1).max(500).default(200),
+  }),
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; busca?: string; limite?: number }
+    const scope = await escopoDe(ctx, a.organizationId)
+    const regras = await listarRegras(scope.organizationId, { busca: a.busca, limite: a.limite })
+    return { regras, total: regras.length }
+  },
+}
+
+const FERRAMENTA_REGRAS = 'regras_de_categorizacao'
+
+const entradaPreverRegras = alvo.extend({
+  regras: z.array(regraDeLoteSchema).min(1).max(MAX_REGRAS_POR_LOTE),
+})
+
+const preverRegrasFerramenta: Ferramenta = {
+  nome: 'prever_regras',
+  titulo: 'Prever regras de categorização',
+  descricao:
+    'Mostra o que um lote de regras faria, SEM gravar. Para cada regra: se cria ou ATUALIZA uma já ' +
+    'existente (e para onde a existente aponta hoje), e quantos lançamentos a descrição já alcança — ' +
+    'o número que revela regra larga demais antes de ela virar dano. ' +
+    'ATENÇÃO: regra não reclassifica o passado; ela vale da próxima categorização em diante. ' +
+    'Para arrumar o que já está lançado, use prever_classificacao_em_lote. ' +
+    'Regra inválida sai do lote com o motivo, sem derrubar as outras. ' +
+    'Apresente o resumo ao usuário e obtenha o aceite antes de aplicar.',
+  entrada: entradaPreverRegras,
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as z.infer<typeof entradaPreverRegras>
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const plano = await planejarRegras(scope.organizationId, a.regras)
+    if ('error' in plano) throw new Error(plano.error)
+
+    if (plano.linhas.length === 0) {
+      return {
+        previaId: null,
+        recusadas: plano.recusadas,
+        aviso: 'Nenhuma regra do lote é válida. Corrija os motivos abaixo e chame de novo.',
+      }
+    }
+
+    const resumo = {
+      quantidade: plano.linhas.length,
+      criar: plano.criar,
+      atualizar: plano.atualizar,
+      recusadas: plano.recusadas.length,
+      assinatura: assinaturaDoPlano(plano),
+      linhas: plano.linhas,
+    }
+
+    const { previaId, expiraEm } = await registrarPrevia({
+      organizationId: scope.organizationId,
+      ferramenta: FERRAMENTA_REGRAS,
+      userId: ctx.userId,
+      clientId: ctx.clientId,
+      resumo,
+      pedido: { regras: a.regras },
+    })
+
+    // Uma regra que já alcança meio extrato quase nunca é o que a pessoa quis
+    // dizer — e o casamento é por trecho, então o alcance só cresce com o tempo.
+    const largas = plano.linhas.filter(l => l.lancamentosQueCasam > 200)
+
+    return {
+      previaId,
+      expiraEm,
+      resumo,
+      ...(plano.recusadas.length ? { recusadas: plano.recusadas } : {}),
+      ...(plano.atualizar > 0 ? {
+        avisoSobrescrita: `${plano.atualizar} regra(s) já existem e serão SOBRESCRITAS. ` +
+          'Confira o campo alvosAtuais de cada uma antes de aceitar.',
+      } : {}),
+      ...(largas.length ? {
+        avisoAbrangencia: largas.map(l =>
+          `"${l.descricao}" já casa com ${l.lancamentosQueCasam} lançamentos. ` +
+          'Confirme que é isso mesmo — o casamento é por trecho da descrição.'),
+      } : {}),
+      comoAplicar: `Mostre este resumo ao usuário. Com o aceite dele, chame aplicar_regras ` +
+        `com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
+    }
+  },
+}
+
+const aplicarRegrasFerramenta: Ferramenta = {
+  nome: 'aplicar_regras',
+  titulo: 'Aplicar regras de categorização',
+  descricao:
+    'Grava o lote de regras de uma prévia. Exige previaId e a palavra literal "aplicar". Refaz o ' +
+    'plano e RECUSA se ele mudou — inclusive se uma regra que ia ser criada passou a existir no ' +
+    'intervalo, porque aí o efeito deixa de ser criar e passa a ser sobrescrever.',
+  entrada: alvo.extend({
+    previaId: z.string().uuid(),
+    confirmacao: z.string().describe('A palavra literal "aplicar".'),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; previaId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    const previa = await consumirPrevia({
+      previaId: a.previaId, ferramenta: FERRAMENTA_REGRAS,
+      organizationId: scope.organizationId, userId: ctx.userId,
+    })
+    if (!previa.ok) throw new Error(previa.motivo)
+
+    const regras = (previa.pedido as { regras: RegraDeLote[] }).regras
+
+    const agora = await planejarRegras(scope.organizationId, regras)
+    if ('error' in agora) throw new Error(agora.error)
+
+    const problema = divergiu(previa.resumo, { quantidade: agora.linhas.length })
+    if (problema) throw new Error(problema)
+    if (previa.resumo.assinatura !== assinaturaDoPlano(agora)) {
+      throw new Error(
+        'O plano mudou desde a prévia: alguma regra deste lote passou a existir (ou deixou de ' +
+        'existir) no intervalo. Gere uma prévia nova — o que seria criado agora seria sobrescrito.',
+      )
+    }
+
+    const inicio = Date.now()
+    const r = await aplicarRegras(scope.organizationId, regras, agora)
+
+    await registrarAplicacao({
+      organizationId: scope.organizationId, ferramenta: FERRAMENTA_REGRAS,
+      previaId: a.previaId, userId: ctx.userId, clientId: ctx.clientId,
+      resultado: { ...r }, duracaoMs: Date.now() - inicio,
+    })
+
+    return {
+      aplicado: true,
+      ...r,
+      observacao: 'As regras valem da próxima categorização em diante. O que já está lançado não ' +
+        'mudou — para reclassificar o passado, use prever_classificacao_em_lote.',
+    }
+  },
+}
+
 const CATALOGO: Ferramenta[] = [
   listarOrganizacoes,
   descreverOrganizacao,
@@ -1081,10 +1248,13 @@ const CATALOGO: Ferramenta[] = [
   listarDimensoes,
   listarModelosDeRateio,
   listarVersoesDeOrcamento,
+  listarRegrasFerramenta,
   consultar,
   explicarConsulta,
   preverClassificacao,
   aplicarClassificacao,
+  preverRegrasFerramenta,
+  aplicarRegrasFerramenta,
   preverRateio,
   aplicarRateio,
   preverLancamentoOrcado,
