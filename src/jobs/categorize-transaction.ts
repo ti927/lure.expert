@@ -2,6 +2,7 @@ import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
 import { transactions, documents, organizations, dataSources, invoices } from '@/db/schema'
 import { eq, and, inArray } from 'drizzle-orm'
+import { somarMatchCount } from '@/lib/rules-write'
 import {
   loadOrgContext,
   categorizeTransaction,
@@ -88,6 +89,8 @@ async function processChunk(
   let needsReview = 0
   let skipped = 0
   const agentEventPromises: Promise<void>[] = []
+  /** Quantas vezes cada regra pegou NESTE bloco — somado de uma vez no fim. */
+  const regrasQuePegaram = new Map<string, number>()
 
   for (const tx of txList) {
     const documentDomain = tx.documentId ? (docDomainMap.get(tx.documentId) ?? 'dre') : 'dre'
@@ -171,6 +174,10 @@ async function processChunk(
       )
     }
 
+    if (result!.ruleId) {
+      regrasQuePegaram.set(result!.ruleId, (regrasQuePegaram.get(result!.ruleId) ?? 0) + 1)
+    }
+
     // Ganhar só dimensão não é estar categorizado: sem natureza o lançamento
     // continua fora da DRE e precisa de gente.
     if (!result!.categoryId || result!.needsReview) needsReview++
@@ -178,9 +185,11 @@ async function processChunk(
   }
 
   await Promise.allSettled(agentEventPromises)
+  await somarMatchCount(organizationId, regrasQuePegaram)
 
   return { categorized, needsReview, skipped }
 }
+
 
 export const categorizeTransactions = inngest.createFunction(
   {

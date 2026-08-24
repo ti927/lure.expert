@@ -36,6 +36,16 @@ export interface CategorizationResult {
   confidence: number
   method: 'csv_match' | 'rule' | 'recurrence' | 'embedding' | 'llm'
   needsReview: boolean
+  /**
+   * Qual regra decidiu — preenchido só pela camada 1.
+   *
+   * Existe para o job somar `categorization_rules.match_count`. A coluna nasceu
+   * na Fase 1 com `DEFAULT 0 NOT NULL` e **nunca teve um escritor**: a tela
+   * mostrava "aplicada N×" que jamais aparecia, e a ferramenta `listar_regras`
+   * publicava um contador morto — em que "0" para toda regra é indistinguível
+   * de "nenhuma regra jamais pegou". O MCP chegou a concluir exatamente isso.
+   */
+  ruleId?: string | null
 }
 
 export interface LeafCategory {
@@ -299,6 +309,7 @@ function applyRules(
       confidence: 1.0,
       method: 'rule',
       needsReview: false,
+      ruleId: rule.id,
     }
   }
   return null

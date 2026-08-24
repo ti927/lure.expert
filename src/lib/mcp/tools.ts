@@ -35,7 +35,7 @@ import { normalizeWeights, formatProportion } from '@/lib/allocation-math'
 import { preverSerie, criarSerie, preverCopia, aplicarCopia } from '@/lib/budget-write'
 import {
   listarRegras, planejarRegras, aplicarRegras, assinaturaDoPlano,
-  regraDeLoteSchema, MAX_REGRAS_POR_LOTE, type RegraDeLote,
+  regraDeLoteSchema, MAX_REGRAS_POR_LOTE, CONTADOR_VIVO_DESDE, type RegraDeLote,
 } from '@/lib/rules-write'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -1093,18 +1093,42 @@ const listarRegrasFerramenta: Ferramenta = {
   descricao:
     'As regras que classificam sozinhas o que é importado. Uma regra é "descrição contém X (na ' +
     'conta Y) → vai para estes destinos", e o casamento é por trecho da descrição, sem diferenciar ' +
-    'maiúsculas. É por aqui que se responde "por que este lançamento foi parar em SG&A?".',
+    'maiúsculas. É por aqui que se responde "por que este lançamento foi parar em SG&A?". ' +
+    '`total` é o total REAL da empresa, não o tamanho da página — use `offset` para percorrer o ' +
+    'resto enquanto `temMais` for verdadeiro. ' +
+    `CUIDADO com vezesAplicada: o contador só passou a ser escrito em ${CONTADOR_VIVO_DESDE}, e ` +
+    'cada regra declara em `contadorConfiavel` se o dela vale. Numa regra com ' +
+    '`contadorConfiavel: false`, zero NÃO significa "nunca pegou" — significa "não se sabe". ' +
+    'Não conclua que uma regra é inútil a partir desse zero.',
   entrada: alvo.extend({
     busca: z.string().trim().min(2).max(60).optional()
       .describe('Filtra pela descrição da regra.'),
     limite: z.number().int().min(1).max(500).default(200),
+    offset: z.number().int().min(0).default(0)
+      .describe('Quantas pular. Para a segunda página de 500, offset: 500.'),
   }),
   escopo: 'leitura',
   async executar(args, ctx) {
-    const a = args as { organizationId: string; busca?: string; limite?: number }
+    const a = args as { organizationId: string; busca?: string; limite?: number; offset?: number }
     const scope = await escopoDe(ctx, a.organizationId)
-    const regras = await listarRegras(scope.organizationId, { busca: a.busca, limite: a.limite })
-    return { regras, total: regras.length }
+    const r = await listarRegras(scope.organizationId, {
+      busca: a.busca, limite: a.limite, offset: a.offset,
+    })
+
+    return {
+      ...r,
+      exibidas: r.regras.length,
+      ...(r.temMais ? {
+        avisoPaginacao: `Faltam ${r.total - r.offset - r.regras.length} regra(s). ` +
+          `Chame de novo com offset: ${r.offset + r.regras.length}.`,
+      } : {}),
+      ...(r.contadorNaoConfiavel > 0 ? {
+        avisoContador: `${r.contadorNaoConfiavel} das regras listadas são anteriores a ` +
+          `${CONTADOR_VIVO_DESDE}, quando o contador passou a ser escrito. O vezesAplicada delas ` +
+          'não distingue "nunca pegou" de "pegou antes da contagem existir" — não use esse zero ' +
+          'para dizer que a regra é inútil.',
+      } : {}),
+    }
   },
 }
 
