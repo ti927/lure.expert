@@ -284,6 +284,20 @@ data de caixa opcional; conta/tipo/número; natureza, CC, UEN, entidade, contato
 de origem; moeda; observação). Coluna em branco é legítima — vazio significa "não sei", e o
 pipeline segue.
 
+**DRE, DFC e BP não são três importações — são duas.** DRE e DFC são o **mesmo lançamento lido
+duas vezes**: competência alimenta a DRE, caixa alimenta o fluxo. Não existe "importar uma DFC". Já
+o **BP é fotografia por documento**: `getBpData` acha o documento de balanço mais recente com
+`reference_date <= X` e soma `transactions WHERE document_id = <esse doc>`. Uma linha de balanço é
+*conta + saldo numa data* — sem descrição, sem sentido, sem data de caixa. Logo a especificação tem
+**dois layouts**: **Movimentos** (17 colunas → DRE e DFC) e **Saldos** (→ BP, com data de referência
+no arquivo, não na linha).
+
+**Buraco a fechar:** `aplicarImportacao` do MCP crava `reportType: 'other'`, então (a) BP importado
+pelo MCP nunca vira BP, e (b) silenciosamente `domainFromReportType('other')` → `'dre'`, e a camada
+0 só oferece naturezas de DRE. **A tela cobre BP; a IA externa não.** Contexto: nunca foi importado
+um BP — 0 documentos `balance_sheet`, e os 10.353 lançamentos são todos de natureza DRE, então
+`/balanco` devolve `null` desde sempre.
+
 **Sobre datas, que é a dúvida que originou a fase: só duas importam.** `date` = competência
 (quando o fato ocorreu; compra no cartão = data da compra), `effective_date` = caixa (quando o
 dinheiro se moveu; **em branco = igual à competência**; compra no cartão = vencimento da fatura).
