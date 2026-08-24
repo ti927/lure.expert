@@ -266,33 +266,55 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
 | 4 | Convites e papéis | 🔲 |
-| **4.5** | **Normalização de arquivos importados & conexão bancária** — criada em 24/ago. Contrato único do lançamento, conta como cadastro, dedup no caminho da tela, data de caixa do cartão | 🔲 |
+| **4.5** | **Normalização da importação: o formato padrão de colunas** — criada em 24/ago | 🔲 |
 | 5 | Dashboard configurável | 🔲 |
 
-**A Fase 4.5, e por que ela é pré-requisito do dashboard.** Julio notou que a coluna Banco/Conta
-vem vazia em tudo que foi importado por arquivo. A checagem mostrou que a coluna é o sintoma:
-**existem dois formatos de lançamento na mesma tabela**, o que o Pluggy escreve e o que a
-importação escreve, e o segundo é um subconjunto empobrecido do primeiro. Medido em 24/ago:
+### Fase 4.5 — o formato padrão de colunas
+
+**O artefato central é a PLANILHA, não o código.** Uma especificação de colunas, **três leitores**:
+a pessoa que tabula à mão, a IA no MCP que converte qualquer extrato *para este formato*, e o
+parser do app. Hoje os três produzem coisas diferentes — e é por isso que existem **quatro
+`INSERT INTO transactions` independentes, com zero código compartilhado** (`sync-pluggy`,
+`approveAndInsert`, `import-write`, `sync-acquirer`). O contrato interno é **consequência** do
+formato do arquivo, não premissa.
+
+**O trabalho de fundo:** `transactions` tem 28 colunas e ninguém nunca decidiu quais o arquivo
+carrega. Proposta: **17 colunas, 5 obrigatórias** (competência, descrição, valor, sentido +
+data de caixa opcional; conta/tipo/número; natureza, CC, UEN, entidade, contato; documento; id
+de origem; moeda; observação). Coluna em branco é legítima — vazio significa "não sei", e o
+pipeline segue.
+
+**Sobre datas, que é a dúvida que originou a fase: só duas importam.** `date` = competência
+(quando o fato ocorreu; compra no cartão = data da compra), `effective_date` = caixa (quando o
+dinheiro se moveu; **em branco = igual à competência**; compra no cartão = vencimento da fatura).
+`created_at`/`updated_at` são de sistema; as datas de `documents` descrevem o documento, não a
+linha. Nada disso está escrito onde o usuário vê.
+
+**Medido em 24/ago:**
 
 | | Pluggy | Upload |
 |---|---:|---:|
 | `account_id` / `type` / `number` / `name` | 2.592 de 2.592 | **0** de 7.762 |
-| `external_id` (dedup) | 2.592 | **0** — subir o mesmo extrato duas vezes dobra a contabilidade |
+| `external_id` (dedup) | 2.592 | **0** — o mesmo arquivo duas vezes dobra a contabilidade |
 | logo e badge | automáticos | **0**, e inatingíveis: `/contas` filtra `provider='pluggy'` |
 | `currency` | do provedor (12 em USD) | fixo `BRL` |
 
-Consequência que não é cosmética: a identidade da regra é `(descrição, conta)`, então **em base
-importada toda regra é global** — "PAGSEGURO no cartão" e "PAGSEGURO na conta" não se separam.
+Consequência não-cosmética: a identidade da regra é `(descrição, conta)`, então **em base
+importada toda regra é global**.
 
-**Dois achados da mesma medição, maiores que a importação:**
-- **`effective_date` nunca difere de `date`. Em nenhuma linha da base.** A separação competência ×
-  caixa, com `COALESCE` em seis queries, nunca produziu número diferente. Pior onde mais importa:
-  **752 lançamentos de cartão, R$ 204.446,74**, todos com caixa = competência — a compra sai do
-  fluxo na data da compra e o pagamento da fatura sai de novo, contra o princípio 13.
-- **1.361 lançamentos do Pluggy com `effective_date` nulo**, criados em 21–22/mai (antes da
-  migration 0021). O `COALESCE` os salva; um backfill resolve.
+**Campos mortos encontrados na varredura** — nunca tiveram escritor: `cleaned_description` (só
+lida, sempre nula; `upsertRule` cai no fallback) e **`credit_card_invoice_id`**, que é justamente
+o que resolveria a data de caixa do cartão.
 
-Plano completo da fase em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
+**A decisão a tomar antes de codificar — data de caixa do cartão.** `effective_date` **nunca
+difere** de `date` em nenhuma linha da base. Pior onde mais dói: **752 lançamentos de cartão,
+R$ 204.446,74**, todos com caixa = competência — a compra sai do fluxo na data da compra e o
+pagamento da fatura sai de novo, contra o princípio 13. Ironia útil: o **único** escritor que faz
+a data divergir de verdade é `sync-acquirer-item` (`saleDate` × `settlementDate`) — o desenho
+certo já existe, num código pausado que nunca rodou. Mais **1.361 lançamentos do Pluggy com
+`effective_date` nulo** (21–22/mai, antes da migration 0021), que um backfill resolve.
+
+Plano completo em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
 
 **Catálogo hoje: 21 ferramentas** — 9 de leitura + 12 de escrita (os seis pares). Um consentimento
 só de leitura enxerga 9; com escrita, 21. O catálogo é lido a cada conexão, então ferramenta nova
