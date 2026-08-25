@@ -8,14 +8,17 @@ import { Menu } from 'lucide-react'
 const STORAGE_KEY = 'sidebar-collapsed'
 
 export type AppUser = { id: string; email: string }
+export type AppOrg = { id: string; nome: string; papel: string }
 
 interface AppShellProps {
   children: React.ReactNode
   user: AppUser
+  organizacoes: AppOrg[]
+  organizacaoAtivaId: string
   nfePendingCount?: number
 }
 
-export function AppShell({ children, user, nfePendingCount = 0 }: AppShellProps) {
+export function AppShell({ children, user, organizacoes, organizacaoAtivaId, nfePendingCount = 0 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -40,6 +43,8 @@ export function AppShell({ children, user, nfePendingCount = 0 }: AppShellProps)
         mobileOpen={mobileOpen}
         onMobileClose={() => setMobileOpen(false)}
         user={user}
+        organizacoes={organizacoes}
+        organizacaoAtivaId={organizacaoAtivaId}
         nfePendingCount={nfePendingCount}
       />
 

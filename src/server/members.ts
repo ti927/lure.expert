@@ -18,7 +18,7 @@ import { memberships, organizations } from '@/db/schema'
 import { and, eq } from 'drizzle-orm'
 import { enviarEmail, emailAvisoDeConvite } from '@/lib/email'
 import {
-  listarMembros, papelNaOrganizacao, usuarioPorEmail, vinculoExistente,
+  listarMembros, usuarioPorEmail, vinculoExistente,
   criarConvitePendente, convitesPendentesDoUsuario, aceitarConvite,
   recusarConvite, aceitarTodosOsConvites, recusaDeMudanca,
   registrarEventoDeMembro, type MembroListado, type ConvitePendente,
@@ -29,14 +29,9 @@ export type { MembroListado, ConvitePendente }
 
 const idSchema = z.string().uuid()
 
-async function contextoComPapel() {
-  const { userId, organizationId } = await getAuthContext()
-  const papel = await papelNaOrganizacao(userId, organizationId)
-  // getAuthContext já garantiu membership aceita; papel nulo aqui seria uma
-  // corrida com uma remoção — tratar como sessão sem organização.
-  if (!papel) redirect('/onboarding')
-  return { userId, organizationId, papel }
-}
+// Desde a 4.B o `getAuthContext` devolve o papel da organização ATIVA — a
+// consulta separada de papel que vivia aqui foi absorvida por ele.
+const contextoComPapel = getAuthContext
 
 /** Sessão sem exigir organização — o onboarding e o pós-convite vivem antes dela. */
 async function usuarioDaSessao() {

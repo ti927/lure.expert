@@ -12,6 +12,51 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 4.B — Organização ativa + papéis valendo (Fase 4 fecha, aguardando tela)
+
+**Verificado: 58/58 membros/papéis/resolução contra o banco, 134/134 escrita do MCP contra um
+`next start` real (as 2 novas: viewer com escopo de escrita LÊ, e a escrita recusa citando o
+papel), `tsc` e `next lint` limpos, build 38/38.**
+
+#### Organização ativa
+
+`resolverOrganizacaoAtiva(userId, cookie)` vive em `lib/members.ts` (não em `auth-context.ts`,
+que puxa `next/headers` e não carrega fora do Next): cookie válido e com membership aceita vence;
+qualquer outra coisa — organização de onde o usuário saiu, convite pendente, valor forjado, lixo
+que nem é uuid — cai no fallback determinístico (vínculo mais antigo, desempate por id) **em
+silêncio**. `trocarOrganizacao` (server action nova em `server/organizations.ts`) valida a
+membership antes de gravar o cookie (httpOnly, 1 ano) e leva ao dashboard — a tela atual pode não
+existir na organização nova. `OrgSwitcher` no topo da sidebar: com UMA organização é rótulo
+estático (menu de um item ensinaria o usuário a ignorá-lo); com mais, dropdown com papel por
+organização.
+
+#### A consolidação — e o que ela achou
+
+19 cópias locais de `getAuthContext` em `src/server/` (16 por codemod, 3 à mão — CRLF e a
+variante com `orderBy` do `ai-settings`), 3 blocos inline em `documents.ts`, o `getOrgId` de
+`settings.ts` e 8 páginas/actions de `app/`. O canônico agora devolve `papel`. A limpeza de
+imports órfãos (19 arquivos) expôs de tabela: **`updateOrganization` gravava `settings: { sector }`
+substituindo o objeto inteiro** — salvar os dados da empresa apagaria `autoCategorize`, latente
+desde a 1.7; virou merge. `/configuracoes` deixou de ler "a primeira organização do usuário" e
+passou a ler a ATIVA.
+
+#### Papéis nos pontos v1
+
+`papelAtinge`/`recusaDePapel` em `members-types.ts` (hierarquia com falha fechada: papel
+desconhecido não atinge nada; a recusa diz a QUEM pedir). Aplicado em: `deleteTransactions`,
+`deleteDocument`, `deleteManualAccount`, `disconnectBank`, `deleteSefazConnection`,
+`deleteAcquirerConnection` (admin+); `saveAiKey`, `removeAiKey`, `saveAiLimit`,
+`updateOrganization` (owner). **No MCP, o portão mora no despacho do `/api/mcp`**, por
+organização, ANTES da validação de argumentos — quem não pode chamar não precisa ter os
+argumentos conferidos; papel inexistente segue para o `escopoDe`, que já recusa por vínculo.
+Consentimento de escrita não sobrepõe membership.
+
+**Fora da v1, declarado:** viewer read-only nas ~130 actions restantes (frente própria);
+enforcement de compartilhamento (Fase 5). Na tela, viewer/member ainda VEEM botões destrutivos —
+clicam e recebem a recusa descritiva; esconder por papel fica para a frente própria.
+
+---
+
 ### ✅ Sessão 4.A — Convites e aceite (Fase 4 do plano de 23/ago)
 
 **Verificado: 41/41 contra o banco (organizações descartáveis, CASCADE na limpeza), `tsc` e

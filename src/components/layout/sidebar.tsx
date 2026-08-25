@@ -28,7 +28,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { signOut } from '@/server/auth'
-import type { AppUser } from './app-shell'
+import { OrgSwitcher } from './org-switcher'
+import type { AppUser, AppOrg } from './app-shell'
 
 const NAV = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Visão Geral' },
@@ -50,6 +51,8 @@ interface SidebarProps {
   mobileOpen: boolean
   onMobileClose: () => void
   user: AppUser
+  organizacoes: AppOrg[]
+  organizacaoAtivaId: string
   nfePendingCount?: number
 }
 
@@ -62,7 +65,7 @@ function getInitials(email: string): string {
   return local.slice(0, 2).toUpperCase()
 }
 
-export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user, nfePendingCount = 0 }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user, organizacoes, organizacaoAtivaId, nfePendingCount = 0 }: SidebarProps) {
   const pathname = usePathname()
   const initials = getInitials(user.email)
 
@@ -109,6 +112,9 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, user, 
             </button>
           )}
         </div>
+
+        {/* Organização ativa */}
+        <OrgSwitcher organizacoes={organizacoes} ativaId={organizacaoAtivaId} collapsed={collapsed} />
 
         {/* Nav principal */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">

@@ -3,10 +3,10 @@ import { redirect } from 'next/navigation'
 
 export const metadata: Metadata = { title: 'Configurações' }
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, organizations } from '@/db/schema'
-import { eq, and, isNotNull } from 'drizzle-orm'
+import { organizations } from '@/db/schema'
+import { eq } from 'drizzle-orm'
+import { getAuthContext } from '@/lib/auth-context'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrgForm } from '@/components/settings/org-form'
 import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
@@ -55,24 +55,16 @@ const NAV_SECTIONS = [
 ]
 
 export default async function ConfiguracoesPage() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  // A organização ATIVA (cookie + seletor), não mais "a primeira do usuário".
+  const { organizationId } = await getAuthContext()
 
-  const [[result], autoCategorize, convites] = await Promise.all([
-    db
-      .select({ org: organizations })
-      .from(memberships)
-      .innerJoin(organizations, eq(memberships.organizationId, organizations.id))
-      .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-      .limit(1),
+  const [[org], autoCategorize, convites] = await Promise.all([
+    db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1),
     getAutoCategorize(),
     getMeusConvites(),
   ])
 
-  if (!result) redirect('/onboarding')
-
-  const { org } = result
+  if (!org) redirect('/onboarding')
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
@@ -87,8 +79,8 @@ export default async function ConfiguracoesPage() {
           <CardHeader>
             <CardTitle className="text-base">Convites pendentes</CardTitle>
             <CardDescription>
-              Outras empresas convidaram você. O seletor de empresas chega em breve — aceitar já
-              deixa o acesso pronto.
+              Outras empresas convidaram você. Ao aceitar, elas aparecem no seletor de empresas,
+              no topo do menu.
             </CardDescription>
           </CardHeader>
           <CardContent>

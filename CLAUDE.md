@@ -251,12 +251,13 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 ## Fase atual
 
 **Status:** em andamento o **plano de 23/ago/2026** (motor de consulta + chave de IA por
-organização + OAuth/MCP + dashboard). A Fase 4.5 fechou (A, B e C; migration 0031 aplicada e
-conferida). A **Fase 4 (convites e papéis) está em andamento**: a **4.A (convites e aceite)
-fechou e foi CONFIRMADA NA TELA em 25/ago** — 41/41 contra o banco, sem migration nova, e o
-convite de ponta a ponta rodou de verdade (convidar → e-mail via Resend → definir senha →
-dashboard). **Próxima sessão: a 4.B** (organização ativa + papéis valendo nos pontos v1) — a
-fase NÃO fecha sem ela. Depois, a **Fase 5** (dashboard configurável).
+organização + OAuth/MCP + dashboard). A Fase 4.5 fechou (A, B e C). A **Fase 4 (convites e
+papéis)**: a **4.A fechou e foi confirmada na tela** em 25/ago (convite de ponta a ponta, com o
+aviso via Resend para conta existente); a **4.B fechou em 25/ago** — organização ativa (cookie
+`lure_org` + seletor na sidebar + as ~30 cópias da resolução de organização consolidadas no
+`getAuthContext` canônico) e papéis valendo nos pontos v1. Verificado: 58/58 membros, **134/134
+escrita MCP** (com o cenário do leitor), build limpo. **Aguardando confirmação na tela** (ver a
+lista de confirmações). Depois, a **Fase 5** (dashboard configurável).
 
 **As 4 configurações de painel que a 4.A exigia FORAM FEITAS em 25/ago** e estão registradas na
 seção *Infraestrutura de Produção* (Supabase Auth — e-mail e convites), porque vivem no painel,
@@ -306,13 +307,13 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
 | **4.A** | **Convites e aceite** — `/configuracoes/membros`, convite por e-mail (Supabase Auth cria a conta), `/auth/confirm` + `/convite/definir-senha`, aceite in-app no `/onboarding` e em `/configuracoes`, matriz de papéis valendo DENTRO da gestão de membros, auditoria em `agent_events`. Sem migration. **41/41** | ✅ **confirmada na tela em 25/ago** (convite de ponta a ponta; configs do painel feitas) |
-| 4.B | Organização ativa (cookie `lure_org` + seletor no AppShell + consolidar as ~21 cópias do `getAuthContext`) e papéis valendo nos pontos v1: funil (`QueryScope`), escritas destrutivas, chave de IA, e recusar escopo de escrita no consentimento MCP para viewer | 🔲 |
+| **4.B** | **Organização ativa + papéis valendo.** Cookie `lure_org` (propõe; a membership dispõe — `resolverOrganizacaoAtiva` em `lib/members.ts`), seletor na sidebar (`OrgSwitcher`), troca leva ao dashboard. Consolidação TOTAL: 19 cópias locais de `getAuthContext` + 3 inline em `documents.ts` + `settings.ts` + 8 páginas — o canônico agora devolve `papel`. Enforcement v1: `deleteTransactions`/`deleteDocument`/contas/conexões (Pluggy, SEFAZ, adquirente) = admin+; chave/teto de IA e dados da empresa = owner; **MCP: ferramenta de escrita recusa viewer POR organização**, no despacho, antes da validação de argumentos. **58/58 + 134/134** | ✅ (aguardando confirmação na tela) |
 | **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
 | **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
 | **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido **sem Haiku** (o princípio nº 2 saindo do papel), `prever_importacao` publica o nível de arquivo do contrato, e **BP pelo MCP passa a ser possível**. **132/132** | ✅ |
 | 5 | Dashboard configurável | 🔲 |
 
-### Fase 4 — convites e papéis (em andamento; 4.A ✅, 4.B 🔲)
+### Fase 4 — convites e papéis (4.A ✅ confirmada; 4.B ✅ aguardando confirmação na tela)
 
 **A matriz da v1** (decidida em 25/ago, registrada em `lib/members-types.ts`):
 
@@ -342,6 +343,20 @@ O convite NÃO depende do aviso: falha de e-mail vira `avisoErro` na tela, nunca
 0.45 embrulha o erro do driver (`DrizzleQueryError`) e o código do Postgres mora em `err.cause` —
 o `createOrganization` do onboarding checava `err.code` direto, então CNPJ duplicado caía na
 mensagem genérica desde o upgrade. Os três catches de `23505` agora aceitam os dois formatos.
+
+**A 4.B, no essencial.** O cookie `lure_org` PROPÕE e a membership aceita DISPÕE
+(`resolverOrganizacaoAtiva`, em `lib/members.ts` para ser exercitável por script — cookie de
+organização de onde o usuário saiu cai no fallback determinístico em silêncio). `getAuthContext`
+passou a devolver **`papel`**, e TODA resolução de organização do app converge nele: as 19 cópias
+locais em `src/server/`, as 3 inline de `documents.ts`, `settings.ts` e 8 páginas foram
+consolidadas — a limpeza de imports achou de tabela o **`updateOrganization` substituindo
+`settings` inteiro** (salvar os dados da empresa apagaria `autoCategorize`; virou merge). O
+enforcement v1 usa `recusaDePapel` (recusa descritiva que diz a QUEM pedir): destrutivos = admin+,
+chave de IA e dados da empresa = owner, e no MCP o portão fica **no despacho, por organização,
+antes da validação de argumentos** — consentimento de escrita não sobrepõe membership, e o mesmo
+usuário pode ser admin numa empresa e Leitor noutra. O que NÃO entrou (declarado): viewer
+read-only nas ~130 actions restantes é a "frente própria" do plano; o enforcement de
+compartilhamento chega com a Fase 5.
 
 ### Fase 4.5 — o formato padrão de colunas
 
@@ -493,6 +508,14 @@ pedir a importação de um **balanço**, que passa a funcionar pela primeira vez
 
 **Da 4.A: CONFIRMADA em 25/ago** — o convite de ponta a ponta rodou na tela (convidar → e-mail →
 definir senha → dashboard). Sai da lista de pendências.
+
+**Da 4.B:** o **seletor de empresa** no topo da sidebar — com uma organização é rótulo estático;
+convidando-se para uma segunda (ou aceitando o convite de um cliente) vira menu, e trocar leva ao
+dashboard da escolhida, com TODAS as telas acompanhando; a escolha sobrevive a sair e entrar. E os
+**papéis**: com um usuário viewer/member de teste, conferir que apagar em lote em `/transacoes`,
+apagar documento em `/upload`, desconectar conta em `/contas` e salvar chave/teto em
+`/configuracoes/consumo` recusam com a mensagem do papel — e que, pelo claude.ai, a escrita via
+MCP numa organização onde o usuário é Leitor volta recusada citando o papel.
 
 **A regra de roteamento que a 3.1 estabeleceu** — vale para tudo que vier no MCP:
 

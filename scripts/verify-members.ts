@@ -19,8 +19,9 @@ import {
   listarMembros, papelNaOrganizacao, vinculoExistente, criarConvitePendente,
   convitesPendentesDoUsuario, aceitarConvite, recusarConvite,
   aceitarTodosOsConvites, recusaDeMudanca, registrarEventoDeMembro,
+  resolverOrganizacaoAtiva,
 } from '@/lib/members'
-import { recusaDeGestao, podeGerirMembros } from '@/lib/members-types'
+import { recusaDeGestao, podeGerirMembros, papelAtinge, recusaDePapel } from '@/lib/members-types'
 import { emailAvisoDeConvite, enviarEmail } from '@/lib/email'
 
 const NOME_A = 'ZZ Teste membros A'
@@ -74,6 +75,14 @@ async function main() {
     t(recusaDeGestao({ papelDoAtor: 'admin', novoPapel: 'admin' }) === null, 'admin concede até admin')
     t(recusaDeGestao({ papelDoAtor: 'owner', papelDoAlvo: 'owner', novoPapel: 'admin' }) === null, 'owner rebaixa owner (a contagem decide depois)')
     t(recusaDeGestao({ papelDoAtor: 'owner', novoPapel: 'owner' }) === null, 'owner concede owner')
+
+    // A hierarquia da 4.B, nos dois sentidos
+    t(papelAtinge('owner', 'admin') && papelAtinge('admin', 'admin') && papelAtinge('member', 'member'), 'a hierarquia contém os de baixo')
+    t(!papelAtinge('member', 'admin') && !papelAtinge('viewer', 'member') && !papelAtinge('admin', 'owner'), 'e recusa para cima')
+    t(!papelAtinge('papel-desconhecido', 'viewer'), 'papel desconhecido não atinge NADA — falha fechada')
+    t(recusaDePapel('viewer', 'admin', 'apagar lançamentos') !== null, 'recusaDePapel recusa viewer em ação de admin')
+    t(recusaDePapel('admin', 'admin', 'apagar lançamentos') === null, 'e deixa admin passar')
+    t((recusaDePapel('admin', 'owner', 'alterar a chave de IA') ?? '').includes('proprietário'), 'a recusa diz a QUEM pedir')
   }
 
   // ═══ 2. Listagem ══════════════════════════════════════════════════════════
@@ -226,6 +235,31 @@ async function main() {
       alvo: { membershipId: donoA.id, papel: 'owner', aceito: true }, novoPapel: 'admin',
     })
     t(adminSobreOwner !== null, 'e a matriz vence antes da contagem: admin sobre owner é recusado')
+  }
+
+  // ═══ 7.5 Organização ativa (o cookie propõe, a membership dispõe) ═════════
+  console.log('\n── 7.5 resolverOrganizacaoAtiva ──')
+  {
+    // DONO tem A e B, criadas no MESMO insert (created_at igual) — o desempate
+    // determinístico é por organization_id, então o fallback é o menor uuid.
+    const primeiraEsperada = [A, B].sort()[0]
+
+    const escolhida = await resolverOrganizacaoAtiva(DONO, B)
+    t(escolhida?.organizationId === B && escolhida.papel === 'owner', 'cookie válido vence: devolve a organização apontada, com o papel dela')
+
+    const semCookie = await resolverOrganizacaoAtiva(DONO, null)
+    t(semCookie?.organizationId === primeiraEsperada, 'sem cookie, cai no fallback determinístico')
+
+    const lixo = await resolverOrganizacaoAtiva(DONO, 'não-é-uuid')
+    t(lixo?.organizationId === primeiraEsperada, 'cookie que nem é uuid cai no fallback, sem erro de sintaxe no Postgres')
+
+    const forjado = await resolverOrganizacaoAtiva(OPERADOR, B)
+    t(forjado?.organizationId === A, 'cookie de organização SEM vínculo cai no fallback em silêncio (o operador só tem a A)')
+
+    const PEND2 = '55555555-0000-4000-8000-000000000009'
+    await criarConvitePendente({ organizationId: A, userId: PEND2, email: 'pend2@teste.com', papel: 'member', convidadoPorUserId: DONO })
+    t(await resolverOrganizacaoAtiva(PEND2, A) === null, 'convite pendente não conta: nem pelo cookie, nem pelo fallback')
+    t(await resolverOrganizacaoAtiva('55555555-0000-4000-8000-00000000000a', null) === null, 'usuário sem vínculo nenhum devolve null (vira /onboarding)')
   }
 
   // ═══ 8. Auditoria em agent_events ═════════════════════════════════════════

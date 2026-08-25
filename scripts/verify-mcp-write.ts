@@ -138,6 +138,25 @@ async function main() {
   t(catalogoE.length === catalogoL.length + 12,
     `com escrita, o catálogo ganha os SEIS pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
 
+  // ═══ Papel no funil (4.B): consentimento não sobrepõe a membership ════════
+  console.log('\n── papel (4.B) ──')
+
+  const LEITOR = '33333333-3333-3333-3333-333333333334'
+  await db.insert(memberships).values({
+    userId: LEITOR, organizationId: ORG, role: 'viewer', acceptedAt: new Date(),
+  })
+  const grantV = await garantirGrant({ userId: LEITOR, clientId: 'zz_cli_escrita', organizationIds: [ORG], scopes: ['leitura', 'escrita'] })
+  const { accessToken: leitorComEscrita } = await emitirTokens(grantV, RECURSO, ['leitura', 'escrita'])
+
+  const leituraDoLeitor = await chamar(leitorComEscrita, 'listar_categorias', { organizationId: ORG })
+  t(!leituraDoLeitor.isError, 'viewer com escopo de escrita LÊ normalmente — leitura é de todo papel')
+
+  const escritaDoLeitor = await chamar(leitorComEscrita, 'prever_classificacao_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'UBER' }, destino: { categoryId: null },
+  })
+  t(escritaDoLeitor.isError && escritaDoLeitor.texto.includes('Leitor'),
+    'mas ferramenta de escrita recusa citando o papel — o portão é por organização, não por consentimento')
+
   // ═══ Naturezas ════════════════════════════════════════════════════════════
   console.log('\n── catálogos ──')
 

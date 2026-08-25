@@ -49,6 +49,28 @@ export function podeGerirMembros(papel: string): boolean {
   return papel === 'owner' || papel === 'admin'
 }
 
+// Hierarquia da matriz: cada papel contém os de baixo. Papel desconhecido
+// (dado antigo, valor forjado) vale -1 e não atinge NADA — falha fechada.
+const NIVEL: Record<Papel, number> = { viewer: 0, member: 1, admin: 2, owner: 3 }
+
+export function papelAtinge(papel: string, minimo: Papel): boolean {
+  return (NIVEL[papel as Papel] ?? -1) >= NIVEL[minimo]
+}
+
+/**
+ * A recusa padrão dos pontos de enforcement da 4.B — descritiva, dizendo qual
+ * papel a ação exige, para o usuário saber a quem pedir. `null` = permitido.
+ */
+export function recusaDePapel(papel: string, minimo: Papel, acao: string): string | null {
+  if (papelAtinge(papel, minimo)) return null
+  const quem = minimo === 'owner'
+    ? 'o proprietário'
+    : minimo === 'admin'
+      ? 'um administrador ou o proprietário'
+      : 'um operador, administrador ou o proprietário'
+  return `Seu papel (${PAPEL_LABEL[papel as Papel] ?? papel}) não permite ${acao} — peça a ${quem}.`
+}
+
 /**
  * A regra pura de gestão: pode `papelDoAtor` fazer algo com um membro de
  * `papelDoAlvo`, atribuindo `novoPapel` (no convite e na alteração)?

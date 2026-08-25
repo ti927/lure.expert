@@ -1,9 +1,10 @@
 'use server'
 
-import { redirect } from 'next/navigation'
+import { getAuthContext } from '@/lib/auth-context'
+
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, documents, transactions, categories } from '@/db/schema'
+import { documents, transactions, categories } from '@/db/schema'
 import { eq, and, isNotNull, desc, lte, gte, asc, inArray, sum, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { BP_TYPES, BP_TYPE_LABELS, type BpType } from '@/lib/bp-types'
@@ -25,21 +26,6 @@ export type BpData = {
   referenceDate: string
   documentId: string
   rows: BpRow[]
-}
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
 }
 
 export async function getBpData(referenceDate: string): Promise<BpData | null> {

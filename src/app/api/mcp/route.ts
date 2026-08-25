@@ -22,6 +22,8 @@ import { baseUrlDe, desafioWwwAuthenticate, mesmaOrigem } from '@/lib/oauth/meta
 import { CABECALHOS_CORS } from '@/lib/oauth/http'
 import { db } from '@/db'
 import { agentEvents } from '@/db/schema'
+import { papelNaOrganizacao } from '@/lib/members'
+import { papelAtinge } from '@/lib/members-types'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -166,6 +168,30 @@ async function despachar(p: PedidoJsonRpc, portador: Portador): Promise<unknown 
           `Ferramenta "${nome}" não existe ou não está autorizada por esta conexão.`)
       }
 
+      const orgDaChamada = typeof args.organizationId === 'string' ? args.organizationId : null
+
+      // Papel valendo no funil (4.B): o consentimento de escrita não sobrepõe a
+      // membership — quem é Leitor numa organização não escreve NELA, mesmo com
+      // escopo de escrita concedido (o mesmo usuário pode ser admin numa empresa
+      // e leitor noutra; o portão é por organização, por isso mora aqui e não no
+      // catálogo). ANTES da validação de argumentos: quem não pode chamar a
+      // ferramenta não precisa ter os argumentos conferidos. Papel inexistente
+      // segue adiante — o `escopoDe` da ferramenta já recusa com a mensagem de
+      // vínculo.
+      if (f.escopo === 'escrita' && orgDaChamada) {
+        const papel = await papelNaOrganizacao(portador.userId, orgDaChamada)
+        if (papel !== null && !papelAtinge(papel, 'member')) {
+          return resposta(id, {
+            content: [{
+              type: 'text',
+              text: 'Seu papel nesta organização é Leitor — as ferramentas de escrita não valem nela. ' +
+                    'Peça a alteração a um operador, administrador ou ao proprietário.',
+            }],
+            isError: true,
+          })
+        }
+      }
+
       const lidos = f.entrada.safeParse(args)
       if (!lidos.success) {
         // Erro de argumento volta como RESULTADO com isError, não como erro de
@@ -178,7 +204,6 @@ async function despachar(p: PedidoJsonRpc, portador: Portador): Promise<unknown 
       }
 
       const inicio = Date.now()
-      const orgDaChamada = typeof args.organizationId === 'string' ? args.organizationId : null
 
       try {
         const saida = await f.executar(lidos.data as Record<string, unknown>, {

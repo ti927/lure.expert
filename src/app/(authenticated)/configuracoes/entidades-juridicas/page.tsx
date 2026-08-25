@@ -1,11 +1,10 @@
 import type { Metadata } from 'next'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, legalEntities } from '@/db/schema'
+import { legalEntities } from '@/db/schema'
+import { getAuthContext } from '@/lib/auth-context'
 
 export const metadata: Metadata = { title: 'Entidades Jurídicas' }
-import { eq, and, isNotNull } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DimensionManager } from '@/components/settings/dimension-manager'
 import { CsvImportButton } from '@/components/settings/csv-import-button'
@@ -18,21 +17,12 @@ import {
 } from '@/server/dimensions'
 
 export default async function EntidadesJuridicasPage() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
+  const { organizationId } = await getAuthContext()
 
   const items = await db
     .select()
     .from(legalEntities)
-    .where(eq(legalEntities.organizationId, membership.organizationId))
+    .where(eq(legalEntities.organizationId, organizationId))
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">

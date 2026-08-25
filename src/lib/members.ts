@@ -9,9 +9,9 @@
 // cujo usuário não resolve (convite recém-criado num ambiente de teste, por
 // exemplo) ainda aparece na lista, com o e-mail vindo de `invited_email`.
 
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, isNull, isNotNull, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { memberships, agentEvents } from '@/db/schema'
+import { memberships, organizations, agentEvents } from '@/db/schema'
 import { recusaDeGestao, type Papel } from '@/lib/members-types'
 
 type Exec = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete' | 'execute'>
@@ -142,6 +142,59 @@ export async function criarConvitePendente(
     })
     .returning({ id: memberships.id })
   return linha.id
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Decide a organização ATIVA a partir do valor do cookie `lure_org`.
+ *
+ * Cookie apontando para organização onde o usuário NÃO tem membership aceita
+ * (foi removido, convite ainda pendente, valor forjado) cai no fallback em
+ * silêncio: a membership é quem DISPÕE, o cookie só propõe — a mesma inversão
+ * do consentimento OAuth. Fallback = vínculo mais antigo, com desempate
+ * determinístico (sem ordem, o Postgres escolheria, e poderia mudar entre
+ * requisições). Vive aqui, e não em `auth-context.ts`, para ser exercitável
+ * por script — `auth-context` puxa `next/headers` e não carrega fora do Next.
+ */
+export async function resolverOrganizacaoAtiva(
+  userId: string,
+  cookieValue: string | null | undefined,
+  exec: Exec = db,
+): Promise<{ organizationId: string; papel: string } | null> {
+  if (cookieValue && UUID_RE.test(cookieValue)) {
+    const [escolhida] = await exec
+      .select({ organizationId: memberships.organizationId, papel: memberships.role })
+      .from(memberships)
+      .where(and(
+        eq(memberships.userId, userId),
+        eq(memberships.organizationId, cookieValue),
+        isNotNull(memberships.acceptedAt),
+      ))
+      .limit(1)
+    if (escolhida) return escolhida
+  }
+
+  const [primeira] = await exec
+    .select({ organizationId: memberships.organizationId, papel: memberships.role })
+    .from(memberships)
+    .where(and(eq(memberships.userId, userId), isNotNull(memberships.acceptedAt)))
+    .orderBy(asc(memberships.createdAt), asc(memberships.organizationId))
+    .limit(1)
+  return primeira ?? null
+}
+
+/** As organizações com vínculo ACEITO do usuário, com nome — o seletor e o layout leem daqui. */
+export async function organizacoesComNome(
+  userId: string,
+  exec: Exec = db,
+): Promise<{ id: string; nome: string; papel: string }[]> {
+  return exec
+    .select({ id: organizations.id, nome: organizations.name, papel: memberships.role })
+    .from(memberships)
+    .innerJoin(organizations, eq(memberships.organizationId, organizations.id))
+    .where(and(eq(memberships.userId, userId), isNotNull(memberships.acceptedAt)))
+    .orderBy(asc(memberships.createdAt), asc(memberships.organizationId))
 }
 
 /** Convites pendentes DO usuário — o que ele vê no onboarding e em /configuracoes. */

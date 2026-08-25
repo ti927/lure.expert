@@ -1,18 +1,17 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import {
-  memberships,
   categories,
   costCenters,
   businessUnits,
   legalEntities,
   contacts,
 } from '@/db/schema'
-import { eq, and, isNotNull } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { parseCsv, assertHeaders, CsvParseError } from '@/lib/csv-parser'
 import {
   CATEGORY_HEADERS,
@@ -33,21 +32,6 @@ const CATEGORY_TYPES = new Set([
   'passivo_circulante', 'passivo_nao_circulante',
   'patrimonio_liquido',
 ])
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 // ─── TIPOS COMUNS ────────────────────────────────────────────────────────────
 

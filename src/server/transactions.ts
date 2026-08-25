@@ -1,10 +1,11 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, transactions, categories, documents, costCenters, businessUnits, legalEntities, contacts, dataSources } from '@/db/schema'
+import { transactions, categories, documents, costCenters, businessUnits, legalEntities, contacts, dataSources } from '@/db/schema'
 import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
@@ -13,22 +14,7 @@ import { estimarCustoCategorizacao } from '@/lib/ai-pricing'
 import {
   dimensionSchema, assertLeafCategory, classificarPorIds, type DimensionData,
 } from '@/lib/transactions-write'
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
-
+import { recusaDePapel } from '@/lib/members-types'
 
 // Parseia filtros multi-select: "id1,id2,__none__,__classified__" → { ids, includeNone, includeClassified }
 function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean; includeClassified: boolean } {
@@ -270,7 +256,12 @@ export async function classifyTransaction(id: string, data: DimensionData) {
 }
 
 export async function deleteTransactions(ids: string[]) {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Ponto v1 da matriz (4.B): apagar em lote é destrutivo — admin para cima.
+  const recusa = recusaDePapel(papel, 'admin', 'apagar lançamentos')
+  if (recusa) return { error: recusa }
+
   if (ids.length === 0) return { error: 'Nenhuma transação selecionada.' }
   if (ids.length > 1000) return { error: 'Máximo de 1000 transações por operação.' }
 

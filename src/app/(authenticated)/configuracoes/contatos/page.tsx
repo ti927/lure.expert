@@ -1,11 +1,10 @@
 import type { Metadata } from 'next'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, contacts } from '@/db/schema'
+import { contacts } from '@/db/schema'
+import { getAuthContext } from '@/lib/auth-context'
 
 export const metadata: Metadata = { title: 'Clientes e Fornecedores' }
-import { eq, and, isNotNull, asc } from 'drizzle-orm'
+import { eq, asc } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { DimensionManager, type DimensionItem } from '@/components/settings/dimension-manager'
 import { CsvImportButton } from '@/components/settings/csv-import-button'
@@ -30,21 +29,12 @@ function formatDocument(raw: string | null): string | null {
 }
 
 export default async function ContatosPage() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
+  const { organizationId } = await getAuthContext()
 
   const rows = await db
     .select()
     .from(contacts)
-    .where(eq(contacts.organizationId, membership.organizationId))
+    .where(eq(contacts.organizationId, organizationId))
     .orderBy(asc(contacts.name))
 
   const items: DimensionItem[] = rows.map((c) => ({

@@ -1,11 +1,13 @@
 'use server'
 
-import { redirect } from 'next/navigation'
+import { getAuthContext } from '@/lib/auth-context'
+import { recusaDePapel } from '@/lib/members-types'
+
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, dataSources, transactions } from '@/db/schema'
+import { dataSources, transactions } from '@/db/schema'
 import type { DataSource } from '@/db/schema'
-import { eq, and, isNotNull, ne, inArray, desc } from 'drizzle-orm'
+import { eq, and, ne, inArray, desc } from 'drizzle-orm'
 import { getPluggyClient, createConnectToken as pluggyCreateToken, isGenericPluggyConnector } from '@/lib/pluggy'
 import { revalidatePath } from 'next/cache'
 import { inngest } from '@/lib/inngest'
@@ -13,21 +15,6 @@ import {
   listarContasManuais, garantirContaManual, apagarContaManual,
   type ContaManualComUso,
 } from '@/lib/accounts'
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 function mapConnectorType(connectorType: string): string {
   if (connectorType === 'CREDIT_CARD') return 'credit_card'
@@ -218,7 +205,12 @@ export async function createManualAccount(input: {
 export async function deleteManualAccount(
   dataSourceId: string,
 ): Promise<{ error: string } | { success: true }> {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Ponto v1 da matriz (4.B): apagar conta é destrutivo — admin para cima.
+  const recusa = recusaDePapel(papel, 'admin', 'apagar contas')
+  if (recusa) return { error: recusa }
+
   const result = await apagarContaManual(organizationId, dataSourceId)
   if ('error' in result) return result
   revalidatePath('/contas')
@@ -379,7 +371,11 @@ export async function confirmPendingTransactions(dataSourceId: string): Promise<
 }
 
 export async function disconnectBank(dataSourceId: string): Promise<{ success: boolean } | { error: string }> {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Ponto v1 da matriz (4.B): desconectar banco é destrutivo — admin para cima.
+  const recusa = recusaDePapel(papel, 'admin', 'desconectar contas')
+  if (recusa) return { error: recusa }
 
   const [source] = await db
     .select({ id: dataSources.id, externalItemId: dataSources.externalItemId })

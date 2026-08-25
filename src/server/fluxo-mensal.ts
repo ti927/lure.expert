@@ -1,10 +1,9 @@
 'use server'
 
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { getAuthContext } from '@/lib/auth-context'
+
 import { db } from '@/db'
-import { memberships } from '@/db/schema'
-import { eq, and, isNotNull, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import type { DreFilters } from '@/lib/dre-types'
 import { BP_TYPES } from '@/lib/dre-types'
 import { generateMonthRange } from '@/lib/dre-calc'
@@ -30,21 +29,6 @@ export interface FluxoMensalData {
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 // ─── Query principal ──────────────────────────────────────────────────────────
 

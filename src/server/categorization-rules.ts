@@ -1,11 +1,10 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import {
-  memberships,
   categorizationRules,
   categories,
   costCenters,
@@ -13,28 +12,13 @@ import {
   legalEntities,
   contacts,
 } from '@/db/schema'
-import { eq, and, isNotNull, count, sql, inArray, desc } from 'drizzle-orm'
+import { eq, and, count, sql, inArray, desc } from 'drizzle-orm'
 // A validação de alvo e a gravação vivem em `@/lib/rules-write` — o servidor MCP
 // não pode importar daqui, e duas cópias da regra é como as duas superfícies
 // passam a aceitar coisas diferentes. Aqui ficam a sessão e o `revalidatePath`.
 import { criarRegra, atualizarRegra, type RuleInput } from '@/lib/rules-write'
 
 export type { RuleInput }
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 const PAGE_SIZE = 100
 

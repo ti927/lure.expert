@@ -1,29 +1,15 @@
 'use server'
 
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { getAuthContext } from '@/lib/auth-context'
+import { recusaDePapel } from '@/lib/members-types'
+
 import { db } from '@/db'
-import { memberships, acquirerConnections, legalEntities } from '@/db/schema'
+import { acquirerConnections, legalEntities } from '@/db/schema'
 import type { AcquirerConnection } from '@/db/schema'
-import { eq, and, isNotNull, ne } from 'drizzle-orm'
+import { eq, and, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { inngest } from '@/lib/inngest'
 import { z } from 'zod'
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 // ─────────────────────────────────────────
 // Tipos exportados
@@ -203,7 +189,11 @@ export async function updateAcquirerConnection(
 export async function deleteAcquirerConnection(
   connectionId: string,
 ): Promise<{ success: true } | { error: string }> {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Ponto v1 da matriz (4.B): remover conexão é destrutivo — admin para cima.
+  const recusa = recusaDePapel(papel, 'admin', 'remover conexões de adquirente')
+  if (recusa) return { error: recusa }
 
   const [conn] = await db
     .select({ id: acquirerConnections.id })

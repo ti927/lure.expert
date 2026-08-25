@@ -1,29 +1,17 @@
 export const dynamic = 'force-dynamic'
 
 import type { Metadata } from 'next'
-import { redirect } from 'next/navigation'
 
 export const metadata: Metadata = { title: 'Importar' }
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, documents, transactionsStaging } from '@/db/schema'
-import { eq, and, isNotNull, inArray, desc, sql } from 'drizzle-orm'
+import { documents, transactionsStaging } from '@/db/schema'
+import { eq, inArray, desc, sql } from 'drizzle-orm'
+import { getAuthContext } from '@/lib/auth-context'
 import { UploadForm } from './upload-form'
 import { UploadsList } from './uploads-list'
 
 export default async function UploadPage() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  const { organizationId } = membership
+  const { organizationId } = await getAuthContext()
 
   const recentDocs = await db
     .select({

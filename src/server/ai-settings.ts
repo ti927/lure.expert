@@ -1,32 +1,17 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+import { recusaDePapel } from '@/lib/members-types'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { db } from '@/db'
-import { memberships, organizationAiSettings } from '@/db/schema'
-import { eq, and, isNotNull, asc } from 'drizzle-orm'
-import { createClient } from '@/lib/supabase/server'
+import { organizationAiSettings } from '@/db/schema'
+import { eq } from 'drizzle-orm'
 import { encryptSecret, ultimos4, cryptoDisponivel } from '@/lib/crypto'
 import { registrarUsoDeIa } from '@/lib/ai-usage'
 import { testarChaveAnthropic, MODELO_TESTE } from '@/lib/ai-key-test'
 import { gastoDoMes } from '@/lib/ai-access'
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .orderBy(asc(memberships.createdAt), asc(memberships.organizationId))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 export interface AiSettingsView {
   /** 'own' = chave da organização · 'platform' = chave da Lure. */
@@ -81,7 +66,11 @@ const chaveSchema = z.string().trim()
  * voltaria a gastar a chave da Lure, que é exatamente o que esta fase resolve.
  */
 export async function saveAiKey(chaveBruta: string) {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Ponto v1 da matriz (4.B): a chave de IA é do proprietário.
+  const recusa = recusaDePapel(papel, 'owner', 'alterar a chave de IA')
+  if (recusa) return { error: recusa }
 
   if (!cryptoDisponivel()) {
     return { error: 'O servidor não está configurado para guardar chaves com segurança (ENCRYPTION_KEY ausente). Avise o suporte.' }
@@ -137,7 +126,11 @@ export async function saveAiKey(chaveBruta: string) {
  * chave da Lure.
  */
 export async function removeAiKey() {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Remover a chave DESLIGA a IA da organização — decisão do proprietário.
+  const recusa = recusaDePapel(papel, 'owner', 'remover a chave de IA')
+  if (recusa) return { error: recusa }
 
   await db
     .update(organizationAiSettings)
@@ -162,7 +155,11 @@ const limiteSchema = z.object({
 })
 
 export async function saveAiLimit(input: { tetoUsd: number | null; limiarAlerta: number }) {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
+
+  // Teto e alerta acompanham a chave: decisão do proprietário.
+  const recusa = recusaDePapel(papel, 'owner', 'alterar o teto de IA')
+  if (recusa) return { error: recusa }
 
   const parsed = limiteSchema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }

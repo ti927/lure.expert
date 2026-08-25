@@ -1,9 +1,5 @@
 import type { Metadata } from 'next'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
-import { db } from '@/db'
-import { memberships } from '@/db/schema'
-import { eq, and, isNotNull } from 'drizzle-orm'
+import { getAuthContext } from '@/lib/auth-context'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AllocationTemplateManager } from '@/components/settings/allocation-template-manager'
 import { listAllocationTemplates } from '@/server/allocation-templates'
@@ -14,16 +10,7 @@ import {
 export const metadata: Metadata = { title: 'Modelos de Rateio' }
 
 export default async function ModelosDeRateioPage() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
+  await getAuthContext()
 
   // Inclui arquivados: é esta tela que os reativa.
   const [templates, ccs, bus, les, cts] = await Promise.all([

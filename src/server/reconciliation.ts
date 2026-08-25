@@ -1,28 +1,13 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, transactions } from '@/db/schema'
-import { eq, and, isNotNull, sql } from 'drizzle-orm'
+import { transactions } from '@/db/schema'
+import { eq, and, sql } from 'drizzle-orm'
 
 const PAGE_SIZE = 20
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 export type ReconciliationRow = {
   id: string

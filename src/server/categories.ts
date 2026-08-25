@@ -1,27 +1,12 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, categories, transactions, categorizationRules } from '@/db/schema'
-import { eq, and, isNotNull, count, sql } from 'drizzle-orm'
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
+import { categories, transactions, categorizationRules } from '@/db/schema'
+import { eq, and, count, sql } from 'drizzle-orm'
 
 const CATEGORY_TYPES = [
   // DRE

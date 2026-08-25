@@ -1,13 +1,14 @@
 'use server'
 
 import { z } from 'zod'
-import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { memberships, documents, transactions } from '@/db/schema'
+import { documents, transactions } from '@/db/schema'
 import { eq, and, isNotNull, inArray, count, desc } from 'drizzle-orm'
 import { inngest } from '@/lib/inngest'
+import { getAuthContext } from '@/lib/auth-context'
+import { recusaDePapel } from '@/lib/members-types'
 
 export interface DocumentOption {
   id: string
@@ -18,18 +19,7 @@ export interface DocumentOption {
 }
 
 export async function getDocumentsWithTransactions(): Promise<DocumentOption[]> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) return []
-
-  const { organizationId } = membership
+  const { organizationId } = await getAuthContext()
 
   // Conta transações por document_id nesta org
   const txCounts = await db
@@ -85,24 +75,15 @@ export type CreateDocumentResult = {
 export async function createDocumentRecord(
   input: z.infer<typeof schema>,
 ): Promise<CreateDocumentResult> {
+  const { userId, organizationId } = await getAuthContext()
+  // O client aqui é só para o Storage (URL assinada) — a autenticação já veio acima.
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
 
   const parsed = schema.safeParse(input)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
   const { storagePath, filename, mimeType, sizeBytes, type, sourceType, reportType, referenceDate, periodStart, periodEnd, pdfPassword } =
     parsed.data
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  const { organizationId } = membership
 
   if (!storagePath.startsWith(`${organizationId}/`)) {
     return { error: 'Caminho de armazenamento inválido.' }
@@ -118,7 +99,7 @@ export async function createDocumentRecord(
       mimeType,
       sizeBytes,
       extractionStatus: 'pending',
-      uploadedByUserId: user.id,
+      uploadedByUserId: userId,
       reportType,
       referenceDate: referenceDate ?? null,
       metadata: {
@@ -164,18 +145,13 @@ export async function createDocumentRecord(
 export async function deleteDocument(
   documentId: string,
 ): Promise<{ success?: boolean; error?: string }> {
+  const { organizationId, papel } = await getAuthContext()
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
 
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  const { organizationId } = membership
+  // Ponto v1 da matriz (4.B): apagar documento derruba o vínculo das
+  // transações importadas — destrutivo, então admin para cima.
+  const recusa = recusaDePapel(papel, 'admin', 'apagar documentos')
+  if (recusa) return { error: recusa }
 
   const [doc] = await db
     .select({ id: documents.id, storagePath: documents.storagePath })

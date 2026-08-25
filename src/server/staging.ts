@@ -1,17 +1,16 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import {
-  memberships,
   transactionsStaging,
   documents,
   transactions,
   dataSources,
 } from '@/db/schema'
-import { eq, and, isNotNull, inArray, isNull, sql } from 'drizzle-orm'
+import { eq, and, inArray, isNull, sql } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import {
   loadOrgContext,
@@ -34,21 +33,6 @@ const SOURCE_LABELS: Record<string, string> = {
   sefaz: 'Nota fiscal',
   balance_sheet: 'Balanço Patrimonial',
   other: 'Upload manual',
-}
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
 }
 
 // ─── Fetch document + all staging rows ──────────────────────────────────────

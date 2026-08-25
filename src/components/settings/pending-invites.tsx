@@ -2,11 +2,8 @@
 
 // Os convites pendentes DO usuário, com aceitar e recusar. Aparece em dois
 // lugares: no /onboarding (usuário sem organização) e em /configuracoes
-// (usuário convidado para uma segunda organização).
-//
-// Nota da Fase 4.A: aceitar uma segunda organização ainda não a torna visível
-// — o seletor de organização ativa é a sessão 4.B. O aceite fica registrado e
-// a organização aparece assim que o seletor existir.
+// (usuário convidado para uma segunda organização). Desde a 4.B, a organização
+// aceita aparece no seletor do topo da sidebar.
 
 import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'

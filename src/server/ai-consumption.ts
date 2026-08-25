@@ -1,27 +1,10 @@
 'use server'
 
+import { getAuthContext } from '@/lib/auth-context'
+
 import { db } from '@/db'
-import { memberships } from '@/db/schema'
 import { sql } from 'drizzle-orm'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
-import { eq, and, isNotNull } from 'drizzle-orm'
 import { DEFAULT_USD_BRL } from '@/lib/ai-pricing'
-
-async function getAuthContext() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const [membership] = await db
-    .select({ organizationId: memberships.organizationId })
-    .from(memberships)
-    .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
-    .limit(1)
-  if (!membership) redirect('/onboarding')
-
-  return { userId: user.id, organizationId: membership.organizationId }
-}
 
 export interface ConsumoMes {
   mes:        string   // 'YYYY-MM'
