@@ -251,13 +251,19 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 ## Fase atual
 
 **Status:** em andamento o **plano de 23/ago/2026** (motor de consulta + chave de IA por
-organização + OAuth/MCP + dashboard). A Fase 3 fechou com os seis pares de escrita, e a
-**Fase 4.5 (normalização da importação) fechou** — A, B e C. Faltam a **Fase 4** (convites e
-papéis) e a **Fase 5** (dashboard configurável). Ver a tabela em *Próximo passo*.
+organização + OAuth/MCP + dashboard). A Fase 4.5 fechou (A, B e C; migration 0031 aplicada e
+conferida). A **Fase 4 (convites e papéis) está em andamento**: a **4.A (convites e aceite)
+fechou em 25/ago** — 41/41 contra o banco, sem migration nova — e falta a **4.B** (organização
+ativa + papéis valendo nos pontos v1). Depois, a **Fase 5** (dashboard configurável).
 
-**A Fase 4.5 fechou** (A, B e C). Migration 0031 aplicada e conferida (0 chaves `mcp:`, índice
-íntegro). **Próxima: Fase 4 (convites e papéis) ou Fase 5 (dashboard configurável)** — a 4.5 era
-pré-requisito da 5, e agora não é mais.
+**A 4.A depende de QUATRO configurações de painel para funcionar de ponta a ponta** (o código
+está pronto e recusa com erro claro sem elas): `SUPABASE_SERVICE_ROLE_KEY` no `.env.local` e na
+Vercel; **SMTP próprio** no Supabase (Auth → SMTP Settings — o embutido tem limite baixíssimo);
+**Site URL** = `https://lure-expert.vercel.app` (Auth → URL Configuration); e o **template do
+e-mail "Invite user"** apontando o link para
+`{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/convite/definir-senha`
+— o template padrão usa `{{ .ConfirmationURL }}`, que devolve os tokens no FRAGMENTO da URL, e
+fragmento nunca chega ao servidor.
 
 **Uma decisão de produto ficou aberta na 4.5, e ela bloqueia o BP de verdade:**
 `seed_categories_for_org` **não cria nenhuma natureza de Balanço** (conferido: a função não menciona
@@ -302,11 +308,41 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.1 | Endpoints OAuth: descoberta, registro dinâmico, `/authorize` com consentimento, `/token`, `/revoke` + tela de conexões | ✅ (aguardando confirmação na tela) |
 | 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
-| 4 | Convites e papéis | 🔲 |
+| **4.A** | **Convites e aceite** — `/configuracoes/membros`, convite por e-mail (Supabase Auth cria a conta), `/auth/confirm` + `/convite/definir-senha`, aceite in-app no `/onboarding` e em `/configuracoes`, matriz de papéis valendo DENTRO da gestão de membros, auditoria em `agent_events`. Sem migration. **41/41** | ✅ (aguardando confirmação na tela + as 4 configs do painel) |
+| 4.B | Organização ativa (cookie `lure_org` + seletor no AppShell + consolidar as ~21 cópias do `getAuthContext`) e papéis valendo nos pontos v1: funil (`QueryScope`), escritas destrutivas, chave de IA, e recusar escopo de escrita no consentimento MCP para viewer | 🔲 |
 | **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
 | **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
 | **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido **sem Haiku** (o princípio nº 2 saindo do papel), `prever_importacao` publica o nível de arquivo do contrato, e **BP pelo MCP passa a ser possível**. **132/132** | ✅ |
 | 5 | Dashboard configurável | 🔲 |
+
+### Fase 4 — convites e papéis (em andamento; 4.A ✅, 4.B 🔲)
+
+**A matriz da v1** (decidida em 25/ago, registrada em `lib/members-types.ts`):
+
+| Ação | viewer | member | admin | owner |
+|---|---|---|---|---|
+| Ver telas, DRE, consultas (e MCP leitura) | ✓ | ✓ | ✓ | ✓ |
+| Importar, classificar, ratear, orçar, regras | — | ✓ | ✓ | ✓ |
+| Escrita via MCP (escopo no consentimento) | — | ✓ | ✓ | ✓ |
+| Apagar em lote, documentos, contas, conexões | — | — | ✓ | ✓ |
+| Convidar, alterar papel, remover membro | — | — | ✓* | ✓ |
+| Chave de IA, teto, dados da org, apagar org | — | — | — | ✓ |
+
+*admin não mexe em owner — nem rebaixa, nem remove, nem promove alguém a owner.
+
+**Na 4.A a matriz vale só DENTRO da gestão de membros** (mais a regra do último owner, que é de
+contagem, não de matriz); os demais pontos são a 4.B. **Convite tem dois caminhos**: e-mail novo →
+`inviteUserByEmail` cria a conta na hora (por isso `memberships.user_id` seguiu `NOT NULL`, sem
+migration) → link do e-mail → `/auth/confirm` (verifyOtp server-side) → `/convite/definir-senha`
+aceita todos os pendentes; e-mail já cadastrado → o Supabase recusa reconvidar, então vira convite
+pendente **in-app**, aceito no `/onboarding` (quem não tem organização) ou em `/configuracoes`
+(quem já tem). Aceitar uma 2ª organização já funciona, mas ela só fica VISÍVEL com o seletor da
+4.B — o `getAuthContext` devolve a mais antiga.
+
+**Defeito achado pelo verify-members.ts, fora do escopo e corrigido no mesmo commit:** o Drizzle
+0.45 embrulha o erro do driver (`DrizzleQueryError`) e o código do Postgres mora em `err.cause` —
+o `createOrganization` do onboarding checava `err.code` direto, então CNPJ duplicado caía na
+mensagem genérica desde o upgrade. Os três catches de `23505` agora aceitam os dois formatos.
 
 ### Fase 4.5 — o formato padrão de colunas
 
@@ -455,6 +491,11 @@ de novo e ver o aviso azul dizendo que nada é novo.
 **Da 4.5.C:** baixar a **planilha modelo** em `/upload` e subi-la — ela tem de importar sem consumir
 IA (confira em `/configuracoes/consumo`, que não deve registrar chamada nova). E, pelo claude.ai,
 pedir a importação de um **balanço**, que passa a funcionar pela primeira vez.
+
+**Da 4.A:** depois das 4 configs do painel (ver *Status*): `/configuracoes/membros` — convidar um
+e-mail novo, ver o e-mail chegar, definir a senha pelo link e cair no dashboard; convidar de novo o
+mesmo e-mail e ver a recusa; alterar papel e remover; e o card **Convites pendentes** em
+`/configuracoes` (convidando um usuário que já tem conta) e no `/onboarding`.
 
 **A regra de roteamento que a 3.1 estabeleceu** — vale para tudo que vier no MCP:
 
@@ -611,6 +652,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Motor + MCP (plano de 23/ago)** | |
+| 4.A (convites) | **Convites e aceite, sem migration** — o schema da Fase 1 antecipava tudo (`role`, `invited_email`, `invited_by_user_id`, `accepted_at`), e a escolha do e-mail automático manteve `user_id NOT NULL`: `inviteUserByEmail` cria a conta ANTES da membership. **Dois caminhos de convite** porque o Supabase recusa reconvidar e-mail cadastrado: novo → e-mail → `/auth/confirm` (verifyOtp server-side; o template PRECISA usar `{{ .TokenHash }}` — o padrão manda os tokens no fragmento, que nunca chega ao servidor) → `/convite/definir-senha` aceita todos os pendentes de uma vez; existente → convite pendente in-app, no `/onboarding` e em `/configuracoes`. **Miolo em `lib/members.ts`** (exercitável por script) com a matriz pura em `lib/members-types.ts` (client-safe, padrão `budget-types`); `server/members.ts` é casca. Regra do último owner é de CONTAGEM, não de matriz — e owner pendente não conta nem é protegido. Aceite/recusa autorizam pelo WHERE (id + user + pendente), sem oráculo de ids. Auditoria: 5 tipos de evento em `agent_events`. `destinoSeguro` mudou de casa para `lib/redirect-seguro.ts` (o `/auth/confirm` reusa a defesa do `?next=`). **Defeito achado pelo teste:** Drizzle 0.45 embrulha o erro do driver e o `23505` mora em `err.cause` — o catch do onboarding estava cego desde o upgrade (CNPJ duplicado caía na mensagem genérica); os três catches corrigidos. Verificado: **41/41** contra o banco em organizações descartáveis, `next build` limpo com 3 rotas novas. **Não verificado automaticamente** (exige SMTP + service key + template no painel): o envio real do e-mail e o `verifyOtp` do link |
 | 4.5.C (o MCP) | **O princípio nº 2 sai do papel na importação:** o parser era LLM-first — chamava Haiku em todo upload, de todo formato, porque nunca houve um formato para esperar. Agora testa o cabeçalho contra o documento publicado ANTES de qualquer chamada de IA; casou, lê direto. Coluna extra desconhecida não desqualifica, e cabeçalho que não casa cai no caminho de hoje **inalterado** — a promessa da Fase 2 continua de pé. `extraction_method='template'` ganhou significado novo ("lido sem IA") e um contador no relatório de conformidade. **O defeito que a planilha modelo expôs: o parser não lia "Saída"** — `deriveDirection` comparava `/saida/` sobre o texto cru, e `"Saída".toLowerCase()` mantém o acento; nunca casava. Toda linha de saída de um CSV que escrevesse a palavra corretamente saía sem direção, mascarado por três fallbacks. Apareceu quando o arquivo que NÓS oferecemos foi lido pelo nosso próprio parser. **BP pelo MCP passa a existir:** `reportType: 'other'` era cravado, e em silêncio — `getBpData` filtra `balance_sheet` e `domainFromReportType('other')` devolve `'dre'`. A ferramenta ganhou o nível de arquivo (tipo, data de referência, conta), revalidado no apply; `resolverNaturezas` ganhou filtro de domínio e passou a delegar a `findCategoryByText`, a MESMA regra da tela — tinha cópia própria, e duas cópias significam que o mesmo arquivo entra diferente conforme a porta; `accountId` deixou de receber texto cru do modelo. **`data`/`descricao`/`sentido` viraram opcionais** (balanço não tem nenhuma), com o tipo de relatório exigindo cada uma — e o teste cobre os dois sentidos. Quando TODAS as linhas eram recusadas, a resposta dizia "nenhuma linha para importar" **sem o motivo**; agora diz. Verificado: **132/132** escrita, 70/70 tela, 36/36 leitura |
 | 4.5.B (a tela) | **O DoD da Sessão 2.8 do guia, escrito em 2026 e nunca construído, foi cumprido:** subir o mesmo arquivo duas vezes dá **0 inserções na segunda**. A causa de "a caixa nunca difere" era **uma linha** — `process-document.ts` montava o insert do staging com date/amount/direction/description e nada mais, enquanto os DOIS parsers já produziam `effectiveDate` e a coluna existia desde a 0021; `approveAndInsert` fazia `r.effectiveDate ?? r.date` e caía sempre no `date` porque o valor era descartado antes. **Sem migration para o que importa:** staging, campos de conta, `reference_date` e o índice único de dedup já existiam; a 0031 troca só o prefixo (0 linhas). `lib/staging-import.ts` é **o mesmo código** que a tela usa para avisar e o insert para gravar — calcular separado faria o aviso mentir justamente sobre o número que decide o clique. **O balanço estava quebrado em TRÊS lugares, não num:** o filtro `date && amount && direction` na tela (corrigido), o `reportType: 'other'` do MCP (Sessão C) e — achado ao escrever o teste — **o seed não cria uma única natureza de BP**, então uma organização nova importaria com sucesso e `/balanco` continuaria vazio; a tela passa a avisar em vez de eu decidir o plano patrimonial padrão. **Conta manual passa a existir** (`data_sources` com `provider='manual'`, Decisão 22), respondendo à pergunta do Julio: `/contas` lê cadastro de **conexão**, não de conta, e o array de contas é JSON que só o Pluggy escreve. **A Decisão 18 mordeu pela terceira vez** — `${dataSources.id}` em subconsulta sem join zerava a contagem de uso e teria autorizado apagar conta em uso; o teste pegou porque a asserção era "a contagem SOBE". Verificado: **54/54** contra o banco numa organização descartável, migration 5/5 com ROLLBACK, 116/116 e 36/36 no MCP |
 | 4.5.A (contrato) | O contrato de importação, **sem mexer em nenhum insert** — critério da sessão cumprido literalmente (`git diff` não toca `staging.ts`, `sync-pluggy-item.ts`, `sync-acquirer-item.ts` nem `process-document.ts`). `docs/FORMATO_DE_IMPORTACAO.md` + `src/lib/import-contract.ts` (colunas com aliases, dois níveis — arquivo e linha —, `resolverCabecalho`, `contaCanonica`, `normalizarLancamento`) + `src/lib/import-dedup.ts`. **A chave de dedup mudou de casa e de prefixo** (`mcp:` → `arq:`): ela precisa ser a MESMA nas duas portas de arquivo, senão subir pela tela o que a IA importou duplicaria — a dedup ficaria cega justamente entre os dois caminhos que ela une; o hash não inclui o prefixo, então migrar é um `UPDATE`. **Separação por empacotamento:** o hash saiu do contrato porque `csv-templates.ts` roda no cliente e `node:crypto` não existe lá — o `tsc` não pega, o `next build` pega. `parseDate` e `norm` mudaram para `format.ts` (a 3ª e 4ª cópias; `normalizeForMatch` do categorizador fica quieta de propósito — ela decide classificação). Planilha modelo **gerada a partir das colunas**, nunca redigitada. `scripts/verify-import-contract.ts` mede as portas e **já achou coisa**: `caixa ≠ competência = 0 em toda a base` (o campo é descartado no insert do staging), upload com 0% de dedup e 0% de conta, e os cabeçalhos reais do único ERP importado — que renderam 3 aliases novos (`data venda`, `nome produto`, `num nf`). Verificado: 116/116 escrita, 36/36 leitura, build limpo |

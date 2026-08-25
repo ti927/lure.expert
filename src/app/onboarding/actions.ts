@@ -83,9 +83,14 @@ export async function createOrganization(
       })
     })
   } catch (err) {
-    const pg = err as { code?: string; constraint?: string }
-    if (pg.code === '23505') {
-      if (pg.constraint?.includes('cnpj')) {
+    // Drizzle 0.45 embrulha o erro do driver; o código e a constraint do
+    // Postgres moram em `cause`. O formato antigo (direto no erro) fica
+    // coberto também — defeito achado pelo verify-members.ts da Fase 4.A.
+    const e = err as { code?: string; constraint?: string; cause?: { code?: string; constraint_name?: string } }
+    const codigo = e.code ?? e.cause?.code
+    const constraint = e.constraint ?? e.cause?.constraint_name
+    if (codigo === '23505') {
+      if (constraint?.includes('cnpj')) {
         return { error: 'Este CNPJ já está cadastrado.' }
       }
       return { error: 'Nome de empresa já utilizado. Tente outro.' }

@@ -12,6 +12,86 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 4.A — Convites e aceite (Fase 4 do plano de 23/ago)
+
+**Verificado: 41/41 contra o banco (organizações descartáveis, CASCADE na limpeza), `tsc` e
+`next build` limpos — 3 rotas novas (`/auth/confirm`, `/configuracoes/membros`,
+`/convite/definir-senha`).**
+
+**Não verificado automaticamente, e declarado:** o envio real do e-mail
+(`inviteUserByEmail` exige a service role e mandaria e-mail de verdade) e o `verifyOtp` do link.
+Os dois dependem das 4 configurações de painel listadas no `CLAUDE.md` (service role key na
+Vercel, SMTP próprio, Site URL, template com `{{ .TokenHash }}`).
+
+**Arquivos novos:** `lib/members-types.ts` (matriz + Zod + guardas puras, client-safe),
+`lib/members.ts` (o miolo: listar, vínculo, convite pendente, aceite/recusa, último owner,
+auditoria — todas recebendo o executor), `server/members.ts` (casca `'use server'`),
+`lib/supabase/admin.ts` (service role, com `sanitizeKey`), `lib/redirect-seguro.ts`
+(`destinoSeguro` extraído do login), `app/auth/confirm/route.ts`,
+`app/convite/definir-senha/{page,definir-senha-form}.tsx`,
+`app/(authenticated)/configuracoes/membros/page.tsx`,
+`components/settings/{members-manager,pending-invites}.tsx`, `scripts/verify-members.ts`.
+**Alterados:** `app/onboarding/{page,onboarding-form,actions}` (page virou server component e
+mostra convites pendentes; o form mudou de arquivo), `app/login/actions.ts` (importa o
+`destinoSeguro` compartilhado), `configuracoes/page.tsx` (card Membros + card Convites
+pendentes), `.env.example`.
+
+#### Sem migration — e o porquê de `user_id` seguir `NOT NULL`
+
+O schema da Fase 1 antecipava o convite inteiro (`role` default `'viewer'`, `invited_email`,
+`invited_by_user_id`, `accepted_at`). O único obstáculo era `user_id NOT NULL` para convidado sem
+conta — e a decisão do e-mail automático o dissolveu: `inviteUserByEmail` cria a conta no Auth
+**antes** da membership e devolve o id. Convite pendente = membership com `accepted_at` nulo; o
+aceite é um UPDATE. A migration 0032 que o plano da sessão cogitava deixou de existir.
+
+#### Dois caminhos de convite, porque o Supabase recusa reconvidar
+
+- **E-mail novo:** `inviteUserByEmail` → e-mail → `/auth/confirm?token_hash=...&type=invite`
+  (verifyOtp **server-side**, cookies pela mesma via do login) → `/convite/definir-senha`
+  (`updateUser({ password })` no browser client) → `concluirConvite()` aceita **todos** os
+  pendentes de uma vez — foi o clique naquele e-mail que os comprovou.
+- **E-mail já cadastrado:** o Supabase recusa (`email address has already been registered`) e não
+  é preciso — vira convite pendente **in-app**: quem não tem organização o vê no `/onboarding`
+  (que virou server component), quem já tem o vê num card em `/configuracoes`. Aceitar a 2ª
+  organização já funciona; ela só fica visível com o seletor da 4.B (o `getAuthContext` devolve a
+  mais antiga, com `orderBy` determinístico desde a 1.1).
+
+**O template do e-mail é pré-requisito, não preferência:** o padrão usa `{{ .ConfirmationURL }}`,
+que redireciona com os tokens no **fragmento** da URL — e fragmento nunca chega ao servidor, então
+nenhum route handler consegue criar a sessão. Com `{{ .TokenHash }}` o `verifyOtp` roda no
+servidor. `/auth/confirm` aceita os demais tipos (`recovery`, `email_change`...) — vira o destino
+único de link de e-mail quando a recuperação de senha existir.
+
+#### As guardas, e onde cada uma mora
+
+Matriz pura (`recusaDeGestao`, em `members-types.ts`): admin/owner gerenciam; admin não mexe em
+owner nem concede owner. **Último owner** é regra de CONTAGEM, não de matriz (`recusaDeMudanca`,
+em `members.ts`): rebaixar ou remover o único owner **ativo** é recusado; owner **pendente** não
+conta na proteção nem é protegido (cancelar o convite dele é livre). Ninguém altera o próprio
+papel nem se remove. Aceite e recusa autorizam pelo próprio WHERE (`id + user_id + accepted_at IS
+NULL`) — convite alheio devolve o mesmo "não encontrado" de id inexistente, sem virar oráculo.
+Recusas são descritivas (`{ erro }`), nunca exceção. Auditoria em `agent_events`: `member_invited`,
+`member_role_changed`, `member_removed`, `invite_accepted`, `invite_declined`.
+
+#### Defeito achado pelo teste, fora do escopo, corrigido no mesmo commit
+
+O caso "convidar quem já é membro estoura o unique" falhou com `código: nenhum` — o Drizzle 0.45
+embrulha o erro do driver em `DrizzleQueryError` e o `23505` do Postgres mora em **`err.cause`**.
+Consequência que já estava em produção: o `createOrganization` do onboarding checava `err.code`
+direto, então **CNPJ duplicado caía na mensagem genérica** desde o upgrade do Drizzle. Os três
+catches (convite, onboarding, e o do script) aceitam os dois formatos (`code ?? cause.code`, e
+`constraint ?? cause.constraint_name`).
+
+#### O que ficou de fora, de propósito
+
+Reenviar convite (o Supabase não reenvia para conta existente; cancelar e convidar de novo cobre);
+"sair da organização" por conta própria; e todo o enforcement fora da gestão de membros — funil,
+escritas destrutivas, chave de IA e o escopo de escrita do consentimento MCP para viewer são a
+**4.B**, junto com a organização ativa (cookie `lure_org` + seletor no AppShell + consolidação das
+~21 cópias do `getAuthContext`).
+
+---
+
 ### ✅ Sessão 4.5.C — o asfalto do MCP, e a Fase 4.5 fecha
 
 **Verificado: 132/132 escrita do MCP, 70/70 tela, 36/36 leitura.**

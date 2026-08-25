@@ -10,8 +10,10 @@ import { eq, and, isNotNull } from 'drizzle-orm'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrgForm } from '@/components/settings/org-form'
 import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
+import { PendingInvites } from '@/components/settings/pending-invites'
 import { getAutoCategorize } from '@/server/settings'
-import { Tags, Building2, Briefcase, Landmark, Users, ChevronRight, Zap, FileText, Split, Activity, Plug } from 'lucide-react'
+import { getMeusConvites } from '@/server/members'
+import { Tags, Building2, Briefcase, Landmark, Users, UserPlus, ChevronRight, Zap, FileText, Split, Activity, Plug } from 'lucide-react'
 
 const NAV_SECTIONS = [
   {
@@ -57,7 +59,7 @@ export default async function ConfiguracoesPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [[result], autoCategorize] = await Promise.all([
+  const [[result], autoCategorize, convites] = await Promise.all([
     db
       .select({ org: organizations })
       .from(memberships)
@@ -65,6 +67,7 @@ export default async function ConfiguracoesPage() {
       .where(and(eq(memberships.userId, user.id), isNotNull(memberships.acceptedAt)))
       .limit(1),
     getAutoCategorize(),
+    getMeusConvites(),
   ])
 
   if (!result) redirect('/onboarding')
@@ -78,6 +81,22 @@ export default async function ConfiguracoesPage() {
         <p className="text-sm text-muted-foreground mt-1">Dados da empresa e classificações analíticas</p>
       </div>
 
+      {/* Convites pendentes de OUTRAS organizações para este usuário */}
+      {convites.length > 0 && (
+        <Card className="shadow-sm border-primary/30">
+          <CardHeader>
+            <CardTitle className="text-base">Convites pendentes</CardTitle>
+            <CardDescription>
+              Outras empresas convidaram você. O seletor de empresas chega em breve — aceitar já
+              deixa o acesso pronto.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PendingInvites convites={convites} />
+          </CardContent>
+        </Card>
+      )}
+
       {/* Dados da empresa */}
       <Card className="shadow-sm">
         <CardHeader>
@@ -86,8 +105,23 @@ export default async function ConfiguracoesPage() {
             Informações básicas da sua organização no lure.expert
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <OrgForm org={org} />
+
+          <Link href="/configuracoes/membros">
+            <div className="flex items-center gap-4 p-4 rounded-lg border bg-card hover:bg-muted/40 transition-colors cursor-pointer">
+              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
+                <UserPlus className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground">Membros</p>
+                <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                  Convide pessoas da sua equipe e defina o papel de cada uma — de leitor a proprietário.
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+            </div>
+          </Link>
         </CardContent>
       </Card>
 

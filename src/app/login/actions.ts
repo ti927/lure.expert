@@ -3,21 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-
-/**
- * Para onde ir depois de entrar.
- *
- * Só caminho interno. `//evil.com` e `/\evil.com` são lidos pelo navegador como
- * endereço ABSOLUTO — sem esta checagem, `?next=` viraria um redirecionador
- * aberto hospedado no nosso domínio, que é exatamente o que a tela de
- * consentimento do OAuth existe para não ser.
- */
-function destinoSeguro(next: unknown): string {
-  const bruto = typeof next === "string" ? next : "";
-  if (!bruto.startsWith("/")) return "/dashboard";
-  if (bruto.startsWith("//") || bruto.startsWith("/\\")) return "/dashboard";
-  return bruto;
-}
+import { destinoSeguro } from "@/lib/redirect-seguro";
 
 export async function signIn(formData: FormData) {
   const supabase = createClient();
