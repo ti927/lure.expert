@@ -253,17 +253,14 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 **Status:** em andamento o **plano de 23/ago/2026** (motor de consulta + chave de IA por
 organização + OAuth/MCP + dashboard). A Fase 4.5 fechou (A, B e C; migration 0031 aplicada e
 conferida). A **Fase 4 (convites e papéis) está em andamento**: a **4.A (convites e aceite)
-fechou em 25/ago** — 41/41 contra o banco, sem migration nova — e falta a **4.B** (organização
-ativa + papéis valendo nos pontos v1). Depois, a **Fase 5** (dashboard configurável).
+fechou e foi CONFIRMADA NA TELA em 25/ago** — 41/41 contra o banco, sem migration nova, e o
+convite de ponta a ponta rodou de verdade (convidar → e-mail via Resend → definir senha →
+dashboard). **Próxima sessão: a 4.B** (organização ativa + papéis valendo nos pontos v1) — a
+fase NÃO fecha sem ela. Depois, a **Fase 5** (dashboard configurável).
 
-**A 4.A depende de QUATRO configurações de painel para funcionar de ponta a ponta** (o código
-está pronto e recusa com erro claro sem elas): `SUPABASE_SERVICE_ROLE_KEY` no `.env.local` e na
-Vercel; **SMTP próprio** no Supabase (Auth → SMTP Settings — o embutido tem limite baixíssimo);
-**Site URL** = `https://lure-expert.vercel.app` (Auth → URL Configuration); e o **template do
-e-mail "Invite user"** apontando o link para
-`{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/convite/definir-senha`
-— o template padrão usa `{{ .ConfirmationURL }}`, que devolve os tokens no FRAGMENTO da URL, e
-fragmento nunca chega ao servidor.
+**As 4 configurações de painel que a 4.A exigia FORAM FEITAS em 25/ago** e estão registradas na
+seção *Infraestrutura de Produção* (Supabase Auth — e-mail e convites), porque vivem no painel,
+não no repositório — mesma classe de risco da região `gru1`.
 
 **Uma decisão de produto ficou aberta na 4.5, e ela bloqueia o BP de verdade:**
 `seed_categories_for_org` **não cria nenhuma natureza de Balanço** (conferido: a função não menciona
@@ -308,7 +305,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 3.1 | Endpoints OAuth: descoberta, registro dinâmico, `/authorize` com consentimento, `/token`, `/revoke` + tela de conexões | ✅ (aguardando confirmação na tela) |
 | 3.2 | Servidor MCP + ferramentas de leitura | ✅ **9 de leitura** hoje: `listar_organizacoes`, `descrever_organizacao`, `listar_categorias`, `listar_dimensoes`, `listar_modelos_de_rateio`, `listar_versoes_de_orcamento`, `listar_regras`, `consultar`, `explicar_consulta`. Falta `detalhar_lancamentos` e o grupo de dashboard (Fase 5) |
 | 3.3 | Ferramentas de escrita com preview→confirm | ✅ **seis pares**: classificação, rateio, lançamento de orçamento, cópia do realizado, regras e importação |
-| **4.A** | **Convites e aceite** — `/configuracoes/membros`, convite por e-mail (Supabase Auth cria a conta), `/auth/confirm` + `/convite/definir-senha`, aceite in-app no `/onboarding` e em `/configuracoes`, matriz de papéis valendo DENTRO da gestão de membros, auditoria em `agent_events`. Sem migration. **41/41** | ✅ (aguardando confirmação na tela + as 4 configs do painel) |
+| **4.A** | **Convites e aceite** — `/configuracoes/membros`, convite por e-mail (Supabase Auth cria a conta), `/auth/confirm` + `/convite/definir-senha`, aceite in-app no `/onboarding` e em `/configuracoes`, matriz de papéis valendo DENTRO da gestão de membros, auditoria em `agent_events`. Sem migration. **41/41** | ✅ **confirmada na tela em 25/ago** (convite de ponta a ponta; configs do painel feitas) |
 | 4.B | Organização ativa (cookie `lure_org` + seletor no AppShell + consolidar as ~21 cópias do `getAuthContext`) e papéis valendo nos pontos v1: funil (`QueryScope`), escritas destrutivas, chave de IA, e recusar escopo de escrita no consentimento MCP para viewer | 🔲 |
 | **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
 | **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
@@ -492,10 +489,8 @@ de novo e ver o aviso azul dizendo que nada é novo.
 IA (confira em `/configuracoes/consumo`, que não deve registrar chamada nova). E, pelo claude.ai,
 pedir a importação de um **balanço**, que passa a funcionar pela primeira vez.
 
-**Da 4.A:** depois das 4 configs do painel (ver *Status*): `/configuracoes/membros` — convidar um
-e-mail novo, ver o e-mail chegar, definir a senha pelo link e cair no dashboard; convidar de novo o
-mesmo e-mail e ver a recusa; alterar papel e remover; e o card **Convites pendentes** em
-`/configuracoes` (convidando um usuário que já tem conta) e no `/onboarding`.
+**Da 4.A: CONFIRMADA em 25/ago** — o convite de ponta a ponta rodou na tela (convidar → e-mail →
+definir senha → dashboard). Sai da lista de pendências.
 
 **A regra de roteamento que a 3.1 estabeleceu** — vale para tudo que vier no MCP:
 
@@ -812,6 +807,36 @@ O hostname `db.qwouuvgndiggoglfrmvr.supabase.co` falha com `ENOTFOUND` no ambien
 **Como obter a URL correta:** Supabase Dashboard → botão "Connect" (topo da página) → aba "Connection string" → "Transaction pooler".
 
 **Após atualizar a variável no Vercel, é necessário fazer redeploy** — deployments existentes usam os valores da época em que foram criados.
+
+**O reflexo de diagnóstico que a 4.A deixou:** "variável não configurada" em produção com a
+variável VISÍVEL no painel → comparar a idade do deployment com a da variável
+(`vercel ls` × `vercel env ls`). Em 25/ago o erro do convite era exatamente isso: chave criada
+13 minutos antes, deployment no ar com 7 horas. `vercel redeploy <url do deployment>` resolve.
+
+### Supabase Auth — e-mail e convites (configurado em 25/ago/2026)
+
+⚠️ **Tudo nesta seção vive no PAINEL do Supabase, não no repositório** — um projeto recriado
+perde isso em silêncio, e o fluxo de convite da Fase 4 morre sem aviso útil. O que está
+configurado, e onde:
+
+| Config | Valor | Onde |
+|---|---|---|
+| **SMTP próprio** | `smtp.resend.com:465`, usuário `resend`, senha = API key do Resend; sender no domínio verificado `lureconsultoria.com.br` | Auth → SMTP Settings |
+| **Site URL** | `https://lure-expert.vercel.app` (sem barra final) | Auth → URL Configuration |
+| **Redirect URLs** | inclui `https://lure-expert.vercel.app/**` | Auth → URL Configuration |
+| **Template "Invite user"** | link = `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/convite/definir-senha` | Auth → Email Templates |
+| **`SUPABASE_SERVICE_ROLE_KEY`** | no `.env.local` e na Vercel (Production, Sensitive) | Vercel → Env Variables |
+
+**O template com `{{ .TokenHash }}` é pré-requisito, não estética:** o padrão do Supabase usa
+`{{ .ConfirmationURL }}`, que devolve os tokens no FRAGMENTO da URL (`#access_token=...`) — e
+fragmento nunca chega ao servidor, então `/auth/confirm` não teria como criar a sessão. Se um dia
+os templates forem resetados, é o primeiro lugar a conferir quando "o link do convite cai no
+login". Os demais templates (recuperação de senha etc.) seguem no padrão; quando a recuperação
+de senha existir no app, migrá-los para o mesmo formato `token_hash` + `/auth/confirm`, que já
+aceita todos os tipos.
+
+**O e-mail do convite sempre aponta para a produção** (nasce do Site URL), mesmo disparado de um
+app rodando localmente — comportamento desejado para o convidado.
 
 ---
 

@@ -23,6 +23,17 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 Os dois dependem das 4 configurações de painel listadas no `CLAUDE.md` (service role key na
 Vercel, SMTP próprio, Site URL, template com `{{ .TokenHash }}`).
 
+> **CONFIRMADO NA TELA em 25/ago, ainda na sessão:** Julio fez as 4 configurações (SMTP via
+> Resend com o domínio `lureconsultoria.com.br`; detalhes na seção de infraestrutura do
+> `CLAUDE.md`) e o convite rodou de ponta a ponta — convidar em `/configuracoes/membros`,
+> e-mail chegando, senha definida pelo link, queda no dashboard.
+>
+> **Incidente no meio do teste, com lição:** "SUPABASE_SERVICE_ROLE_KEY não está configurada"
+> em produção com a chave VISÍVEL no painel da Vercel. Causa: a chave tinha 13 minutos e o
+> deployment no ar, 7 horas — variável só vale em deployment novo. Diagnóstico em dois
+> comandos (`vercel env ls` × `vercel ls`, comparando idades), correção com
+> `vercel redeploy <url>`. O reflexo ficou registrado na seção de infraestrutura.
+
 **Arquivos novos:** `lib/members-types.ts` (matriz + Zod + guardas puras, client-safe),
 `lib/members.ts` (o miolo: listar, vínculo, convite pendente, aceite/recusa, último owner,
 auditoria — todas recebendo o executor), `server/members.ts` (casca `'use server'`),
