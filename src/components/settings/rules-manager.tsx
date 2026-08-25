@@ -17,8 +17,9 @@ import type {
   CategoryItem, SimpleDimensionItem,
   DimensionOption, GroupedDimensionOption,
 } from '@/components/transacoes-shared/types'
+import { Checkbox } from '@/components/ui/checkbox'
 import { RuleEditDialog, type RuleInitialValues, type AccountOption } from './rule-edit-dialog'
-import { deleteRule, type RuleRow, type RulesListResult } from '@/server/categorization-rules'
+import { deleteRule, deleteRules, type RuleRow, type RulesListResult } from '@/server/categorization-rules'
 
 interface SearchParams {
   page?: string
@@ -60,8 +61,13 @@ export function RulesManager({
   const [dialogInitial, setDialogInitial] = useState<RuleInitialValues>(EMPTY_INITIAL)
   const [deleteTarget, setDeleteTarget] = useState<RuleRow | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
 
   function updateFilters(updates: Record<string, string | undefined>) {
+    // Trocar de página ou filtro descarta a seleção: o "apagar selecionadas"
+    // age sobre o que está VISÍVEL, nunca sobre linhas que saíram da tela.
+    setSelectedIds(new Set())
     const current: Record<string, string> = {}
     for (const k of FILTER_KEYS) { if (searchParams[k]) current[k] = searchParams[k]! }
     for (const [k, v] of Object.entries(updates)) {
@@ -74,7 +80,25 @@ export function RulesManager({
   }
 
   function clearAllFilters() {
+    setSelectedIds(new Set())
     startNav(() => router.push('/configuracoes/regras'))
+  }
+
+  // Seleção em lote — sempre relativa à página visível
+  const allSelected = data.rows.length > 0 && data.rows.every(r => selectedIds.has(r.id))
+  const someSelected = data.rows.some(r => selectedIds.has(r.id))
+
+  function toggleAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(data.rows.map(r => r.id)))
+  }
+
+  function toggleOne(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const hasFilters = !!(searchParams.q || searchParams.accounts || searchParams.categories)
@@ -125,11 +149,39 @@ export function RulesManager({
     setDialogOpen(true)
   }
 
+  async function handleBatchDelete() {
+    const ids = Array.from(selectedIds)
+    setIsDeleting(true)
+    try {
+      const r = await deleteRules(ids)
+      if ('error' in r && r.error) {
+        toast.error(r.error)
+      } else {
+        toast.success(`${ids.length} regra${ids.length !== 1 ? 's' : ''} apagada${ids.length !== 1 ? 's' : ''}.`)
+        setSelectedIds(new Set())
+      }
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao apagar.')
+    } finally {
+      setIsDeleting(false)
+      setBatchDeleteOpen(false)
+    }
+  }
+
   async function handleConfirmDelete() {
     if (!deleteTarget) return
     setIsDeleting(true)
     try {
       await deleteRule(deleteTarget.id)
+      // Sai também da seleção — senão o contador do lote mentiria sobre uma
+      // linha que já não existe.
+      setSelectedIds(prev => {
+        if (!prev.has(deleteTarget.id)) return prev
+        const next = new Set(prev)
+        next.delete(deleteTarget.id)
+        return next
+      })
       toast.success('Regra apagada.')
       router.refresh()
     } catch (err) {
@@ -171,6 +223,26 @@ export function RulesManager({
         {data.total === 0 ? 'Nenhuma regra' : `${data.total} regra${data.total !== 1 ? 's' : ''} ${hasFilters ? 'encontrada' + (data.total !== 1 ? 's' : '') : 'no total'}`}
       </div>
 
+      {/* Zona 3 — Toolbar de lote (só com seleção) */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-6 py-2 border-b bg-muted/40 shrink-0">
+          <span className="text-xs font-medium text-foreground">
+            {selectedIds.size} selecionada{selectedIds.size !== 1 ? 's' : ''}
+          </span>
+          <Button
+            variant="outline" size="sm"
+            className="h-7 text-xs text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+            onClick={() => setBatchDeleteOpen(true)}
+            disabled={isDeleting}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1" /> Apagar selecionadas
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())}>
+            Cancelar
+          </Button>
+        </div>
+      )}
+
       {/* Zona 4 — Tabela */}
       <div className="flex-1 min-h-0 overflow-auto">
         {data.rows.length === 0 ? (
@@ -186,6 +258,13 @@ export function RulesManager({
           <table className="w-full text-xs [&_td]:border-r [&_td]:border-border/20 [&_th]:border-r [&_th]:border-border/20 last:[&_td]:border-r-0 last:[&_th]:border-r-0">
             <thead className="bg-muted sticky top-0 z-10">
               <tr className="border-b">
+                <th className="w-8 px-2 py-1">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                    onCheckedChange={toggleAll}
+                    aria-label="Selecionar todas as regras da página"
+                  />
+                </th>
                 <th className="px-2 py-1 text-left min-w-[220px]">
                   <ColHeader hasValue={!!searchParams.q} onClear={() => updateFilters({ q: undefined, page: undefined })}>
                     <DescFilter value={searchParams.q} onUpdate={v => updateFilters({ q: v, page: undefined })} />
@@ -227,7 +306,17 @@ export function RulesManager({
                   ? (accountLabelMap.get(rule.accountId) ?? '—')
                   : null
                 return (
-                  <tr key={rule.id} className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
+                  <tr
+                    key={rule.id}
+                    className={`group border-b last:border-0 hover:bg-muted/20 transition-colors ${selectedIds.has(rule.id) ? 'bg-primary/5' : ''}`}
+                  >
+                    <td className="px-2 py-2">
+                      <Checkbox
+                        checked={selectedIds.has(rule.id)}
+                        onCheckedChange={() => toggleOne(rule.id)}
+                        aria-label={`Selecionar a regra ${rule.description}`}
+                      />
+                    </td>
                     <td className="px-2 py-2">
                       <div className="text-xs text-foreground break-words">{rule.description}</div>
                       {rule.matchCount > 0 && (
@@ -330,6 +419,27 @@ export function RulesManager({
         accounts={accounts}
         onSaved={onDialogSaved}
       />
+
+      {/* Confirmação de delete em lote */}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={(o) => { if (!o) setBatchDeleteOpen(false) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Apagar {selectedIds.size} regra{selectedIds.size !== 1 ? 's' : ''}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Apagar não desfaz classificações já feitas — as regras só deixam de valer para as
+              próximas categorizações.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBatchDelete} disabled={isDeleting} className="bg-rose-600 hover:bg-rose-700">
+              {isDeleting ? 'Apagando…' : 'Apagar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Confirmação de delete */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null) }}>
