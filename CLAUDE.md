@@ -333,7 +333,9 @@ contagem, não de matriz); os demais pontos são a 4.B. **Convite tem dois camin
 migration) → link do e-mail → `/auth/confirm` (verifyOtp server-side) → `/convite/definir-senha`
 aceita todos os pendentes; e-mail já cadastrado → o Supabase recusa reconvidar, então vira convite
 pendente **in-app**, aceito no `/onboarding` (quem não tem organização) ou em `/configuracoes`
-(quem já tem). Aceitar uma 2ª organização já funciona, mas ela só fica VISÍVEL com o seletor da
+(quem já tem) — e **o APP envia o aviso por e-mail** via API do Resend (`lib/email.ts`, mesma
+chave do SMTP), porque o Supabase não envia nada nesse caso; Julio pegou isso testando em 25/ago.
+O convite NÃO depende do aviso: falha de e-mail vira `avisoErro` na tela, nunca convite perdido. Aceitar uma 2ª organização já funciona, mas ela só fica VISÍVEL com o seletor da
 4.B — o `getAuthContext` devolve a mais antiga.
 
 **Defeito achado pelo verify-members.ts, fora do escopo e corrigido no mesmo commit:** o Drizzle
@@ -826,6 +828,7 @@ configurado, e onde:
 | **Redirect URLs** | inclui `https://lure-expert.vercel.app/**` | Auth → URL Configuration |
 | **Template "Invite user"** | link = `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/convite/definir-senha` | Auth → Email Templates |
 | **`SUPABASE_SERVICE_ROLE_KEY`** | no `.env.local` e na Vercel (Production, Sensitive) | Vercel → Env Variables |
+| **`RESEND_API_KEY`** | a mesma API key do SMTP, agora também como env do app — o aviso de convite para usuário EXISTENTE sai pelo app (`lib/email.ts`), não pelo Supabase; remetente padrão `ti@lureconsultoria.com.br` (sobreponível por `EMAIL_REMETENTE`) | `.env.local` + Vercel → Env Variables |
 
 **O template com `{{ .TokenHash }}` é pré-requisito, não estética:** o padrão do Supabase usa
 `{{ .ConfirmationURL }}`, que devolve os tokens no FRAGMENTO da URL (`#access_token=...`) — e

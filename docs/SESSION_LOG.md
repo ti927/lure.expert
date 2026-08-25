@@ -34,6 +34,30 @@ Vercel, SMTP próprio, Site URL, template com `{{ .TokenHash }}`).
 > comandos (`vercel env ls` × `vercel ls`, comparando idades), correção com
 > `vercel redeploy <url>`. O reflexo ficou registrado na seção de infraestrutura.
 
+#### Correção pós-confirmação (25/ago): o aviso que o Supabase nunca manda
+
+Julio pegou em uso o buraco do caminho secundário: **convite para e-mail já cadastrado não
+gera e-mail nenhum** — o `inviteUserByEmail` recusa usuário existente, e a 4.A tinha deixado o
+caso como convite "silencioso" (só o card in-app). A pessoa não ficava sabendo.
+
+Correção: o app passou a enviar o aviso **por conta própria**, via API do Resend — a MESMA chave
+do SMTP, mudando só quem disca. `src/lib/email.ts`: `enviarEmail` (recusa descritiva, nunca
+exceção), `emailAvisoDeConvite` (builder puro, com `escapeHtml` — nome de empresa entra escapado
+no HTML) e remetente padrão `lure.expert <ti@lureconsultoria.com.br>` (decidido por Julio;
+`EMAIL_REMETENTE` sobrepõe). O link do aviso é `/login?next=/configuracoes` — o `?next=` da 3.1
+carrega o destino pelo login, e a pessoa cai na tela onde o card do convite está.
+
+**A ordem importa:** o envio acontece DEPOIS do INSERT do convite, e a falha do e-mail não
+desfaz nada — vira `avisoErro` no retorno, a tela mostra toast de aviso ("convite criado, mas o
+aviso não saiu: motivo") e o `agent_events` registra `avisoEnviado`/`avisoErro`. Convite nunca
+se perde por causa de e-mail.
+
+Verificado: **46/46** (os 5 novos: escape do HTML, tag crua não sobrevive, link com `next`,
+assunto em texto puro, e recusa descritiva sem a chave — com `delete process.env.RESEND_API_KEY`
+garantindo que nenhum e-mail real sai do teste), `tsc` e `next build` limpos. **Pendência de
+env:** `RESEND_API_KEY` no `.env.local` e na Vercel + redeploy; sem ela o convite funciona e a
+tela avisa que o e-mail não saiu.
+
 **Arquivos novos:** `lib/members-types.ts` (matriz + Zod + guardas puras, client-safe),
 `lib/members.ts` (o miolo: listar, vínculo, convite pendente, aceite/recusa, último owner,
 auditoria — todas recebendo o executor), `server/members.ts` (casca `'use server'`),

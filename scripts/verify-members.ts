@@ -21,6 +21,7 @@ import {
   aceitarTodosOsConvites, recusaDeMudanca, registrarEventoDeMembro,
 } from '@/lib/members'
 import { recusaDeGestao, podeGerirMembros } from '@/lib/members-types'
+import { emailAvisoDeConvite, enviarEmail } from '@/lib/email'
 
 const NOME_A = 'ZZ Teste membros A'
 const NOME_B = 'ZZ Teste membros B'
@@ -239,6 +240,25 @@ async function main() {
     const depois = await db.select({ id: agentEvents.id }).from(agentEvents)
       .where(and(eq(agentEvents.organizationId, A), eq(agentEvents.type, 'member_invited')))
     t(depois.length === antes.length + 1, `o registro SOBE a contagem (${antes.length} → ${depois.length})`)
+  }
+
+  // ═══ 8.5 Aviso por e-mail (parte pura + recusa sem chave) ═════════════════
+  console.log('\n── 8.5 aviso por e-mail ──')
+  {
+    const aviso = emailAvisoDeConvite({
+      empresa: 'Padaria <script> & Cia',
+      url: 'https://lure-expert.vercel.app/login?next=/configuracoes',
+    })
+    t(aviso.html.includes('Padaria &lt;script&gt; &amp; Cia'), 'nome da empresa entra ESCAPADO no HTML')
+    t(!aviso.html.includes('<script>'), 'e a tag crua não sobrevive')
+    t(aviso.html.includes('href="https://lure-expert.vercel.app/login?next=/configuracoes"'), 'o link aponta para o login com next=/configuracoes')
+    t(aviso.assunto.includes('Padaria <script> & Cia'), 'o assunto é texto puro, sem escapes de HTML')
+
+    // Garante que NENHUM e-mail real sai do teste, e que a ausência da chave
+    // vira recusa descritiva, não exceção.
+    delete process.env.RESEND_API_KEY
+    const envio = await enviarEmail({ para: 'x@y.com', assunto: 'x', html: 'x' })
+    t(!!envio.erro && envio.erro.includes('RESEND_API_KEY'), 'sem a chave, recusa descritiva em vez de exceção')
   }
 
   // ═══ 9. Limpeza ═══════════════════════════════════════════════════════════

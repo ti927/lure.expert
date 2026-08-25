@@ -14,8 +14,9 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAuthContext } from '@/lib/auth-context'
 import { db } from '@/db'
-import { memberships } from '@/db/schema'
+import { memberships, organizations } from '@/db/schema'
 import { and, eq } from 'drizzle-orm'
+import { enviarEmail, emailAvisoDeConvite } from '@/lib/email'
 import {
   listarMembros, papelNaOrganizacao, usuarioPorEmail, vinculoExistente,
   criarConvitePendente, convitesPendentesDoUsuario, aceitarConvite,
@@ -79,6 +80,8 @@ export interface ResultadoConvite {
   erro?: string
   /** true = a pessoa já tinha conta; o convite aparece para ela dentro do app. */
   usuarioJaExistia?: boolean
+  /** Preenchido quando o convite EXISTE mas o aviso por e-mail não saiu — a tela diz o motivo. */
+  avisoErro?: string
 }
 
 export async function convidarMembro(input: { email: string; papel: string }): Promise<ResultadoConvite> {
@@ -147,15 +150,33 @@ export async function convidarMembro(input: { email: string; papel: string }): P
     throw err
   }
 
+  // Para conta EXISTENTE o Supabase não envia nada — o aviso sai por nós, via
+  // Resend. Depois do INSERT de propósito: o convite vale sem o aviso, e a
+  // falha do e-mail vira `avisoErro` na tela em vez de perder o convite.
+  let avisoErro: string | undefined
+  if (usuarioJaExistia) {
+    const [org] = await db
+      .select({ name: organizations.name })
+      .from(organizations)
+      .where(eq(organizations.id, ctx.organizationId))
+      .limit(1)
+    const aviso = emailAvisoDeConvite({
+      empresa: org?.name ?? 'uma empresa',
+      url: `${origemDaRequisicao()}/login?next=/configuracoes`,
+    })
+    const envio = await enviarEmail({ para: email, assunto: aviso.assunto, html: aviso.html })
+    avisoErro = envio.erro
+  }
+
   await registrarEventoDeMembro({
     organizationId: ctx.organizationId,
     tipo: 'member_invited',
     membershipId,
-    payload: { email, papel, convidadoPor: ctx.userId, usuarioJaExistia },
+    payload: { email, papel, convidadoPor: ctx.userId, usuarioJaExistia, avisoEnviado: usuarioJaExistia ? !avisoErro : null, avisoErro: avisoErro ?? null },
   })
 
   revalidatePath('/configuracoes/membros')
-  return { usuarioJaExistia }
+  return { usuarioJaExistia, avisoErro }
 }
 
 // ─── Alterar papel e remover ────────────────────────────────────────────────

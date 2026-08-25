@@ -54,11 +54,16 @@ export function MembersManager({ membros, meuPapel, meuUserId }: MembrosDaTela) 
         toast.error(r.erro)
         return
       }
-      toast.success(
-        r.usuarioJaExistia
-          ? `${email} já tem conta no lure.expert — o convite aparece para a pessoa quando ela entrar.`
-          : `Convite enviado por e-mail para ${email}.`,
-      )
+      if (r.usuarioJaExistia && r.avisoErro) {
+        // O convite existe; só o aviso falhou — a pessoa ainda o vê ao entrar.
+        toast.warning(`Convite criado, mas o aviso por e-mail não saiu: ${r.avisoErro} A pessoa verá o convite ao entrar no lure.expert.`)
+      } else {
+        toast.success(
+          r.usuarioJaExistia
+            ? `${email} já tem conta — enviamos um aviso por e-mail, e o convite aparece quando a pessoa entrar.`
+            : `Convite enviado por e-mail para ${email}.`,
+        )
+      }
       setConvidando(false)
       setEmail('')
       setPapel('member')
