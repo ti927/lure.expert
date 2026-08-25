@@ -12,11 +12,15 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
-### ✅ Sessão 4.B — Organização ativa + papéis valendo (Fase 4 fecha, aguardando tela)
+### ✅ Sessão 4.B — Organização ativa + papéis valendo (e a Fase 4 fecha)
 
 **Verificado: 58/58 membros/papéis/resolução contra o banco, 134/134 escrita do MCP contra um
 `next start` real (as 2 novas: viewer com escopo de escrita LÊ, e a escrita recusa citando o
 papel), `tsc` e `next lint` limpos, build 38/38.**
+
+> **CONFIRMADA NA TELA em 25/ago:** Julio testou o enforcement de verdade — um usuário operador
+> tentou apagar e foi recusado com a mensagem do papel. Com a 4.A já confirmada, a **Fase 4
+> fecha por completo**, contra a lista de sessões, uma por uma.
 
 #### Organização ativa
 
