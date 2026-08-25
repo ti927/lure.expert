@@ -24,6 +24,8 @@ import { garantirContaManual, listarContasManuais, apagarContaManual } from '@/l
 import { contaCanonica } from '@/lib/import-contract'
 import { findCategoryByText, loadOrgContext } from '@/lib/categorizer'
 import { BP_TYPES } from '@/lib/bp-types'
+import { buildImportTemplateCsv } from '@/lib/csv-templates'
+import { parseExcelOrCsv } from '@/lib/parsers/excel-csv'
 
 const NOME_ORG = 'ZZ Teste importacao'
 const USUARIO = '44444444-4444-4444-4444-444444444444'
@@ -405,8 +407,83 @@ async function main() {
       'o filtro de /transacoes acha a instituição pela fonte — sem a fonte própria sairia "Banco" literal')
   }
 
-  // ═══ 8. Nada foi tocado fora da organização de teste ══════════════════════
-  console.log('\n── 8. isolamento ──')
+  // ═══ 8. O caminho rápido do parser (4.5.C) ════════════════════════════════
+  console.log('\n── 8. a planilha modelo é lida pelo proprio parser, sem IA ──')
+  {
+    const ctxParse = { organizationId: ORG, documentId: null }
+
+    // O laço que importa: o arquivo que `/upload` OFERECE tem de ser legível
+    // pelo parser sem adivinhação. Se o modelo fosse redigitado em vez de
+    // gerado das colunas, isto quebraria — e só quando alguém o usasse.
+    const modelo = Buffer.from(buildImportTemplateCsv('movimentos'), 'utf8')
+    const p = await parseExcelOrCsv(modelo, ctxParse, 'text/csv')
+    t(p.canonico === true, 'a planilha modelo de lançamentos casa com o formato canônico')
+    t(p.rows.length === 3, `as 3 linhas de exemplo do modelo são lidas (foram ${p.rows.length})`)
+    t(p.rows.every(r => r.date !== null && r.amount !== null && r.direction !== null && r.description !== null),
+      'toda linha do modelo sai com competência, valor, sentido e descrição')
+
+    // A prova de que o caminho rápido faz trabalho REAL: a heurística legada
+    // procura 'data caixa' por `includes`, e o rótulo canônico é "Data de
+    // caixa" — com o "de" no meio, ela não acha. Só o casamento exato acha.
+    const comCaixa = p.rows.find(r => r.effectiveDate && r.effectiveDate !== r.date)
+    t(!!comCaixa, 'o exemplo de cartão sai com data de caixa DIFERENTE da competência')
+
+    const contrato = (p.rows[0].rawData as Record<string, unknown>).__contrato as Record<string, string> | undefined
+    t(!!contrato && !!contrato.conta, 'as colunas sem campo próprio na staging (conta, natureza…) viajam em __contrato')
+
+    // Mesmo cabeçalho, uma coluna obrigatória renomeada → cai no caminho de
+    // hoje. É a promessa da Fase 2 continuando de pé: qualquer formato entra.
+    const quebrado = Buffer.from(
+      buildImportTemplateCsv('movimentos').replace('Sentido', 'Tipo de movimento'),
+      'utf8',
+    )
+    const q = await parseExcelOrCsv(quebrado, ctxParse, 'text/csv')
+    t(q.canonico === false, 'cabeçalho sem uma coluna obrigatória NÃO é canônico — cai no caminho de sempre')
+    t(q.rows.length === 3, 'e mesmo assim as linhas são lidas: o formato é atalho, nunca requisito')
+    t(q.rows.every(r => r.effectiveDate === null),
+      'a heurística legada perde "Data de caixa" (procura por `includes` e o "de" atrapalha) — ' +
+      'é o trabalho real que o caminho rápido faz')
+
+    // Coluna extra não pode desqualificar: export de ERP sempre traz colunas a mais.
+    const comExtra = Buffer.from(
+      buildImportTemplateCsv('movimentos').replace('Observação', 'Observação;Centro de resultado'),
+      'utf8',
+    )
+    const e = await parseExcelOrCsv(comExtra, ctxParse, 'text/csv')
+    t(e.canonico === true, 'coluna extra desconhecida NÃO desqualifica o caminho rápido')
+
+    // Balanço: conta + saldo, sem data e sem sentido por linha.
+    const modeloBp = Buffer.from(buildImportTemplateCsv('balanco'), 'utf8')
+    const b = await parseExcelOrCsv(modeloBp, ctxParse, 'text/csv', 'balanco')
+    t(b.canonico === true, 'a planilha modelo de balanço casa com o formato canônico')
+    t(b.rows.length > 0 && b.rows.every(r => r.amount !== null && r.description !== null),
+      `as ${b.rows.length} linhas de balanço saem com saldo e conta`)
+    t(b.rows.every(r => r.date === null),
+      'linha de balanço sai SEM data — ela vem do arquivo, e exigi-la aqui devolveria zero linha')
+
+    // Laço fechado: modelo → staging → plano → gravação.
+    const doc = await documentoCom(p.rows.map(r => ({
+      rowIndex: r.rowIndex,
+      date: r.date, effectiveDate: r.effectiveDate,
+      amount: r.amount === null ? null : String(r.amount),
+      direction: r.direction, description: r.description,
+      rawData: r.rawData,
+    })))
+    const plano = await planejarStaging(ORG, doc, await lerLinhas(doc.id))
+    if ('error' in plano) { t(false, plano.error); return }
+    t(plano.aInserir.length === 3, `o modelo atravessa até o plano de gravação (${plano.aInserir.length} de 3)`)
+    const comConta = plano.aInserir.filter(n => n.valor.accountId !== null)
+    t(comConta.length === 3, `a conta declarada NA LINHA do modelo chega ao lançamento (${comConta.length} de 3)`)
+    // O modelo tem 3 exemplos: aluguel (caixa em branco = competência), cartão
+    // (compra em março, fatura em abril) e recebimento (D+2). Logo, 2 divergem.
+    const caixaDiferente = plano.aInserir.filter(n => n.valor.effectiveDate !== n.valor.date)
+    t(caixaDiferente.length === 2, `2 linhas com caixa ≠ competência atravessam tudo (são ${caixaDiferente.length})`)
+    const caixaIgual = plano.aInserir.filter(n => n.valor.effectiveDate === n.valor.date)
+    t(caixaIgual.length === 1, 'e a linha com caixa em branco vira caixa = competência, não nula')
+  }
+
+  // ═══ 9. Nada foi tocado fora da organização de teste ══════════════════════
+  console.log('\n── 9. isolamento ──')
   {
     const [{ n }] = await db.execute<{ n: number }>(sql`
       SELECT COUNT(*)::int AS n FROM transactions

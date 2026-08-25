@@ -33,6 +33,12 @@ O que o formato canônico compra:
 É o princípio nº 2 do projeto sendo cumprido: *"LLM é última opção. Sempre tente código →
 regras → recorrência → embeddings antes de chamar IA."*
 
+> **Em vigor desde 25/ago/2026** (sessão 4.5.C). O parser testa o cabeçalho contra este
+> documento **antes** de qualquer chamada de IA; casou, lê direto. Coluna extra desconhecida
+> não desqualifica — export de ERP sempre traz colunas a mais. E a planilha modelo que
+> `/upload` oferece é gerada a partir das mesmas colunas descritas aqui, então ela sempre casa
+> consigo mesma: há um teste que a lê pelo próprio parser e falha se divergir.
+
 ---
 
 ## Vocabulário — três pares que se confundem

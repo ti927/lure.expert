@@ -183,7 +183,19 @@ async function main() {
   }
 
   // ═══ 4. Buracos declarados ════════════════════════════════════════════════
-  console.log('\n── buracos que as próximas sessões fecham ──')
+  console.log('\n── o que ainda não aconteceu na base ──')
+
+  // O contador que prova o ganho da 4.5.C ao longo do tempo. `extraction_method
+  // = 'template'` passou a significar "cabeçalho canônico, lido sem IA" — antes
+  // era o sistema de fingerprint, descartado na Fase 2 e sem escritor desde
+  // então. Enquanto for 0, nenhum arquivo no formato publicado foi enviado.
+  const [canon] = await db.execute<{ canonicos: number; total: number }>(sql`
+    SELECT COUNT(*) FILTER (WHERE extraction_method = 'template')::int AS canonicos,
+           COUNT(*)::int                                               AS total
+      FROM documents WHERE storage_path NOT LIKE 'mcp://%'`)
+  t(Number(canon.canonicos) > 0,
+    `documentos lidos pelo caminho rápido (sem IA): ${canon.canonicos} de ${canon.total} — ` +
+    'sobe quando alguém usar a planilha modelo ou um arquivo no formato publicado')
 
   const [bp] = await db.execute<{ docs: number; linhas: number }>(sql`
     SELECT COUNT(*)::int AS docs,
@@ -192,9 +204,9 @@ async function main() {
             WHERE d2.report_type = 'balance_sheet') AS linhas
       FROM documents WHERE report_type = 'balance_sheet'`)
   t(Number(bp.docs) > 0,
-    `documentos de balanço: ${bp.docs} (${bp.linhas} linhas) — o defeito da TELA (filtro ` +
-    '`date && amount && direction`, que engolia toda linha de balanço) foi corrigido na 4.5.B. ' +
-    'Faltam dois: `reportType: other` cravado no MCP (Sessão C) e o seed não criar naturezas de BP (produto)')
+    `documentos de balanço: ${bp.docs} (${bp.linhas} linhas) — os defeitos de CÓDIGO foram ` +
+    'corrigidos: o filtro `date && amount && direction` da tela (4.5.B) e o `reportType: other` ' +
+    'cravado no MCP (4.5.C). Sobra a decisão de produto: o seed não cria naturezas de Balanço')
 
   const [prefixos] = await db.execute<{ antigo: number; novo: number }>(sql`
     SELECT COUNT(*) FILTER (WHERE external_id LIKE 'mcp:%')::int AS antigo,
@@ -253,7 +265,14 @@ async function main() {
   const bpSemData = cabecalhoDoArquivoSchema.safeParse({ tipoDeRelatorio: 'balanco' })
   t(!bpSemData.success, 'balanço sem data de referência é recusado no nível do arquivo')
 
-  console.log(`\n${ok} ok, ${alerta} pendência(s) — cada pendência é trabalho das Sessões B e C`)
+  console.log(`\n${ok} ok, ${alerta} pendência(s)`)
+  console.log(
+    'As Sessões B e C fecharam o CÓDIGO das duas portas de arquivo. As pendências acima são sobre o\n' +
+    'DADO: nenhum arquivo passou ainda pelo caminho novo, e a dedup não alcança o que já entrou. Os\n' +
+    'números andam quando houver importação nova — é assim que este relatório continua honesto.\n' +
+    'Fora isso, sobra uma decisão de PRODUTO: o seed do plano de contas não cria nenhuma natureza de\n' +
+    'Balanço, então organização nova importa o BP e /balanco continua vazio.',
+  )
   process.exit(0)
 }
 

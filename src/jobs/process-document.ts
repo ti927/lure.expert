@@ -79,8 +79,11 @@ export const processDocument = inngest.createFunction(
         // O contexto é o que permite atribuir o custo da chamada à organização
         // certa — antes da Fase 0 os parsers não recebiam nada disso.
         const ctx = { organizationId, documentId }
+        // O tipo de relatório muda o formato canônico esperado: o balanço é
+        // conta + saldo, sem data nem sentido por linha.
+        const tipoDeRelatorio = sourceType === 'balance_sheet' ? 'balanco' as const : 'movimentos' as const
         const parsed = isExcelCsv
-          ? await parseExcelOrCsv(buffer, ctx, mimeType)
+          ? await parseExcelOrCsv(buffer, ctx, mimeType, tipoDeRelatorio)
           : await parsePdf(buffer, ctx, pdfPassword ?? undefined)
 
         if (parsed.rows.length > 0) {
@@ -116,20 +119,26 @@ export const processDocument = inngest.createFunction(
         }
 
         const detectedCategoryHints = 'detectedHints' in parsed ? parsed.detectedHints : []
+        // `canonico` só existe no retorno do parser de planilha, e diz que o
+        // cabeçalho casou com o formato publicado — nenhuma chamada de IA
+        // aconteceu. Vale gravar porque é o que a tela usa para dizer isso ao
+        // usuário, e o que torna a promessa verificável em vez de retórica.
+        const canonico = 'canonico' in parsed && parsed.canonico === true
 
         await db
           .update(documents)
           .set({
             extractionStatus: 'completed',
-            extractionMethod: 'llm',
+            extractionMethod: canonico ? 'template' : 'llm',
             extractedData: {
               warnings: parsed.warnings,
               ...(detectedCategoryHints.length > 0 ? { detectedCategoryHints } : {}),
+              ...(canonico ? { formatoCanonico: true } : {}),
             },
           })
           .where(eq(documents.id, documentId))
 
-        return { rowCount: parsed.rows.length, warnings: parsed.warnings, detectedCategoryHints }
+        return { rowCount: parsed.rows.length, warnings: parsed.warnings, detectedCategoryHints, canonico }
       } catch (err) {
         await db
           .update(documents)

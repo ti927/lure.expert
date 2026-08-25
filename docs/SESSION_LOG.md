@@ -12,6 +12,97 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 4.5.C — o asfalto do MCP, e a Fase 4.5 fecha
+
+**Verificado: 132/132 escrita do MCP, 70/70 tela, 36/36 leitura.**
+
+**Arquivos:** `parsers/excel-csv.ts`, `import-write.ts`, `mcp/tools.ts`, `staging-import.ts`,
+`server/staging.ts`, `jobs/process-document.ts`, e os dois scripts de verificação.
+
+#### O caminho rápido do parser — o princípio nº 2 saindo do papel
+
+O parser era **LLM-first**: chamava Haiku em todo upload, de todo formato, porque nunca houve um
+formato para esperar. Agora há. `canonicalMapping` testa o cabeçalho contra
+`docs/FORMATO_DE_IMPORTACAO.md` **antes** de `tryLlmMapping`; casou, lê direto.
+
+Coluna extra desconhecida **não** desqualifica — export de ERP sempre traz colunas a mais, e
+recusar por causa delas anularia o ganho justamente nos arquivos reais. E cabeçalho que não casa
+cai no caminho de hoje, **inalterado**: a promessa da Fase 2 ao dono de PME continua de pé.
+
+`extraction_method` passou a gravar `'template'` para arquivo canônico. O valor existia desde a
+Fase 2 (do sistema de fingerprint, descartado) e estava sem escritor; agora significa "lido sem IA",
+e `verify-import-contract.ts` conta quantos documentos entraram assim.
+
+#### O defeito que a planilha modelo expôs: o parser não lia "Saída"
+
+`deriveDirection` comparava com `/^(d|debito|saida|...)/` sobre o texto **cru**, só em minúsculas.
+`"Saída".toLowerCase()` é `"saída"`, com acento — e o regex tem `saida`. **Nunca casava.** Toda
+linha de saída de um CSV que escrevesse a palavra corretamente saía com `direction: null`.
+
+Sobreviveu porque três fallbacks mascaravam: sinal negativo no valor, `DEFAULT_OUTFLOW_SOURCES` do
+cartão, e o botão "Marcar todas como Saída" na revisão. Apareceu no instante em que a planilha
+modelo — que escreve "Saída", porque é o certo — foi lida pelo próprio parser. **É o argumento a
+favor de fechar o laço no teste:** o arquivo que oferecemos ao usuário tem de ser legível pelo nosso
+próprio código, e ninguém tinha verificado isso.
+
+#### BP pelo MCP, impossível até aqui
+
+`aplicarImportacao` cravava `reportType: 'other'`. Duas consequências, ambas silenciosas:
+`getBpData` filtra `report_type='balance_sheet'` e nunca veria o documento; e
+`domainFromReportType('other')` devolve `'dre'`, então uma linha patrimonial só via naturezas de DRE
+para casar. Não havia onde informar a data de referência.
+
+A entrada da ferramenta ganhou o **nível de arquivo** — `tipoDeRelatorio`, `dataDeReferencia`,
+`conta`/`tipoDeConta`/`numeroDaConta` — que é o mesmo cabeçalho do contrato, revalidado no apply
+(a prévia mora em `agent_events`, que é jsonb).
+
+`resolverNaturezas` ganhou **filtro de domínio** e passou a delegar a `findCategoryByText`, a mesma
+regra da tela. Tinha a própria cópia — duas cópias significam que o mesmo arquivo pode entrar
+diferente conforme a porta.
+
+`accountId` recebia o **texto cru** do modelo; agora é `contaCanonica`, o mesmo identificador
+derivado que a tela produz.
+
+#### `data`, `descricao` e `sentido` viraram opcionais — e isso precisava de guarda
+
+Uma linha de balanço não tem nenhuma das três. Publicar duas variantes num `oneOf` faria o modelo
+escolher errado com frequência, então o schema as declara opcionais e **quem exige é o tipo de
+relatório**, validado por `normalizarLancamento`. O teste cobre os dois sentidos: movimento sem data
+e sem sentido continuam recusados, com o motivo.
+
+#### Um defeito que o próprio teste criou a chance de achar
+
+Quando **todas** as linhas eram recusadas, `novas` era 0 e a resposta dizia apenas *"Nenhuma linha
+para importar"* — sem o motivo. O modelo ficaria sem saber o que corrigir e tenderia a repetir a
+chamada igual. Os motivos passaram a ser montados antes do caso zero.
+
+#### Duas armadilhas de ambiente, para a próxima vez
+
+`pkill -f "next start"` **não mata o processo no Windows** — o processo é `node`, e o padrão não
+casa. O servidor velho seguia na porta 3100, o novo falhava em subir, e o teste rodava contra build
+antigo passando/falhando por motivo errado. O jeito certo é `netstat -ano | grep :3100` e
+`taskkill //PID <pid> //F`.
+
+E um `return` no meio de `main()` pula o `process.exit()` final: a conexão do postgres segura o event
+loop e o script "trava" sem erro. Foi o que pareceu travamento.
+
+#### Verificado
+
+**132/132** escrita do MCP contra `next start` de verdade (incluindo o balanço inteiro: recusa sem
+data de referência, filtro de domínio recusando natureza de DRE, `report_type` e `reference_date`
+gravados, toda linha herdando a data do arquivo, nenhuma com chave de dedup, e o balanço corrigido
+entrando de novo). **70/70** na tela, incluindo a planilha modelo lida pelo próprio parser e
+atravessando até o plano de gravação. **36/36** leitura. `tsc`, `next lint` e `next build` limpos.
+
+**Não verificado na tela:** subir um arquivo no formato canônico por `/upload` e ver que ele não
+consome IA.
+
+**Continua aberto, e é decisão de produto:** `seed_categories_for_org` não cria nenhuma natureza de
+Balanço, então organização nova importa o BP e `/balanco` continua vazio. A tela avisa; o plano
+patrimonial padrão não foi escolhido.
+
+---
+
 ### ✅ Sessão 4.5.B — a tela cumpre o contrato
 
 **O critério era o DoD literal da Sessão 2.8 do `GUIA_OPERACIONAL.md`**, escrito em 2026 e nunca

@@ -97,13 +97,23 @@ export function cabecalhoDoDocumento(
 function brutoDaLinha(r: TransactionStaging, ctx: CabecalhoDoArquivo): Record<string, unknown> {
   const valor = r.amount === null ? null : Number(r.amount)
 
+  // As colunas canônicas que não têm campo próprio na staging (conta, tipo e
+  // número de conta, moeda, id de origem, natureza) chegam por `rawData`,
+  // escritas pelo parser quando o cabeçalho é o publicado. Quando não são,
+  // ficam vazias e o nível de ARQUIVO responde por elas — que é o caso comum.
+  const raw = (r.rawData ?? {}) as Record<string, unknown>
+  const contrato = raw.__contrato && typeof raw.__contrato === 'object'
+    ? (raw.__contrato as Record<string, string>)
+    : {}
+
   if (ctx.tipoDeRelatorio === 'balanco') {
     // A linha de balanço é conta + saldo. Sem data, sem sentido, sem descrição:
     // a data vem do arquivo e o lado vem da natureza.
-    return { valor, natureza: r.description }
+    return { valor, natureza: contrato.natureza ?? r.description }
   }
 
   return {
+    ...contrato,
     competencia: r.date,
     caixa: r.effectiveDate,
     descricao: r.description,

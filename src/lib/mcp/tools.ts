@@ -41,6 +41,9 @@ import {
   linhaImportadaSchema, planejarImportacao, aplicarImportacao,
   MAX_LINHAS_IMPORTACAO, type LinhaImportada,
 } from '@/lib/import-write'
+import {
+  cabecalhoDoArquivoSchema, TIPOS_DE_RELATORIO, TIPOS_DE_CONTA, ROTULO_DE_CONTA,
+} from '@/lib/import-contract'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -1276,13 +1279,55 @@ const aplicarRegrasFerramenta: Ferramenta = {
 
 const FERRAMENTA_IMPORTACAO = 'importacao_de_lancamentos'
 
+/**
+ * A entrada tem DOIS NÍVEIS, como o contrato — e é o de cima que faltava.
+ *
+ * `aplicarImportacao` cravava `reportType: 'other'`, então balanço pelo MCP era
+ * impossível, e em silêncio: `getBpData` filtra `report_type='balance_sheet'` e
+ * `domainFromReportType('other')` devolve `'dre'`, de modo que uma linha
+ * patrimonial só via naturezas de DRE para casar. Também não havia onde informar
+ * a data de referência, que é o que vira a coluna de `/balanco`.
+ */
 const entradaPreverImportacao = alvo.extend({
   origem: z.string().trim().min(2).max(120).describe(
     'Como esta importação se chama, para quem for olhar depois. Ex.: "Extrato Itaú — março/2026". ' +
-    'Vira o rótulo da conta em /transacoes e o nome do documento.',
+    'Vira o nome do documento e o rótulo do lote em /transacoes.',
+  ),
+  tipoDeRelatorio: z.enum(TIPOS_DE_RELATORIO).default('movimentos').describe(
+    '"movimentos" (padrão) para extrato, fatura ou relatório de lançamentos — alimenta DRE e fluxo ' +
+    'ao mesmo tempo, pelas duas datas. "balanco" para Balanço Patrimonial, que é fotografia numa ' +
+    'data: cada linha é conta patrimonial + saldo, sem data e sem sentido próprios.',
+  ),
+  dataDeReferencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe(
+    'OBRIGATÓRIA quando tipoDeRelatorio = "balanco": a data do snapshot (em geral o último dia do ' +
+    'mês). É ela que vira a coluna do Balanço e a data de cada linha. Ignorada em movimentos.',
+  ),
+  conta: z.string().trim().max(200).optional().describe(
+    'Nome da conta/cartão do arquivo INTEIRO — um extrato é de uma conta só. Ex.: "Itaú PJ", ' +
+    '"Caixa", "Cartão BTG". Preencher aqui CRIA a conta se ela ainda não existir, e ela passa a ' +
+    'aparecer em Contas e no filtro de Transações. Só use `conta` por linha se o arquivo misturar ' +
+    'mais de uma conta.',
+  ),
+  tipoDeConta: z.enum(TIPOS_DE_CONTA).optional().describe(
+    `Tipo da conta do arquivo: ${TIPOS_DE_CONTA.map(t => `${t} (${ROTULO_DE_CONTA[t]})`).join(', ')}.`,
+  ),
+  numeroDaConta: z.string().trim().max(60).optional().describe(
+    'Número ou final da conta/cartão do arquivo, quando o extrato traz.',
   ),
   linhas: z.array(linhaImportadaSchema).min(1).max(MAX_LINHAS_IMPORTACAO),
 })
+
+/** O nível de arquivo, validado pelo contrato antes de qualquer leitura de linha. */
+function cabecalhoDaEntrada(a: z.infer<typeof entradaPreverImportacao>) {
+  return cabecalhoDoArquivoSchema.safeParse({
+    tipoDeRelatorio: a.tipoDeRelatorio,
+    dataDeReferencia: a.dataDeReferencia ?? null,
+    conta: a.conta ?? null,
+    tipoDeConta: a.tipoDeConta ?? null,
+    numeroDaConta: a.numeroDaConta ?? null,
+    moeda: 'BRL',
+  })
+}
 
 const preverImportacao: Ferramenta = {
   nome: 'prever_importacao',
@@ -1295,6 +1340,9 @@ const preverImportacao: Ferramenta = {
     'lotes que se sobrepõem) não duplica nada — a prévia diz quantas já existiam. ' +
     'Cada linha pode trazer `categoria` com o código ou o nome do plano de contas; o que casar ' +
     'entra já classificado, o que não casar vai para a fila de classificação. ' +
+    'Serve também para BALANÇO PATRIMONIAL: use tipoDeRelatorio "balanco" com dataDeReferencia, e ' +
+    'cada linha vira conta patrimonial (`categoria`) + saldo (`valor`). Balanço NÃO deduplica, ' +
+    'porque snapshot se substitui — reenviar o balanço corrigido entra de novo, de propósito. ' +
     `Teto de ${MAX_LINHAS_IMPORTACAO} linhas por chamada — arquivo maior vai em chamadas seguidas ` +
     'com a MESMA origem. Mostre o resumo ao usuário e obtenha o aceite antes de aplicar.',
   entrada: entradaPreverImportacao,
@@ -1303,7 +1351,10 @@ const preverImportacao: Ferramenta = {
     const a = args as z.infer<typeof entradaPreverImportacao>
     const scope = await escopoDe(ctx, a.organizationId)
 
-    const plano = await planejarImportacao(scope.organizationId, a.linhas)
+    const cab = cabecalhoDaEntrada(a)
+    if (!cab.success) throw new Error(cab.error.issues.map(i => i.message).join(' '))
+
+    const plano = await planejarImportacao(scope.organizationId, cab.data, a.linhas)
     if ('error' in plano) throw new Error(plano.error)
 
     const resumo = {
@@ -1317,14 +1368,26 @@ const preverImportacao: Ferramenta = {
       amostra: plano.amostra,
     }
 
+    // Motivos das recusas, montados ANTES do caso zero. Quando todas as linhas
+    // são recusadas, `novas` é 0 e a resposta antiga dizia só "nenhuma linha
+    // para importar" — o modelo ficava sem saber o que corrigir e tenderia a
+    // repetir a chamada igual. Dizer o motivo é o que transforma erro em
+    // instrução.
+    const motivosRecusa = Array.from(new Set(plano.recusadas.map(r => r.motivo))).slice(0, 5)
+
     if (plano.novas === 0) {
       return {
         previaId: null,
         resumo,
-        aviso: plano.duplicadas > 0
-          ? `Todas as ${plano.duplicadas} linhas já estão no banco. Nada a importar — o arquivo ` +
-            'já tinha sido importado antes.'
-          : 'Nenhuma linha para importar.',
+        recusadas: plano.recusadas.length,
+        ...(motivosRecusa.length ? { motivos: motivosRecusa } : {}),
+        aviso: plano.recusadas.length > 0
+          ? `Nenhuma linha entrou: ${plano.recusadas.length} recusada(s) — ${motivosRecusa.join(' · ')}. ` +
+            'Corrija as linhas e chame de novo.'
+          : plano.duplicadas > 0
+            ? `Todas as ${plano.duplicadas} linhas já estão no banco. Nada a importar — o arquivo ` +
+              'já tinha sido importado antes.'
+            : 'Nenhuma linha para importar.',
       }
     }
 
@@ -1334,12 +1397,22 @@ const preverImportacao: Ferramenta = {
       userId: ctx.userId,
       clientId: ctx.clientId,
       resumo,
-      pedido: { origem: a.origem, linhas: a.linhas },
+      pedido: { origem: a.origem, linhas: a.linhas, cabecalho: cab.data },
     })
 
     const avisos: string[] = []
     if (plano.duplicadas > 0) {
       avisos.push(`${plano.duplicadas} linha(s) já existem no banco e serão ignoradas.`)
+    }
+    if (plano.recusadas.length > 0) {
+      avisos.push(
+        `${plano.recusadas.length} linha(s) recusadas e NÃO entram: ${motivosRecusa.join(' · ')}. ` +
+        'Corrija e chame prever_importacao de novo, ou siga sem elas.',
+      )
+    }
+    if (plano.tipoDeRelatorio === 'balanco') {
+      avisos.push('Balanço não deduplica: se este mês já foi importado, o snapshot novo entra ' +
+        'inteiro e passa a ser o que a tela de Balanço mostra.')
     }
     if (plano.naturezasNaoResolvidas.length > 0) {
       avisos.push(
@@ -1388,9 +1461,19 @@ const aplicarImportacaoFerramenta: Ferramenta = {
     })
     if (!previa.ok) throw new Error(previa.motivo)
 
-    const pedido = previa.pedido as { origem: string; linhas: LinhaImportada[] }
+    const pedido = previa.pedido as {
+      origem: string
+      linhas: LinhaImportada[]
+      cabecalho?: unknown
+    }
 
-    const agora = await planejarImportacao(scope.organizationId, pedido.linhas)
+    // O cabeçalho é revalidado pelo contrato em vez de aceito como veio: a
+    // prévia mora em `agent_events`, que é jsonb, e aplicar sobre um nível de
+    // arquivo não validado gravaria um balanço sem data de referência.
+    const cab = cabecalhoDoArquivoSchema.safeParse(pedido.cabecalho ?? {})
+    if (!cab.success) throw new Error(cab.error.issues.map(i => i.message).join(' '))
+
+    const agora = await planejarImportacao(scope.organizationId, cab.data, pedido.linhas)
     if ('error' in agora) throw new Error(agora.error)
     const problema = divergiu(previa.resumo, {
       quantidade: agora.novas, valorTotal: agora.entradas + agora.saidas,
@@ -1399,7 +1482,7 @@ const aplicarImportacaoFerramenta: Ferramenta = {
 
     const inicio = Date.now()
     const r = await aplicarImportacao(
-      scope.organizationId, ctx.userId, pedido.origem, pedido.linhas, agora,
+      scope.organizationId, ctx.userId, pedido.origem, cab.data, pedido.linhas, agora,
     )
 
     // A categorização é assíncrona e pode falhar sem que a importação falhe —

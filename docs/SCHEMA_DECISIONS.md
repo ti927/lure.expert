@@ -1101,6 +1101,32 @@ regra e para aí.
 
 ---
 
+### Adendo da 4.5.C — o caminho rápido, e o defeito que ele expôs
+
+O parser de planilha passou a testar o cabeçalho contra o formato publicado **antes** de qualquer
+chamada de IA (`canonicalMapping` em `parsers/excel-csv.ts`). Três regras que não podem se perder:
+
+1. **Coluna extra desconhecida não desqualifica.** Export de ERP sempre traz colunas a mais.
+2. **Cabeçalho que não casa cai no caminho de hoje, inalterado.** É o que mantém a promessa da
+   Fase 2 ao dono de PME.
+3. **`extraction_method='template'` mudou de significado.** Era o sistema de fingerprint da Fase 2,
+   descartado e sem escritor desde então; agora quer dizer "lido pelo formato canônico, sem IA", e é
+   o que `verify-import-contract.ts` conta.
+
+**O defeito que só apareceu ao fechar o laço:** `deriveDirection` comparava a coluna de sentido com
+`/^(d|debito|saida|…)/` sobre o texto apenas em minúsculas. `"Saída".toLowerCase()` mantém o acento,
+e o regex tem `saida` — **nunca casava**. Toda linha de saída de um CSV que escrevesse a palavra
+corretamente saía com `direction: null`, mascarado por três fallbacks (sinal negativo no valor,
+`DEFAULT_OUTFLOW_SOURCES` do cartão, e o botão "Marcar todas como Saída" na revisão). Só apareceu
+quando a planilha modelo — que escreve "Saída", porque é o certo — foi lida pelo próprio parser.
+
+**A lição, e ela vale além deste arquivo:** o artefato que o produto **oferece** ao usuário tem de
+ser exercitado pelo código do produto num teste. A planilha era gerada a partir das colunas (o que
+garantia que ela casasse com a *especificação*) e ninguém tinha verificado que ela casava com o
+*parser*.
+
+---
+
 ## Decisão 22 — Conta manual é uma `data_sources`, não uma tabela nova (Sessão 4.5.B)
 
 **A pergunta que originou a decisão**, do Julio: *"tem que existir um cadastro de contas em algum

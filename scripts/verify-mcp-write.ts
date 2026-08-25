@@ -870,6 +870,98 @@ async function main() {
      WHERE organization_id = ${ORG}::uuid AND date >= '2026-04-01'`)
   t(Number(aposSobreposicao.n) === 6, `${aposSobreposicao.n} no total, não 11 — a sobreposição não dobrou`)
 
+  // ── Balanço pelo MCP: impossível até a 4.5.C ────────────────────────────
+  // `aplicarImportacao` cravava `reportType: 'other'`. Consequência dupla e
+  // silenciosa: `getBpData` filtra `report_type='balance_sheet'` e nunca veria o
+  // documento; e `domainFromReportType('other')` devolve `'dre'`, então uma
+  // linha patrimonial só via naturezas de DRE para casar.
+  const [{ n: folhasBpAntes }] = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM categories
+     WHERE organization_id = ${ORG}::uuid
+       AND type IN ('ativo_circulante','ativo_nao_circulante','passivo_circulante',
+                    'passivo_nao_circulante','patrimonio_liquido')`)
+  t(Number(folhasBpAntes) === 0,
+    'o seed do plano de contas NÃO cria naturezas de BP — organização nova não teria contra o que casar')
+
+  const [paiBp] = await db.insert(categories).values({
+    organizationId: ORG, code: '11.1', name: 'Ativo Circulante', type: 'ativo_circulante',
+  }).returning({ id: categories.id })
+  await db.insert(categories).values([
+    { organizationId: ORG, code: '11.1.01', name: 'Caixa e Equivalentes', type: 'ativo_circulante', parentId: paiBp.id },
+    { organizationId: ORG, code: '11.1.02', name: 'Contas a Receber',     type: 'ativo_circulante', parentId: paiBp.id },
+  ])
+
+  const linhasBp = [
+    { categoria: '11.1.01', descricao: 'Caixa e Equivalentes', valor: 45200 },
+    { categoria: 'Contas a Receber', descricao: 'Contas a Receber', valor: 310000 },
+    // Natureza de DRE num balanço: NÃO pode casar. O filtro de domínio é o que
+    // impede uma linha patrimonial de virar despesa.
+    { categoria: naturezaComCodigo.codigo, descricao: 'Linha com natureza de DRE', valor: 100 },
+  ]
+
+  const bpSemData = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: 'Balanço 01/2026', tipoDeRelatorio: 'balanco', linhas: linhasBp,
+  })
+  t(bpSemData.isError && bpSemData.texto.includes('data de referência'),
+    `balanço sem dataDeReferencia é recusado, dizendo que é ela que vira a coluna e a data da linha` +
+    (bpSemData.texto.includes('data de referência') ? '' : ` [texto: ${bpSemData.texto.slice(0, 200)}]`))
+
+  const bp = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: 'Balanço 01/2026',
+    tipoDeRelatorio: 'balanco', dataDeReferencia: '2026-01-31', linhas: linhasBp,
+  })
+  const b1 = bp.dados as {
+    previaId: string
+    resumo: { quantidade: number; comNatureza: number }
+    avisos?: string[]
+  }
+  // Sem early-return: `main` termina em `process.exit`, e sair antes dele deixa a
+  // conexão do postgres segurando o event loop — o script "trava" sem erro.
+  if (bp.isError || !b1) throw new Error(`balanço com data falhou: ${bp.texto.slice(0, 300)}`)
+  t(!bp.isError && b1.resumo.quantidade === 3, `balanço: 3 linhas a inserir (foram ${b1.resumo.quantidade})`)
+  t(b1.resumo.comNatureza === 2,
+    'casam as 2 patrimoniais (uma por código, outra por nome) e NÃO a natureza de DRE — o filtro de domínio')
+  t(b1.avisos?.some(a => a.includes('não deduplica')) === true,
+    'e o aviso diz que balanço não deduplica: snapshot se substitui')
+
+  const apBp = await chamar(comEscrita, 'aplicar_importacao', {
+    organizationId: ORG, previaId: b1.previaId, confirmacao: 'aplicar',
+  })
+  const rBp = apBp.dados as { lancamentosInseridos: number; documentId: string }
+  t(!apBp.isError && rBp.lancamentosInseridos === 3, `balanço gravou ${rBp.lancamentosInseridos} linhas`)
+
+  const [docBp] = await db.execute<{ report_type: string; reference_date: string | null }>(sql`
+    SELECT report_type, reference_date::text FROM documents WHERE id = ${rBp.documentId}::uuid`)
+  t(docBp.report_type === 'balance_sheet',
+    'o documento entra como balance_sheet — sem isso `getBpData` jamais o enxergaria')
+  t(docBp.reference_date === '2026-01-31',
+    'e com a data de referência, que é a coluna de /balanco e a data de cada linha')
+
+  const [linhasGravadas] = await db.execute<{ n: number; naData: number; entradas: number; comCat: number; comChave: number }>(sql`
+    SELECT COUNT(*)::int AS n,
+           COUNT(*) FILTER (WHERE date = '2026-01-31')::int          AS "naData",
+           COUNT(*) FILTER (WHERE direction = 'inflow')::int         AS entradas,
+           COUNT(*) FILTER (WHERE category_id IS NOT NULL)::int      AS "comCat",
+           COUNT(*) FILTER (WHERE external_id IS NOT NULL)::int      AS "comChave"
+      FROM transactions WHERE document_id = ${rBp.documentId}::uuid`)
+  t(Number(linhasGravadas.naData) === 3, 'toda linha herda a data do arquivo — um balanço não tem data por linha')
+  t(Number(linhasGravadas.entradas) === 3, 'toda linha entra como inflow — quem dá o lado é a natureza')
+  t(Number(linhasGravadas.comCat) === 2, '2 já classificadas em naturezas patrimoniais')
+  t(Number(linhasGravadas.comChave) === 0,
+    'e NENHUMA recebe chave de dedup — se recebesse, reenviar o balanço corrigido deixaria o documento novo vazio')
+
+  // Reenviar o balanço corrigido PRECISA entrar: `getBpAllDates` escolhe o
+  // documento mais recente da data, e se a segunda importação deduplicasse
+  // inteira, a tela passaria a mostrar o vazio.
+  const bp2 = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: 'Balanço 01/2026 (corrigido)',
+    tipoDeRelatorio: 'balanco', dataDeReferencia: '2026-01-31',
+    linhas: [{ categoria: '11.1.01', descricao: 'Caixa e Equivalentes', valor: 47000 }],
+  })
+  const b2 = bp2.dados as { previaId: string; resumo: { quantidade: number; duplicadasIgnoradas: number } }
+  t(b2.resumo.quantidade === 1 && b2.resumo.duplicadasIgnoradas === 0,
+    'o balanço corrigido entra de novo, sem ser tratado como duplicata')
+
   // ── Recusas ─────────────────────────────────────────────────────────────
   // A `origem` aqui é VÁLIDA de propósito. Com `origem: 'x'` (abaixo do mínimo)
   // a primeira queixa do Zod seria sobre ela, e estes dois testes passariam sem
@@ -897,6 +989,40 @@ async function main() {
   t(sentidoRuim.isError && sentidoRuim.texto.includes('sentido'),
     'sentido fora de inflow/outflow é recusado apontando o campo')
 
+  // `data`, `descricao` e `sentido` viraram OPCIONAIS no schema publicado, porque
+  // uma linha de balanço não tem nenhuma das três. Quem exige cada uma passou a
+  // ser o tipo de relatório — e precisa exigir de verdade, senão a mudança que
+  // liberou o balanço teria afrouxado os movimentos em silêncio.
+  const semData = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: ORIGEM_OK,
+    linhas: [{ descricao: 'SEM DATA', valor: 50, sentido: 'outflow' }],
+  })
+  const rSemData = semData.dados as { previaId: string | null; recusadas?: number; motivos?: string[] } | null
+  t(rSemData?.previaId === null && rSemData?.recusadas === 1
+    && rSemData?.motivos?.some(m => m.includes('competência')) === true,
+    'movimento SEM data é recusado E o motivo aparece — o opcional é do balanço, não daqui')
+
+  const semSentido = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: ORIGEM_OK,
+    linhas: [{ data: '2026-04-01', descricao: 'SEM SENTIDO', valor: 50 }],
+  })
+  const rSemSentido = semSentido.dados as { previaId: string | null; motivos?: string[] } | null
+  t(rSemSentido?.previaId === null && rSemSentido?.motivos?.some(m => m.includes('Sentido')) === true,
+    'movimento SEM sentido é recusado E o motivo aparece')
+
+  // A recusa é por LINHA: uma ruim não pode custar as boas.
+  const loteMisto = await chamar(comEscrita, 'prever_importacao', {
+    organizationId: ORG, origem: ORIGEM_OK,
+    linhas: [
+      { data: '2026-05-01', descricao: 'BOA', valor: 10, sentido: 'outflow' },
+      { descricao: 'RUIM, SEM DATA', valor: 20, sentido: 'outflow' },
+      { data: '2026-05-03', descricao: 'OUTRA BOA', valor: 30, sentido: 'inflow' },
+    ],
+  })
+  const rLoteMisto = loteMisto.dados as { resumo: { quantidade: number }; avisos?: string[] }
+  t(rLoteMisto?.resumo?.quantidade === 2 && rLoteMisto.avisos?.some(a => a.includes('recusada')) === true,
+    'lote misto: as 2 boas seguem e a ruim é nomeada — recusa é por linha, não por lote')
+
   const alheia = await chamar(soLeitura, 'prever_importacao', {
     organizationId: ORG, origem: 'x', linhas: arquivo,
   })
@@ -910,9 +1036,10 @@ async function main() {
     SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
            COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
     FROM agent_events WHERE organization_id = ${ORG}::uuid`)
-  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 8,
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 9,
     `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — classificação, dois rateios, ` +
-    'um lançamento orçado, uma cópia do realizado, um lote de regras e duas importações')
+    'um lançamento orçado, uma cópia do realizado, um lote de regras, duas importações de movimentos ' +
+    'e uma de balanço')
 
   const [carimbo] = await db.execute<{ tem: boolean }>(sql`
     SELECT (payload ? 'confirmed_at' AND payload ? 'applied_at') AS tem

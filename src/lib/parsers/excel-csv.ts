@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx'
 import { registrarUsoDeIa, tokensDaResposta } from '@/lib/ai-usage'
 import { resolverAcessoIa } from '@/lib/ai-access'
 import { parseAmount, parseDate } from '@/lib/format'
+import { resolverCabecalho, lerSentido, type TipoDeRelatorio } from '@/lib/import-contract'
 import type { ParseContext } from './context'
 
 const MODELO = 'claude-haiku-4-5-20251001'
@@ -24,6 +25,15 @@ type ColumnMapping = {
   direction: number | null
   description: number | null
   amountSignIndicatesDirection: boolean
+  /**
+   * Índices das colunas canônicas que não têm campo próprio no `StagingRow`
+   * (conta, tipo e número de conta, moeda, id de origem, natureza). O valor de
+   * cada uma vai para `rawData.__contrato`, de onde `staging-import.ts` o lê ao
+   * normalizar. Vazio quando o cabeçalho não é canônico.
+   */
+  contrato: Record<string, number>
+  /** true quando o cabeçalho casou com o formato publicado — nenhuma IA foi chamada. */
+  canonico: boolean
   // Índices de colunas que descrevem hierarquia/categoria do lançamento
   // (ex: Grupo, Família, Subgrupo, Departamento) — sinais ADVISORY pra o
   // categorizador LLM. Não casam 1:1 com folhas do plano de contas.
@@ -119,19 +129,108 @@ function detectAuthoritativeColumns(header: string[]): {
   return { categoriaFilhoIdx, categoriaPaiIdx, tipoNaturezaIdx }
 }
 
+/**
+ * O caminho rápido: cabeçalho no formato publicado → leitura determinística.
+ *
+ * **É o princípio nº 2 do CLAUDE.md sendo cumprido, não subvertido.** "LLM é
+ * última opção" e este parser era LLM-first: chamava a IA em todo upload, de
+ * todo formato, porque nunca houve um formato para esperar. Agora há —
+ * `docs/FORMATO_DE_IMPORTACAO.md`, a planilha modelo que `/upload` oferece, e o
+ * que a IA do MCP produz.
+ *
+ * **Casar não é obrigatório e nunca será.** A promessa da Fase 2 ao dono de PME
+ * é "sobe relatório, qualquer formato", e ela fica de pé: cabeçalho que não casa
+ * cai no caminho de hoje, inalterado. Isto é um atalho adicional, não um
+ * requisito.
+ *
+ * **Coluna extra desconhecida não desqualifica.** Export de ERP sempre traz
+ * colunas a mais; recusar por causa delas anularia o ganho justamente nos
+ * arquivos reais. `resolverCabecalho` já separa `desconhecidas` de `faltando`.
+ */
+function canonicalMapping(header: string[], tipo: TipoDeRelatorio): ColumnMapping | null {
+  const r = resolverCabecalho(header, tipo)
+  if (!r.completo) return null
+
+  const idx = (campo: string) => (r.mapa[campo] ?? null)
+
+  // As colunas canônicas que viram campo do `StagingRow` saem aqui; as demais
+  // (conta, tipo/número de conta, moeda, id de origem, natureza) vão para
+  // `contrato` e viajam em `rawData`.
+  const contrato: Record<string, number> = {}
+  for (const campo of ['conta', 'tipoDeConta', 'numeroDaConta', 'moeda', 'idDeOrigem', 'natureza']) {
+    const i = r.mapa[campo]
+    if (i !== undefined) contrato[campo] = i
+  }
+
+  if (tipo === 'balanco') {
+    // A linha de balanço é conta + saldo. Não tem data nem sentido próprios: a
+    // data vem do arquivo e o lado vem da natureza.
+    return {
+      date: null, effectiveDate: null,
+      amount: idx('valor'),
+      direction: null,
+      description: idx('natureza'),
+      amountSignIndicatesDirection: false,
+      contrato, canonico: true,
+      categoryHints: [],
+      // A natureza da linha É a conta patrimonial — é ela que a camada 0 casa
+      // contra o plano de contas, e sem esse casamento o BP importado é inútil,
+      // porque `getBpData` soma por tipo de categoria.
+      categoriaFilhoIdx: idx('natureza'),
+      categoriaPaiIdx: null,
+      tipoNaturezaIdx: null,
+    }
+  }
+
+  // O arquivo canônico traz o valor SEMPRE positivo — o sinal vem do sentido,
+  // que é coluna obrigatória. Daí `amountSignIndicatesDirection` ser falso: ler
+  // o sinal aqui inverteria a direção de quem escreveu "-100" por hábito.
+  return {
+    date: idx('competencia'),
+    effectiveDate: idx('caixa'),
+    amount: idx('valor'),
+    direction: idx('sentido'),
+    description: idx('descricao'),
+    amountSignIndicatesDirection: false,
+    contrato, canonico: true,
+    categoryHints: [],
+    categoriaFilhoIdx: idx('natureza'),
+    categoriaPaiIdx: null,
+    tipoNaturezaIdx: null,
+  }
+}
+
 async function detectColumnMapping(
   header: string[],
   sampleRows: string[][],
   ctx: ParseContext,
+  tipo: TipoDeRelatorio,
 ): Promise<ColumnMapping> {
+  // Caminho rápido primeiro: quando o cabeçalho é o publicado, nenhuma chamada
+  // de IA acontece e nada precisa ser adivinhado.
+  const canonico = canonicalMapping(header, tipo)
+  if (canonico) {
+    // Colunas EXTRA de plano de contas (Natureza Pai, Tipo Natureza) continuam
+    // valendo: o formato canônico permite colunas a mais, e essas desempatam
+    // homônimos na camada 0.
+    const extras = detectAuthoritativeColumns(header)
+    return {
+      ...canonico,
+      categoriaPaiIdx: extras.categoriaPaiIdx,
+      tipoNaturezaIdx: extras.tipoNaturezaIdx,
+      categoriaFilhoIdx: canonico.categoriaFilhoIdx ?? extras.categoriaFilhoIdx,
+    }
+  }
+
   const authoritative = detectAuthoritativeColumns(header)
+  const base = { contrato: {} as Record<string, number>, canonico: false }
   // Tenta LLM primeiro pra advisory hints + colunas semânticas
   const llmMapping = await tryLlmMapping(header, sampleRows, ctx)
   if (llmMapping && validateMapping(llmMapping, header.length)) {
-    return { ...llmMapping, ...authoritative }
+    return { ...llmMapping, ...authoritative, ...base }
   }
   // Fallback heurístico
-  return { ...heuristicMapping(header, sampleRows), ...authoritative }
+  return { ...heuristicMapping(header, sampleRows), ...authoritative, ...base }
 }
 
 async function tryLlmMapping(
@@ -191,6 +290,8 @@ async function tryLlmMapping(
       categoriaFilhoIdx: null,  // detectado separadamente em detectAuthoritativeColumns
       categoriaPaiIdx: null,
       tipoNaturezaIdx: null,
+      contrato: {},
+      canonico: false,
     }
   } catch {
     return null
@@ -258,6 +359,8 @@ function heuristicMapping(header: string[], sampleRows: string[][]): ColumnMappi
     categoriaFilhoIdx: null,  // detectado separadamente em detectAuthoritativeColumns
     categoriaPaiIdx: null,
     tipoNaturezaIdx: null,
+    contrato: {},
+    canonico: false,
   }
 }
 
@@ -276,7 +379,21 @@ function deriveDirection(
   fallback?: 'inflow' | 'outflow',
 ): 'inflow' | 'outflow' | null {
   if (mapping.direction !== null) {
-    const v = (row[mapping.direction] ?? '').toLowerCase().trim()
+    const bruto = row[mapping.direction] ?? ''
+
+    // Vocabulário do contrato primeiro: é ele que a planilha modelo escreve e
+    // que a IA do MCP produz, e ele derruba acento antes de comparar.
+    const doContrato = lerSentido(bruto)
+    if (doContrato) return doContrato
+
+    // ACENTO: esta comparação rodava sobre o texto CRU, e por isso **"Saída"
+    // nunca casava** — o regex tem `saida` e o `.toLowerCase()` não tira o
+    // acento. Toda linha de saída de um CSV que escrevesse a palavra
+    // corretamente saía com `direction: null`. Ficou mascarado por três
+    // fallbacks (sinal negativo no valor, `DEFAULT_OUTFLOW_SOURCES` do cartão,
+    // e o botão "Marcar todas como Saída" na revisão), e apareceu quando a
+    // planilha modelo — que escreve "Saída" — foi lida pelo próprio parser.
+    const v = bruto.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
     if (/^(c|credito|entrada|recebim|in|inflow|\+)/.test(v)) return 'inflow'
     if (/^(d|debito|saida|pagamen|out|outflow|-)/.test(v)) return 'outflow'
   }
@@ -294,35 +411,43 @@ export async function parseExcelOrCsv(
   buffer: Buffer,
   ctx: ParseContext,
   mimeType?: string,
-): Promise<{ rows: StagingRow[]; warnings: string[]; detectedHints: string[] }> {
+  tipoDeRelatorio: TipoDeRelatorio = 'movimentos',
+): Promise<{ rows: StagingRow[]; warnings: string[]; detectedHints: string[]; canonico: boolean }> {
   const warnings: string[] = []
 
   let tabular: string[][]
   try {
     tabular = readTabular(buffer, mimeType)
   } catch (err) {
-    return { rows: [], warnings: [`Falha ao ler arquivo: ${err instanceof Error ? err.message : String(err)}`], detectedHints: [] }
+    return { rows: [], warnings: [`Falha ao ler arquivo: ${err instanceof Error ? err.message : String(err)}`], detectedHints: [], canonico: false }
   }
 
   if (tabular.length === 0) {
-    return { rows: [], warnings: ['Arquivo sem linhas legíveis'], detectedHints: [] }
+    return { rows: [], warnings: ['Arquivo sem linhas legíveis'], detectedHints: [], canonico: false }
   }
   if (tabular.length === 1) {
-    return { rows: [], warnings: ['Arquivo só tem cabeçalho, sem linhas de dados'], detectedHints: [] }
+    return { rows: [], warnings: ['Arquivo só tem cabeçalho, sem linhas de dados'], detectedHints: [], canonico: false }
   }
 
   const header = tabular[0].map(c => String(c ?? ''))
   const dataRows = tabular.slice(1).map(row => row.map(c => String(c ?? '')))
 
   const sampleSize = Math.min(20, dataRows.length)
-  const mapping = await detectColumnMapping(header, dataRows.slice(0, sampleSize), ctx)
+  const mapping = await detectColumnMapping(header, dataRows.slice(0, sampleSize), ctx, tipoDeRelatorio)
 
-  if (mapping.date === null && mapping.amount === null) {
-    warnings.push('Não conseguimos identificar colunas de data e valor. Verifique se o cabeçalho está na primeira linha e usa nomes reconhecíveis (Data, Valor, etc.).')
-    return { rows: [], warnings, detectedHints: [] }
+  // O balanço não tem coluna de data — a data é do ARQUIVO. Exigi-la aqui
+  // devolveria zero linha para todo balanço, que é uma variante do defeito que
+  // manteve `/balanco` vazio desde sempre.
+  const exigeData = tipoDeRelatorio !== 'balanco'
+
+  if (mapping.amount === null && (!exigeData || mapping.date === null)) {
+    warnings.push(exigeData
+      ? 'Não conseguimos identificar colunas de data e valor. Verifique se o cabeçalho está na primeira linha e usa nomes reconhecíveis (Data, Valor, etc.).'
+      : 'Não conseguimos identificar a coluna de saldo. O balanço precisa de uma coluna Saldo (ou Valor).')
+    return { rows: [], warnings, detectedHints: [], canonico: mapping.canonico }
   }
 
-  if (mapping.date === null) warnings.push('Coluna de data não detectada — linhas terão date=null')
+  if (exigeData && mapping.date === null) warnings.push('Coluna de data não detectada — linhas terão date=null')
   if (mapping.amount === null) warnings.push('Coluna de valor não detectada — linhas terão amount=null')
 
   // Deduplica hints contra colunas semânticas e autoritativas (LLM/heurística
@@ -375,6 +500,18 @@ export async function parseExcelOrCsv(
       rawData.__categoryMapping = map
     }
 
+    // As colunas canônicas sem campo próprio no `StagingRow` (conta, tipo e
+    // número de conta, moeda, id de origem, natureza) viajam aqui e são lidas
+    // por `staging-import.ts` ao normalizar. Vão em `rawData` de propósito, em
+    // vez de virarem colunas: `raw_data` já é o espelho fiel do que o arquivo
+    // disse, e é isso que torna a camada 0 auditável.
+    const contrato: Record<string, string> = {}
+    for (const [campo, idx] of Object.entries(mapping.contrato)) {
+      const v = (row[idx] ?? '').trim()
+      if (v) contrato[campo] = v
+    }
+    if (Object.keys(contrato).length > 0) rawData.__contrato = contrato
+
     const date = mapping.date !== null ? parseDate(row[mapping.date]) : null
     const effectiveDate = mapping.effectiveDate !== null ? parseDate(row[mapping.effectiveDate]) : null
     const amount = mapping.amount !== null ? parseAmount(row[mapping.amount]) : null
@@ -395,5 +532,5 @@ export async function parseExcelOrCsv(
   })
 
   const detectedHints = hintIdxs.map(i => (header[i] || `col_${i}`).trim()).filter(Boolean)
-  return { rows: stagingRows, warnings, detectedHints }
+  return { rows: stagingRows, warnings, detectedHints, canonico: mapping.canonico }
 }

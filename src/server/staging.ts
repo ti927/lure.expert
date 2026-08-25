@@ -437,16 +437,20 @@ export async function approveAndInsert(documentId: string) {
       if (hints && Object.keys(hints).length > 0) metadata.categoryHints = hints
       if (mapping && (mapping.categoriaFilho || mapping.categoriaPai || mapping.tipoNatureza)) metadata.categoryMapping = mapping
 
-      // Camada 0, em duas formas. O CSV com colunas separadas (Pai/Filho/Tipo)
-      // segue pelo caminho de sempre. O balanço vai pelo texto: a linha de BP É
-      // a conta patrimonial, e sem casá-la o lançamento entra sem natureza — o
-      // que tornaria o BP inútil, porque `getBpData` soma justamente por tipo de
-      // categoria e ignoraria a linha inteira.
+      // Camada 0, em duas formas complementares.
+      //
+      // `findCategoryByCsvMapping` resolve o CSV de ERP com colunas separadas
+      // (Pai / Filho / Tipo) e desempate cumulativo — o caminho de sempre.
+      //
+      // `findCategoryByText` resolve o campo ÚNICO, que é o da coluna `Natureza`
+      // do formato canônico e o da linha de balanço (onde a linha É a conta
+      // patrimonial). Ele acrescenta o casamento por CÓDIGO, que o primeiro não
+      // faz. Para o balanço não é refinamento e sim requisito: sem natureza, a
+      // linha entra e `getBpData` — que soma por tipo de categoria — a ignora,
+      // deixando `/balanco` vazio depois de uma importação bem-sucedida.
       const csvMatchId =
         findCategoryByCsvMapping(mapping, domainLeaves)
-        ?? (plano.cabecalho.tipoDeRelatorio === 'balanco'
-          ? findCategoryByText(valor.naturezaBruta, domainLeaves)
-          : null)
+        ?? findCategoryByText(valor.naturezaBruta, domainLeaves)
 
       return {
         organizationId,
