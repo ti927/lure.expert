@@ -971,7 +971,7 @@ function PaiRow({
       {!node.isActive && (
         <Badge variant="secondary" className="text-xs shrink-0">Arquivada</Badge>
       )}
-      {showVisibilityFlags && <VisibilityToggles node={node} onToggle={onToggleVisibilityRequest} />}
+      {showVisibilityFlags && <VisibilityToggles node={node} onToggle={onToggleVisibilityRequest} ehPai />}
       {showVisibilityFlags && <OpexCapexBadge node={node} onToggle={onSetOpexCapexRequest} />}
       <Button
         size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground gap-1"
@@ -1118,16 +1118,28 @@ function OpexCapexBadge({
 function VisibilityToggles({
   node,
   onToggle,
+  ehPai = false,
 }: {
   node: CategoryItem
   onToggle: (id: string, field: 'hideInDre' | 'hideInCashflow', current: boolean) => void
+  /**
+   * Numa Natureza Pai o selo vale para o RAMO INTEIRO (desde 26/ago). Antes
+   * disso ele salvava e não fazia efeito nenhum: só Natureza Filho recebe
+   * lançamento, e as queries liam o selo da categoria do lançamento. O texto
+   * muda para dizer o que o clique faz — foi confundindo os dois que o "ocultar
+   * Devoluções" pareceu não funcionar.
+   */
+  ehPai?: boolean
 }) {
+  const ramo = ehPai ? ' e todos os filhos' : ''
   return (
     <div className="flex items-center gap-1 shrink-0">
       <button
         type="button"
         onClick={() => onToggle(node.id, 'hideInDre', node.hideInDre)}
-        title={node.hideInDre ? 'Oculto na DRE — clique para exibir' : 'Visível na DRE — clique para ocultar'}
+        title={node.hideInDre
+          ? `Oculto na DRE${ramo} — clique para exibir`
+          : `Visível na DRE — clique para ocultar${ramo}`}
         className={cn(
           'text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors',
           node.hideInDre
@@ -1140,7 +1152,9 @@ function VisibilityToggles({
       <button
         type="button"
         onClick={() => onToggle(node.id, 'hideInCashflow', node.hideInCashflow)}
-        title={node.hideInCashflow ? 'Oculto no Fluxo de Caixa — clique para exibir' : 'Visível no Fluxo de Caixa — clique para ocultar'}
+        title={node.hideInCashflow
+          ? `Oculto no Fluxo de Caixa${ramo} — clique para exibir`
+          : `Visível no Fluxo de Caixa — clique para ocultar${ramo}`}
         className={cn(
           'text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors',
           node.hideInCashflow

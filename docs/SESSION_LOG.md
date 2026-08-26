@@ -12,6 +12,65 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ O selo de visibilidade passa a herdar do pai (26/ago)
+
+**Pedido do Julio, que era uma pergunta e virou um defeito:** *"faça um levantamento se eu posso
+deixar em branco o selo capex/opex das categorias financeiras... eu tenho categorias de
+transferências; e elas não devem aparecer em análises, nem dre, nem fc, nem opex, nem capex."*
+
+**Verificado: 22/22 visibilidade, 23/23 motor, 117/117 painéis, 188/188 escrita MCP, 39/39 leitura,
+3/3 migração. `tsc`, lint e build limpos.**
+
+#### O levantamento separou a pergunta do problema
+
+`opex_capex` **não é o mecanismo de exclusão**. É lido num lugar só — o `/fluxo`, do PAI, para
+escolher entre a seção OPEX e a CAPEX. DRE, Balanço, dashboard e orçamento não o consultam. Em
+branco, a categoria continuaria aparecendo, só sem saber onde ficar. Fica como está.
+
+O mecanismo certo já existia **e já estava ligado**: rodando a query real do `/fluxo` contra o
+banco, as duas linhas de "Transferência entre contas" (85 lançamentos) **já estavam fora**. O print
+do Julio era anterior. O que sobrava era "Devolução de pagamentos (+)" — 26 lançamentos, R$ 8.276,
+exatamente o total da linha no print.
+
+#### O defeito: selo em pai nunca fez nada
+
+A tela oferece DRE e FC nas duas linhas da árvore. O do pai salvava, mudava de cor e não afetava
+número nenhum — porque só Natureza Filho recebe lançamento (**zero lançamentos em nível 1** nas seis
+organizações, conferido) e as cinco leituras consultavam o selo da categoria do lançamento.
+
+Corrigido em `src/lib/category-visibility.ts`, importado por `dre.ts`, `fluxo-mensal.ts`,
+`budget-read.ts` e as fontes `realizado` e `orcado`. `EXISTS` com alias `cat_pai` em vez de coluna
+qualificada — Decisão 18, a armadilha que já mordeu três vezes — e isso também dispensa join do pai,
+o que importa no motor, onde nem toda consulta agrupa por natureza pai. Um salto basta: a árvore tem
+dois níveis de linha, conferido antes de escrever.
+
+#### A conciliação, que é o que dá confiança
+
+Onde não há pai oculto, o predicado novo devolve exatamente o que o antigo devolvia. **Cinco das seis
+organizações idênticas**; só a Financeiro Pessoal muda, em 31 lançamentos, com os dois pais ocultos
+("Transferências", "Devoluções") nomeados na saída do teste. Correção de regra de leitura que mudasse
+número de cliente sem explicação seria pior que o defeito original.
+
+#### O que o teste encontrou
+
+`verify-query-engine.ts` acusou 444/456 células entre `fetchBudgetRows` e a fonte `orcado`. Não era
+regressão: a **réplica escrita à mão no teste** fixava a regra antiga, e o motor (correto) passou a
+excluir "Devolução de pagamentos (+)". As réplicas foram atualizadas **com `JOIN`**, deliberadamente
+— duas formulações independentes de SQL concordando valem mais que a implementação comparada consigo
+mesma.
+
+#### O que ficou de fora, por decisão
+
+**`type='transfer'` continua só semântico.** Ofereci excluí-lo das análises por padrão; Julio recusou
+— mudaria os 123 lançamentos de transfer da ZARUR sem ninguém pedir. A DRE segue mostrando `transfer`
+abaixo da linha, em "Variação de Caixa".
+
+**O desequilíbrio das transferências fica registrado e não investigado**, a pedido: *"não vai fechar,
+eu não tenho todas as contas registradas"*. +29.680 no período do print, +46.738 na base da Financeiro
+Pessoal, −212.657 na ZARUR. Anotado para que ninguém trate como defeito depois.
+
+---
+
 ### ✅ Corte do saldo e da projeção por recorrência (26/ago)
 
 **Pedido do Julio:** *"na página /fluxo existem indicadores de saldo, coisa que não controlamos no

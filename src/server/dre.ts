@@ -15,6 +15,7 @@ import type {
 import { BP_TYPES } from '@/lib/dre-types'
 import { generateMonthRange, computeSubtotals } from '@/lib/dre-calc'
 import { dimensionFilters } from '@/lib/sql-dimensions'
+import { filtroDeVisibilidade } from '@/lib/category-visibility'
 
 // Re-exporta tipos para uso em server e client components
 export type {
@@ -81,7 +82,7 @@ export async function getDreData(filters: DreFilters): Promise<DreData> {
       AND t.date::date >= ${from}::date
       AND t.date::date <= ${to}::date
       AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
-      AND c.hide_in_dre = false
+      ${filtroDeVisibilidade('c', 'hide_in_dre')}
       ${dimFilters}
     GROUP BY
       c.id, c.name, c.code, c.type,

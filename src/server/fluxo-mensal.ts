@@ -8,6 +8,7 @@ import type { DreFilters } from '@/lib/dre-types'
 import { BP_TYPES } from '@/lib/dre-types'
 import { generateMonthRange } from '@/lib/dre-calc'
 import { dimensionFilters } from '@/lib/sql-dimensions'
+import { filtroDeVisibilidade } from '@/lib/category-visibility'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ export async function getFluxoMensalData(filters: DreFilters): Promise<FluxoMens
       AND COALESCE(t.effective_date, t.date)::date >= ${from}::date
       AND COALESCE(t.effective_date, t.date)::date <= ${to}::date
       AND c.type NOT IN (${sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))})
-      AND c.hide_in_cashflow = false
+      ${filtroDeVisibilidade('c', 'hide_in_cashflow')}
       ${dimFilters}
     GROUP BY
       c.id, c.name, c.code,

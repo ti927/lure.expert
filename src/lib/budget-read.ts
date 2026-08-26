@@ -12,6 +12,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { BP_TYPES, type DreType } from './dre-types'
 import { dimensionFilters, type DimensionFilterInput } from './sql-dimensions'
+import { filtroDeVisibilidade, campoDoRegime } from './category-visibility'
 import type { BudgetRegime } from './budget-types'
 
 const BP_LIST = sql.raw(BP_TYPES.map(t => `'${t}'`).join(', '))
@@ -59,7 +60,10 @@ export async function fetchBudgetRows(
   f: BudgetPeriodFilters,
 ): Promise<BudgetPeriodRow[]> {
   const budgetDate = f.regime === 'caixa' ? sql`e.cash_date` : sql`e.competence_date`
-  const hideCol    = f.regime === 'caixa' ? sql`c.hide_in_cashflow` : sql`c.hide_in_dre`
+  // Herda do pai desde 26/ago — ver `lib/category-visibility.ts`. O orçado tem
+  // de esconder exatamente o mesmo conjunto que o realizado, senão a variação
+  // compara uma categoria contra o vazio.
+  const filtroVis  = filtroDeVisibilidade('c', campoDoRegime(f.regime))
   const dims       = dimensionFilters('e', f)
 
   type Row = {
@@ -97,7 +101,7 @@ export async function fetchBudgetRows(
       AND ${budgetDate}::date >= ${f.from}::date
       AND ${budgetDate}::date <= ${f.to}::date
       AND c.type NOT IN (${BP_LIST})
-      AND ${hideCol} = false
+      ${filtroVis}
       ${dims}
     GROUP BY c.id, c.name, c.code, c.type, c.parent_id, p.name, p.code,
              DATE_TRUNC('month', ${budgetDate}::date)

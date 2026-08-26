@@ -56,6 +56,7 @@ async function main() {
       AND COALESCE(t.effective_date, t.date)::date <= ${fim}::date
       AND c.type IN (${sql.raw(TIPOS_SAIDA)})
       AND COALESCE(c.hide_in_cashflow, false) = false
+      AND COALESCE(p.hide_in_cashflow, false) = false   -- herda do pai (26/ago)
     GROUP BY c.id, c.name, c.code, c.type, p.id, p.name, p.code
     ORDER BY SUM(t.amount::numeric) DESC
     LIMIT 5`)
@@ -143,6 +144,7 @@ async function main() {
       AND t.date::date >= ${faixa.de}::date AND t.date::date <= ${faixa.ate}::date
       AND c.type NOT IN ('ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido')
       AND c.hide_in_dre = false
+        AND p.hide_in_dre = false   -- herda do pai (26/ago); aqui por JOIN, na implementação por EXISTS
     GROUP BY 1, 2`)
 
   const receitaRef = new Map<string, number>()

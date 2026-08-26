@@ -68,6 +68,7 @@ async function main() {
       AND t.date::date >= ${de}::date AND t.date::date <= ${ate}::date
       AND c.type NOT IN ('ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido')
       AND c.hide_in_dre = false
+        AND p.hide_in_dre = false   -- herda do pai (26/ago); aqui por JOIN, na implementação por EXISTS
     GROUP BY c.id, DATE_TRUNC('month', t.date::date)`)
 
   const motor = await runQuery(scope, {
@@ -284,6 +285,7 @@ async function main() {
         AND e.competence_date::date <= ${faixaOrc.ate}::date
         AND c.type NOT IN ('ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido')
         AND c.hide_in_dre = false
+        AND p.hide_in_dre = false   -- herda do pai (26/ago); aqui por JOIN, na implementação por EXISTS
       GROUP BY c.id, DATE_TRUNC('month', e.competence_date::date)`)
 
     const motorOrc = await runQuery(scopeOrc, {

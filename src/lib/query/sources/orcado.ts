@@ -12,6 +12,7 @@
 
 import { sql } from 'drizzle-orm'
 import { BP_TYPES } from '@/lib/bp-types'
+import { filtroDeVisibilidade } from '@/lib/category-visibility'
 import { QueryValidationError } from '../errors'
 import type { SourceDescriptor, JoinId } from './types'
 
@@ -109,13 +110,17 @@ export const orcado: SourceDescriptor = {
         sql.join(BP_TYPES.map(x => sql`${x}`), sql`, `)
       }))`)
     }
+    // O selo herda do PAI (26/ago): ocultar uma Natureza Pai oculta o ramo. O
+    // join do pai NÃO é necessário — `filtroDeVisibilidade` usa um EXISTS com
+    // alias próprio, então o predicado vale mesmo quando a consulta não agrupa
+    // por natureza pai.
     if (spec.filtros.visibilidade === 'dre') {
       joins.push('categoria')
-      partes.push(sql`AND COALESCE(${sql.raw(c)}.hide_in_dre, false) = false`)
+      partes.push(filtroDeVisibilidade(c, 'hide_in_dre'))
     }
     if (spec.filtros.visibilidade === 'caixa') {
       joins.push('categoria')
-      partes.push(sql`AND COALESCE(${sql.raw(c)}.hide_in_cashflow, false) = false`)
+      partes.push(filtroDeVisibilidade(c, 'hide_in_cashflow'))
     }
 
     return { where: sql.join(partes, sql` `), joins }

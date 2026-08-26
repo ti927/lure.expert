@@ -1307,3 +1307,82 @@ blocos e nenhum de saldo, porque o Julio já havia removido o cartão à mão pe
 capacidade genérica dos blocos e segue alcançável pelo expert via MCP. Por isso o teste que a
 provava não foi apagado junto com o bloco — foi reescrito sobre uma spec montada à mão. Capacidade
 publicada sem teste é capacidade que ninguém sabe se responde.
+
+---
+
+## Decisão 24 — O selo de visibilidade herda do pai (26/ago)
+
+**O que Julio pediu:** *"faça um levantamento se eu posso deixar em branco o selo capex/opex das
+categorias financeiras... eu tenho categorias de transferências; e elas não devem aparecer em
+análises, nem dre, nem fc, nem opex, nem capex."*
+
+O levantamento mostrou que a pergunta e o problema eram coisas diferentes, e que havia um defeito.
+
+### O selo OPEX/CAPEX não é o mecanismo — e por isso não precisa ficar em branco
+
+`opex_capex` é lido em **um lugar só**: o `/fluxo`, do PAI, para decidir se o ramo entra na seção
+OPEX ou na CAPEX. DRE, Balanço, dashboard e orçamento não o leem. É selo de **seção**, não de
+**exclusão** — deixá-lo vazio faria a categoria continuar aparecendo, só sem saber onde ficar.
+
+Fica como está: `NOT NULL DEFAULT 'opex'`, e só na linha do pai na tela — que é o único lugar onde
+o valor é consultado. O motor já publica `opex_capex` como agrupamento, com `rotuloVazio: 'Não
+classificado'` previsto, então se um dia a coluna admitir nulo o motor já sabe o que dizer.
+
+### O defeito: o selo do PAI era inerte, sempre
+
+A tela oferece os botões **DRE** e **FC** nas duas linhas da árvore. O do pai salvava, mudava de
+cor e **não afetava número nenhum**.
+
+A causa é estrutural: só Natureza Filho recebe lançamento — conferido no banco, **zero lançamentos
+em categoria de nível 1** nas seis organizações — e as cinco leituras consultavam o selo da
+categoria DO LANÇAMENTO. Um selo que só existe no pai nunca era alcançado.
+
+Julio encontrou marcando "Devoluções" como oculta no fluxo e vendo o ramo continuar na tela: os 26
+lançamentos estavam no filho "Devolução de pagamentos (+)". As "Transferências entre contas" tinham
+sumido porque ali ele marcara os **filhos**.
+
+**A regra agora:** uma categoria entra na leitura quando **nem ela nem o pai dela** estão ocultos
+naquele regime. `lib/category-visibility.ts` a escreve uma vez; as cinco leituras a importam
+(`dre.ts`, `fluxo-mensal.ts`, `budget-read.ts`, e as fontes `realizado` e `orcado` do motor).
+
+**Por que `EXISTS` com alias próprio e não a coluna qualificada:** Decisão 18. O Drizzle só
+qualifica a coluna quando a consulta tem join, e dentro de subconsulta correlacionada uma coluna
+sem qualificação é capturada pelo escopo interno — a correlação vira constante, **sem erro**. Já
+mordeu três vezes. Aqui o alias externo entra como string via `sql.raw` (o padrão de
+`dimensionFilters`) e o interno é `cat_pai`, que não colide com alias nenhum das chamadoras. O
+`EXISTS` também dispensa join do pai, o que importa no motor, onde a consulta nem sempre agrupa por
+natureza pai.
+
+**Um salto basta:** a árvore tem dois níveis de LINHA (Tipo é coluna, não linha), conferido no banco
+antes de escrever. Nada de CTE recursiva.
+
+### O que o teste provou, e o que ele encontrou
+
+`scripts/verify-category-visibility.ts`, 22/22 — incluindo os dois sentidos: ocultar o pai tira o
+ramo **e** não mexe no outro regime; ocultar um filho tira só ele; pai oculto vence filho
+explicitamente visível.
+
+A parte que dá confiança é a **conciliação contra as organizações reais**: onde não há pai oculto, o
+predicado novo devolve exatamente o que o antigo devolvia. **Cinco das seis organizações idênticas**;
+só "Financeiro Pessoal" muda, em 31 lançamentos, e os dois pais ocultos que explicam a diferença são
+nomeados na saída. Uma correção de regra de leitura que mudasse número de cliente sem explicação
+seria pior que o defeito.
+
+**O teste encontrou uma divergência legítima em `verify-query-engine.ts`:** a réplica de
+`fetchBudgetRows` escrita à mão fixava a regra antiga, então o motor (correto) e a réplica (velha)
+discordavam justamente em "Devolução de pagamentos (+)". As réplicas de teste foram atualizadas
+**com `JOIN`**, e não com o helper — duas formulações independentes de SQL concordando valem mais
+que a implementação repetida contra si mesma.
+
+### O que NÃO mudou, por decisão de Julio
+
+**`type = 'transfer'` continua apenas semântico.** Foi oferecido excluí-lo das análises por padrão,
+e a resposta foi *"não — sigo marcando à mão"*. Motivo prático: a ZARUR tem 123 lançamentos de
+transfer hoje visíveis, e um padrão novo mudaria os números dela sem ninguém pedir. A DRE segue
+mostrando `transfer` **abaixo da linha**, no bloco "Variação de Caixa", onde não contamina o Lucro
+Líquido.
+
+**As transferências não fecham em zero** (+29.680 no período do print, +46.738 na base da Financeiro
+Pessoal; −212.657 na ZARUR). Levantado e **deixado como está**, a pedido: *"não vai fechar, eu não
+tenho todas as contas registradas"*. Fica registrado para que ninguém trate o desequilíbrio como
+defeito no futuro.
