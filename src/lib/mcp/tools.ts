@@ -51,24 +51,12 @@ import {
   exigirConfirmacao, PALAVRA_DE_CONFIRMACAO,
 } from './preview'
 import type { Escopo } from '@/lib/oauth/clients'
-
-export interface ContextoMcp {
-  userId: string
-  clientId: string
-  organizationIds: string[]
-  scopes: Escopo[]
-}
-
-export interface Ferramenta {
-  nome: string
-  titulo: string
-  descricao: string
-  /** Zod de entrada. O JSON Schema publicado sai daqui, então não divergem. */
-  entrada: z.ZodType
-  /** `escrita` some do catálogo quando o consentimento não a tem. */
-  escopo: Escopo
-  executar: (args: Record<string, unknown>, ctx: ContextoMcp) => Promise<unknown>
-}
+import { FERRAMENTAS_DE_DASHBOARD } from './dashboard-tools'
+// `Ferramenta` e `ContextoMcp` mudaram para `tools-types.ts` na 5.D, porque o
+// grupo de dashboard vive noutro arquivo e precisa dos mesmos tipos sem fechar
+// um ciclo de importação. Reexportados aqui: os consumidores não mudam.
+import type { Ferramenta, ContextoMcp } from './tools-types'
+export type { Ferramenta, ContextoMcp }
 
 const uuid = z.string().uuid()
 
@@ -1545,6 +1533,7 @@ const CATALOGO: Ferramenta[] = [
   aplicarLancamentoOrcado,
   preverCopiaDoRealizado,
   aplicarCopiaDoRealizado,
+  ...FERRAMENTAS_DE_DASHBOARD,
 ]
 
 /** O que este consentimento enxerga. */

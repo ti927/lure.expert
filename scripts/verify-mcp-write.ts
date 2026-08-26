@@ -135,8 +135,14 @@ async function main() {
     'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
 
   const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
-  t(catalogoE.length === catalogoL.length + 12,
-    `com escrita, o catálogo ganha os SEIS pares prever_/aplicar_ (${catalogoE.length} ferramentas)`)
+  // 12 dos seis pares prever_/aplicar_ + 6 escritas de painel (5.D).
+  t(catalogoE.length === catalogoL.length + 18,
+    `com escrita, o catálogo ganha 12 dos seis pares + 6 de painel (${catalogoL.length} → ${catalogoE.length})`)
+  t(catalogoL.length === 11, `leitura: 9 de consulta + 2 de painel (${catalogoL.length})`)
+  t(catalogoL.some(f => f.name === 'listar_paineis') && catalogoL.some(f => f.name === 'ler_painel'),
+    'as duas LEITURAS de painel estão no consentimento de leitura')
+  t(!catalogoL.some(f => f.name === 'criar_painel'),
+    'e as escritas de painel, não')
 
   // ═══ Papel no funil (4.B): consentimento não sobrepõe a membership ════════
   console.log('\n── papel (4.B) ──')
@@ -1049,6 +1055,135 @@ async function main() {
     'e um consentimento só de leitura não enxerga a importação')
 
   // ═══ Auditoria ════════════════════════════════════════════════════════════
+  // ═══ Painéis (5.D) ════════════════════════════════════════════════════════
+  console.log('\n── painéis (5.D) ──')
+
+  let painelDoTeste = ''
+  {
+    const vazio = await chamar(comEscrita, 'listar_paineis', { organizationId: ORG })
+    const l0 = vazio.dados as { paineis: unknown[]; aviso?: string }
+    t(!vazio.isError && l0.paineis.length === 0, 'listar_paineis começa vazio')
+    t(typeof l0.aviso === 'string' && l0.aviso.includes('padrão'),
+      'e AVISA que a tela mostra um padrão automático — sem o aviso, o modelo concluiria que não há painel nenhum')
+
+    const criado = await chamar(comEscrita, 'criar_painel', {
+      organizationId: ORG, nome: 'Painel do Conselho',
+    })
+    t(!criado.isError, 'criar_painel funciona')
+    painelDoTeste = (criado.dados as { painelId: string }).painelId
+
+    // O leitor: o portão do despacho recusa antes mesmo de validar argumentos.
+    const doLeitor = await chamar(leitorComEscrita, 'criar_painel', { organizationId: ORG, nome: 'Nao' })
+    t(doLeitor.isError && doLeitor.texto.includes('Leitor'), 'viewer não cria painel')
+
+    // A PRÉVIA: executa a consulta e devolve as linhas, sem gravar.
+    const specRanking = {
+      versao: 1, tipo: 'ranking', titulo: 'Top 5 naturezas de despesa', largura: 12,
+      query: {
+        fonte: 'realizado', medidas: ['saidas'], agruparPor: ['categoria'],
+        periodo: { tipo: 'relativo', meses: 12, regime: 'caixa' },
+        ordenarPor: [{ por: 'saidas', direcao: 'desc' }], limite: 5,
+      },
+      periodo: { modo: 'proprio' },
+    }
+    const previa = await chamar(comEscrita, 'adicionar_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, spec: specRanking, previa: true,
+    })
+    const p = previa.dados as { gravado: boolean; resultado: { tipo: string; resultado: { linhas: unknown[] } } }
+    t(!previa.isError && p.gravado === false, 'adicionar_bloco com previa: true NÃO grava')
+    t(p.resultado?.tipo === 'ranking' && Array.isArray(p.resultado?.resultado?.linhas),
+      'e DEVOLVE as linhas — o modelo vê o número que construiu, sem rodada extra')
+
+    const aindaVazio = await chamar(comEscrita, 'ler_painel', { organizationId: ORG, painelId: painelDoTeste })
+    t((aindaVazio.dados as { blocos: unknown[] }).blocos.length === 0, 'confirmado: a prévia não deixou rastro')
+
+    // Agora grava de verdade.
+    const gravado = await chamar(comEscrita, 'adicionar_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, spec: specRanking, previa: false,
+    })
+    const g = gravado.dados as { gravado: boolean; blocoId: string }
+    t(!gravado.isError && g.gravado === true && !!g.blocoId, 'com previa: false, grava e devolve o blocoId')
+
+    // Spec inválida: recusada, e nada é gravado.
+    const ruim = await chamar(comEscrita, 'adicionar_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, previa: false,
+      spec: {
+        versao: 1, tipo: 'kpi',
+        query: { fonte: 'realizado', medidas: ['valor_liquido'], agruparPor: ['mes'], periodo: { tipo: 'relativo', meses: 1 } },
+      },
+    })
+    t(ruim.isError, 'kpi com agruparPor é recusado (o Zod da spec vale no MCP também)')
+
+    // NF-e por centro de custo: o erro que ensina, do desenho da Fase 1.
+    const nfe = await chamar(comEscrita, 'adicionar_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, previa: true,
+      spec: {
+        versao: 1, tipo: 'ranking',
+        query: {
+          fonte: 'nfe', medidas: ['valor_absoluto'], agruparPor: ['centro_de_custo'],
+          periodo: { tipo: 'relativo', meses: 3 },
+        },
+        periodo: { modo: 'proprio' },
+      },
+    })
+    t(nfe.isError && /centro_de_custo|dimens/i.test(nfe.texto),
+      `NF-e por centro de custo é recusada com alternativas ("${nfe.texto.slice(0, 90)}...")`)
+
+    // Segundo bloco, para exercitar reordenar.
+    const texto2 = await chamar(comEscrita, 'adicionar_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, previa: false,
+      spec: { versao: 1, tipo: 'texto', markdown: 'Leitura do conselho', largura: 12 },
+    })
+    const blocoTexto = (texto2.dados as { blocoId: string }).blocoId
+
+    const lido = await chamar(comEscrita, 'ler_painel', { organizationId: ORG, painelId: painelDoTeste })
+    const blocos = (lido.dados as { blocos: { id: string; tipo: string }[] }).blocos
+    t(blocos.length === 2 && blocos[0].tipo === 'ranking', 'ler_painel devolve os 2 blocos, em ordem')
+
+    // Reordenar com lista incompleta: recusado de propósito.
+    const parcial = await chamar(comEscrita, 'reordenar_blocos', {
+      organizationId: ORG, painelId: painelDoTeste, ordem: [blocoTexto],
+    })
+    t(parcial.isError, 'reordenar com lista incompleta é recusado — alguém pode ter mexido no intervalo')
+
+    const completa = await chamar(comEscrita, 'reordenar_blocos', {
+      organizationId: ORG, painelId: painelDoTeste, ordem: [blocoTexto, g.blocoId],
+    })
+    t(!completa.isError, 'com a lista completa, reordena')
+    const reordenado = await chamar(comEscrita, 'ler_painel', { organizationId: ORG, painelId: painelDoTeste })
+    t((reordenado.dados as { blocos: { id: string }[] }).blocos[0].id === blocoTexto, 'e a ordem mudou de verdade')
+
+    // Editar substitui a spec inteira.
+    const editado = await chamar(comEscrita, 'editar_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, blocoId: blocoTexto, previa: false,
+      spec: { versao: 1, tipo: 'texto', markdown: 'Revisado', largura: 6 },
+    })
+    t(!editado.isError, 'editar_bloco funciona')
+
+    // Compartilhar.
+    const share = await chamar(comEscrita, 'compartilhar_painel', {
+      organizationId: ORG, painelId: painelDoTeste, escopo: 'organizacao', permissao: 'ler',
+    })
+    t(!share.isError, 'compartilhar_painel com a empresa funciona')
+
+    const doLeitorAgora = await chamar(leitorComEscrita, 'listar_paineis', { organizationId: ORG })
+    t((doLeitorAgora.dados as { paineis: unknown[] }).paineis.length === 1,
+      'e o viewer passa a ENXERGAR o painel (leitura é de todo papel)')
+
+    const semUsuario = await chamar(comEscrita, 'compartilhar_painel', {
+      organizationId: ORG, painelId: painelDoTeste, escopo: 'usuarios', permissao: 'ler',
+    })
+    t(semUsuario.isError && semUsuario.texto.includes('usuarioId'),
+      'compartilhar com pessoa sem usuarioId é recusado com instrução')
+
+    const removido = await chamar(comEscrita, 'remover_bloco', {
+      organizationId: ORG, painelId: painelDoTeste, blocoId: blocoTexto,
+    })
+    t(!removido.isError, 'remover_bloco funciona')
+    const depoisDeRemover = await chamar(comEscrita, 'ler_painel', { organizationId: ORG, painelId: painelDoTeste })
+    t((depoisDeRemover.dados as { blocos: unknown[] }).blocos.length === 1, 'e sobra 1 bloco')
+  }
+
   console.log('\n── auditoria ──')
 
   const [aud] = await db.execute<{ previas: number; aplicadas: number }>(sql`

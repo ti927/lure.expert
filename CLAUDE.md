@@ -258,15 +258,19 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 ## Fase atual
 
-**Status:** em andamento o **plano de 23/ago/2026** (motor de consulta + chave de IA por
-organização + OAuth/MCP + dashboard). A Fase 4.5 fechou (A, B e C). A **Fase 4 (convites e
-papéis) está CONCLUÍDA** — 4.A e 4.B fechadas e **confirmadas na tela em 25/ago** (convite de
-ponta a ponta com aviso via Resend, seletor de organização, e o enforcement de papel visto de
-verdade: operador tentou apagar e foi recusado). Verificado: 58/58 membros, **134/134 escrita
-MCP** com o cenário do leitor. **Em andamento: a Fase 5 (dashboard configurável)** — última do
-plano, aprovada em 25/ago com as 4 decisões de fechamento registradas na seção dela abaixo.
-**5.A (paleta + biblioteca de gráficos) concluída**; próxima sessão: **5.B (o miolo de painéis
-em `/lib`)**.
+**Status: o PLANO DE 23/ago/2026 ESTÁ COMPLETO.** As seis fases fecharam — motor de consulta,
+chave de IA por organização, OAuth/MCP, convites e papéis, o contrato de importação (4.5) e o
+dashboard configurável (5.A a 5.D). O catálogo do MCP terminou com **29 ferramentas** e o
+`/dashboard` deixou de ser tela fixa: é um painel de blocos que o expert monta pelo claude.ai.
+
+**Falta a confirmação humana da Fase 5** — 5.A confirmada em 25/ago; 5.C (a tela nova) e 5.D (as
+ferramentas de painel) aguardam o olho do Julio, listadas em *Confirmações na tela que Julio ainda
+deve*. Nada bloqueia.
+
+**Próximo passo é uma escolha de rumo**, não uma continuação: as frentes abertas estão na tabela
+*Frentes anteriores, ainda abertas* (Fase 8 adquirentes, 11 agente proativo, 12 onboarding/billing,
+contato pela NF-e), mais as duas pendências de produto registradas — o plano patrimonial padrão do
+BP e o `DROP` das três tabelas do chat.
 
 **As 4 configurações de painel que a 4.A exigia FORAM FEITAS em 25/ago** e estão registradas na
 seção *Infraestrutura de Produção* (Supabase Auth — e-mail e convites), porque vivem no painel,
@@ -325,7 +329,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 5.C | O renderizador: `/dashboard` vira painel de blocos | 🔲 |
 | 5.D | O grupo MCP de dashboard (8 ferramentas) | 🔲 |
 
-### Fase 5 — dashboard configurável (EM ANDAMENTO — 5.A ✅)
+### Fase 5 — dashboard configurável (CONCLUÍDA — 5.A a 5.D)
 
 **As 4 decisões de fechamento, respondidas por Julio em 25/ago antes de codificar:**
 
@@ -346,7 +350,25 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | 5.A | Paleta `--chart-1..8` + `components/charts/` (chart-theme, chart-container, bar, line, area, composed, pie, horizontal-bar) + migração de `/dashboard` e `/fluxo` + vitrine | ✅ |
 | 5.B | Miolo em `/lib`: CRUD de painéis/blocos (Zod nas duas direções), painel padrão virtual, execução de bloco (spec → motor; escotilhas `indicador`/`alertas` extraídas para `/lib`), compartilhamento com enforcement admin+. **111/111** contra o banco + conciliação 54 comparações / 0 divergências | ✅ |
 | 5.C | `/dashboard` virou carregador de painel; grade de 12 colunas + `BlockView` (um ramo por tipo); seletor de painel, organizar (mover/redimensionar/remover), compartilhar; heranças preservadas. **113/113**, com conciliação de 144 comparações reais / 0 divergências | ✅ (aguardando confirmação na tela) |
-| 5.D | MCP: `listar_paineis`, `ler_painel`, `criar_painel`, `adicionar_bloco` (executa a query e devolve as linhas; `previa: true` não grava), `editar_bloco`, `remover_bloco`, `reordenar_blocos`, `compartilhar_painel` | 🔲 |
+| 5.D | MCP: as 8 de painel (2 leitura + 6 escrita). `adicionar_bloco`/`editar_bloco` executam a consulta e devolvem as linhas; `previa: true` não grava. **157/157** escrita, 37/37 leitura | ✅ (aguardando confirmação no claude.ai) |
+
+**Da 5.D, o que ficou decidido no código:**
+
+- **A prévia do painel é um PARÂMETRO, não um par de ferramentas.** Os seis pares
+  `prever_`/`aplicar_` existem porque a escrita deles é destrutiva (reclassifica, sobrescreve
+  orçamento, importa em lote) e aplicar sobre fotografia velha apaga trabalho alheio. Criar bloco
+  não destrói nada — o pior caso é um bloco errado, que `remover_bloco` desfaz. O que o modelo
+  precisa aqui é **ver o número que construiu**, e é isso que `previa: true` entrega: valida,
+  executa a consulta uma vez e devolve as linhas, sem gravar.
+- **`adicionar_bloco` publica o `blockSpecSchema` INTEIRO** — ao contrário da importação, onde a
+  entrada é uma simplificação. Aqui não há o que simplificar: a spec já foi desenhada para ser
+  preenchida por um modelo, e traduzi-la criaria um segundo vocabulário para manter.
+- **Segundo portão de papel.** O despacho do `/api/mcp` recusa viewer em qualquer escrita; painel
+  exige **admin+**, então um operador passa lá e para no store. Dois portões com regras diferentes,
+  de propósito.
+- **`Ferramenta`/`ContextoMcp` mudaram para `tools-types.ts`** — `tools.ts` importa a lista de
+  dashboard, e `dashboard-tools.ts` importando `tools.ts` de volta fecharia um ciclo. Reexportados
+  do lugar antigo, então nenhum consumidor mudou.
 
 **Da 5.C, o que ficou decidido no código:**
 
@@ -565,9 +587,10 @@ organização descartável: **54/54**.
 
 Plano completo em `C:\Users\Julio\.claude\plans\glimmering-discovering-wirth.md`.
 
-**Catálogo hoje: 21 ferramentas** — 9 de leitura + 12 de escrita (os seis pares). Um consentimento
-só de leitura enxerga 9; com escrita, 21. O catálogo é lido a cada conexão, então ferramenta nova
-não exige reconsentimento — só reconectar quando o **escopo** muda.
+**Catálogo hoje: 29 ferramentas** — **11 de leitura** (9 de contexto/consulta + `listar_paineis` e
+`ler_painel`) + **18 de escrita** (os seis pares = 12, mais as 6 de painel). Um consentimento só de
+leitura enxerga 11; com escrita, 29. O catálogo é lido a cada conexão, então ferramenta nova não
+exige reconsentimento — só reconectar quando o **escopo** muda.
 
 **A importação não sobe arquivo, e isso é o desenho, não um atalho.** O plano dizia "o arquivo nunca
 trafega em base64 dentro do JSON-RPC" e concluía "URL assinada de upload". A conclusão certa era
@@ -607,6 +630,13 @@ alertas, gráfico de 90 dias, Top 5 e indicadores, nessa ordem; (2) o botão **P
 (admin+), que materializa o padrão e libera o **Organizar** — mover, estreitar/alargar e remover
 bloco; (3) o **seletor de painel** e o **Compartilhar** (com a empresa ou com pessoas, em ler ou
 editar); (4) o seletor de mês e o **drill-down** clicando numa linha do Top 5.
+
+**Da 5.D, o teste que fecha o plano inteiro:** no claude.ai, **reconectar** (o escopo não mudou,
+mas o catálogo é lido na conexão) e pedir algo como *"crie um painel chamado Diretoria e monte
+nele um ranking das 5 unidades de negócio com maior despesa nos últimos 12 meses"*. O expert deve
+mostrar os números ANTES de gravar (é o `previa: true`), e o painel aparecer em `/dashboard` no
+seletor. Vale testar também o erro que ensina: pedir **NF-e agrupada por centro de custo** — a
+recusa tem de dizer quais dimensões a fonte tem.
 
 **Da 4.A: CONFIRMADA em 25/ago** — o convite de ponta a ponta rodou na tela (convidar → e-mail →
 definir senha → dashboard). Sai da lista de pendências.
@@ -775,6 +805,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Motor + MCP (plano de 23/ago)** | |
+| 5.D (MCP de painel) | **As 8 ferramentas de painel, e o plano de 23/ago FECHA.** Catálogo: 21 → **29** (11 leitura + 18 escrita). **A prévia aqui é um PARÂMETRO, não um par** — e a diferença tem razão: os seis pares `prever_`/`aplicar_` protegem escrita destrutiva, onde aplicar sobre fotografia velha apaga trabalho alheio; criar bloco não destrói nada, e o pior caso é um bloco errado que `remover_bloco` desfaz. O que o modelo precisa é **ver o número que construiu**, então `previa: true` valida, executa a consulta uma vez e devolve as linhas sem gravar (testado nos dois sentidos: a prévia não deixa rastro, e o `previa: false` grava). `adicionar_bloco` publica o **`blockSpecSchema` inteiro** — 17KB de JSON Schema, 7 variantes — porque a spec já foi desenhada para um modelo preencher, e traduzi-la criaria um segundo vocabulário. **Segundo portão de papel**: o despacho recusa viewer em toda escrita, e o store exige **admin+** para painel, então um operador passa lá e para aqui. `Ferramenta`/`ContextoMcp` mudaram para `tools-types.ts` (o catálogo já tinha 1.581 linhas e importar de volta fecharia ciclo), reexportados do lugar antigo. Verificado: **157/157 escrita** contra um `next start` real, 37/37 leitura, 113/113 painéis — incluindo o viewer recusado ao criar, reordenar com lista incompleta recusado, NF-e por centro de custo recusada COM as alternativas, e o viewer passando a enxergar o painel depois do compartilhamento. A barreira `src/lib/mcp/**` → `src/server/**` foi testada quebrando de propósito |
 | 5.C (o renderizador) | **`/dashboard` deixou de ser tela e virou painel de blocos.** `page.tsx` é carregador; `dashboard-client.tsx` (727 linhas) foi **dissolvido** em `components/dashboard/`: `dashboard-grid` (grade de 12 colunas, seletor de painel e de mês, modo Organizar), `block-view` (um ramo por tipo, e **nenhum ramo consulta nada** — o dado chega pronto, que é o que permite o mesmo componente servir o painel virtual, o gravado e a prévia do MCP), `alerts-section`, `indicator-item` e os dois diálogos. **`server/dashboard.ts` caiu de 548 para 166 linhas**: o Top 5 e o gráfico de 90 dias viraram os blocos `ranking` e `serie`, e as quatro funções órfãs foram removidas — em `'use server'` todo export é endpoint HTTP, e quatro sem chamador é superfície sem propósito; sobrou o drill-down, que lista lançamentos e assina URL de logo. **A tela edita LAYOUT, o expert edita CONTEÚDO** (decisão de 25/ago): mover, redimensionar em passos de 3 colunas e remover ficam na tela; bloco novo e mudança de consulta são do claude.ai, e a tela diz isso com exemplo de pedido. O **catálogo dos 7 indicadores virou dado** (`CATALOGO_DE_INDICADORES`) — eram 7 blocos de JSX repetidos, e como mapa o bloco escolhe quais mostrar. Drill-down só no ranking **por natureza**, porque a leitura de detalhe filtra por categoria — declarado, e a linha só vira botão nesse caso. Heranças preservadas: dismiss de alerta por mês no `localStorage`, e a inversão do delta de despesas agora declarada em `menorEhMelhor`. Verificado: **113/113**, incluindo a conciliação do DoD — **144 comparações sobre as 6 organizações REAIS (52 com dado), 0 divergências** entre o que os blocos calculam e o cálculo clássico |
 | 5.B (miolo dos painéis) | **`lib/dashboard/`: store, executor de bloco, painel padrão virtual — e três mudanças de casa.** `getDashboardKPIs` e `getFinancialIndicators` viraram cascas de 3 linhas (o SQL foi para `kpis.ts`/`indicators.ts`) e as 8 regras de alerta saíram de um `useMemo` de 88 linhas no cliente para `alerts.ts` — o bloco `alertas` precisa delas no SERVIDOR, e como função pura ficam legíveis pelo MCP. **O painel padrão é virtual**, consequência direta de "só admin+ cria": seed preguiçoso gravaria linha em nome do primeiro visitante, que pode ser viewer. **A janela é do bloco, o regime é da consulta** — `mes`/`ultimos_meses`/`ultimos_dias`/`acumulado` ancoram no mês do painel e substituem as datas, e `acumulado` não tem anterior (delta **nulo**, não zero). KPI ganhou `inverterSinal` (senão "Despesas" mostra −4.000, porque `valor_liquido` é entrada−saída) e recusa `agruparPor` na ESCRITA. Reordenar exige a lista completa e idêntica — a defesa da assinatura de plano da 3.3, contra apagar bloco que o autor da ordem nunca viu. Papel vem ANTES do share: admin+ edita, **só o dono** apaga/compartilha/define o próprio padrão, share `editar` não dá direito de apagar. Agrupamento **`semana`** novo no motor (ISO, chave na segunda). Verificado: **111/111** contra o banco numa organização descartável, incluindo os 4 KPIs batendo com o cálculo clássico, bloco lido do jsonb devolvendo o mesmo número, spec corrompida quebrando SÓ o próprio bloco, e o isolamento entre organizações; mais **conciliação de 54 comparações (6 organizações × 9 meses) com 0 divergências** entre o SQL antigo e o novo |
 | 5.A (gráficos) | **Paleta categórica + biblioteca `components/charts/`.** `--chart-1..8` (light+dark, classes `bg-chart-N`), com **rose fora de propósito** — fatia de pizza não pode parecer prejuízo — e slate como "outros"; projeções ganharam tokens (`--color-positive-soft`/`--color-negative-soft`, os emerald-300/red-300 que `/fluxo` usava como literais). 7 arquivos: `chart-theme` (paleta, `corCategorica` cíclica, formatadores, tipo `ChartSeries`), `chart-container` (tooltip genérico + defaults `GRADE`/`EIXO_X`/`EIXO_Y` como **objetos de props para espalhar**, porque o Recharts inspeciona o tipo dos filhos diretos), `bar` (agrupado/empilhado/misto por `stackId`), `line`, `area`, `composed` (série declara `visual`), `pie` (pizza/rosca, % no tooltip), `horizontal-bar` (ranking). **`name={label}` elimina formatter de legenda** — o mapeamento chave→humano acontece uma vez, na série. `/dashboard` e `/fluxo` migrados no mesmo commit perdendo `yFormatter`/`ChartTooltip`/`legendFormatter` locais; cores preservadas com exatidão (os hex antigos são os valores das variáveis novas). Vitrine `/style-guide/charts` + navegação entre as 3 páginas do style-guide. Verificado: `tsc`, lint e build limpos (41 rotas); o visual aguarda o olho do Julio |

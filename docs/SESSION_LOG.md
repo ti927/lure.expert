@@ -12,6 +12,63 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 5.D — As 8 ferramentas de painel (e o plano de 23/ago fecha)
+
+**Verificado: 157/157 escrita contra um `next start` real, 37/37 leitura, 113/113 painéis,
+`tsc`/`lint`/`build` limpos, e a barreira de importação testada quebrando de propósito. Falta a
+confirmação no claude.ai, que é onde o valor aparece.**
+
+#### O catálogo fechou em 29
+
+| | Antes | Depois |
+|---|---:|---:|
+| Leitura | 9 | **11** (+ `listar_paineis`, `ler_painel`) |
+| Escrita | 12 | **18** (+ criar, adicionar, editar, remover, reordenar, compartilhar) |
+
+#### A decisão de desenho: a prévia é um PARÂMETRO, não um par
+
+Os seis pares `prever_`/`aplicar_` existem por uma razão específica, escrita na 3.3: a escrita
+deles é destrutiva (reclassifica lançamento, sobrescreve orçamento, importa lote), e **aplicar
+sobre uma fotografia velha apaga o trabalho de outra pessoa**. Daí os três dentes — palavra
+literal, recálculo com comparação, consumo atômico.
+
+Nada disso se aplica a um bloco de painel. Criar bloco não toca dado financeiro; o pior caso é um
+bloco errado, que `remover_bloco` desfaz em uma chamada. O que o modelo **precisa** aqui é outra
+coisa: **ver o número que construiu**. Um gráfico plausível com a consulta errada é o defeito caro
+do dashboard, e ele só aparece olhando as linhas. Então `previa: true` valida a spec, executa a
+consulta uma vez e devolve o resultado sem gravar — preview+confirm a custo zero, como o plano
+pedia. O teste cobre os dois sentidos: a prévia não deixa rastro, e o `previa: false` grava.
+
+#### `adicionar_bloco` publica o schema inteiro
+
+Ao contrário de `prever_importacao`, onde a entrada é uma simplificação deliberada do schema
+interno (publicar `budgetSeriesInputSchema` cru faria o modelo inventar `adjustmentEvery` em toda
+chamada), aqui **não há o que simplificar**: o `blockSpecSchema` já foi desenhado para ser
+preenchido por um modelo. São 17KB de JSON Schema com 7 variantes, e traduzi-lo criaria um segundo
+vocabulário para manter em sincronia com o primeiro.
+
+#### Dois portões de papel, com regras diferentes
+
+O do despacho em `/api/mcp` (4.B) recusa **viewer** em qualquer ferramenta de escrita, por
+organização, antes da validação de argumentos. O do store exige **admin+** para painel. Um
+operador (member) passa no primeiro e para no segundo — e é o desenho: ele importa e classifica,
+mas não monta painel para os outros.
+
+#### Uma extração para não fechar ciclo
+
+`tools.ts` já tinha 1.581 linhas, então o grupo novo foi para `dashboard-tools.ts`. Mas `tools.ts`
+importa a lista de lá, e `dashboard-tools.ts` precisava do tipo `Ferramenta` que morava em
+`tools.ts` — importar de volta fecharia um ciclo. Os dois tipos mudaram para `tools-types.ts` e
+são **reexportados** do lugar antigo, então nenhum dos consumidores existentes mudou.
+
+#### O que o teste pegou
+
+Duas asserções de contagem de catálogo quebraram (9 → 11 leitura, +12 → +18 escrita). São o tipo
+de falha que se quer: o script contava ferramentas nominalmente e acusou a mudança. Corrigidas com
+o número novo e um comentário dizendo de onde ele vem.
+
+---
+
 ### ✅ Sessão 5.C — O renderizador: `/dashboard` vira painel de blocos
 
 **Verificado: 113/113 (`scripts/verify-dashboards.ts`), incluindo a conciliação do DoD — 144

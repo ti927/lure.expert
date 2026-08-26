@@ -136,7 +136,10 @@ async function main() {
 
   const lista = await rpc(accessToken, 'tools/list')
   const tools = ((lista.json?.result ?? {}) as { tools?: { name: string; inputSchema: Record<string, unknown> }[] }).tools ?? []
-  t(tools.length === 9, `9 ferramentas de leitura (${tools.map(x => x.name).join(', ')})`)
+  // 9 de contexto/consulta + as 2 de painel que a 5.D acrescentou.
+  t(tools.length === 11, `11 ferramentas de leitura (${tools.map(x => x.name).join(', ')})`)
+  t(tools.some(x => x.name === 'listar_paineis') && tools.some(x => x.name === 'ler_painel'),
+    'incluindo as duas de painel')
   const consultarTool = tools.find(x => x.name === 'consultar')
   const props = (consultarTool?.inputSchema?.properties ?? {}) as Record<string, unknown>
   t(!!props.organizationId && !!props.medidas && !!props.periodo,
