@@ -16,6 +16,7 @@ import { GROUPINGS, type GroupingId } from './groupings'
 import { MEASURES, type MeasureId } from './measures'
 import { SOURCES, type JoinId, type GroupingSql } from './sources'
 import { QueryValidationError } from './errors'
+import { validarFiltros } from './validate-filters'
 import type { QueryScope } from './scope'
 import {
   querySpecSchema, type QueryInput, type QuerySpec, type QueryResult, type QueryRow,
@@ -178,6 +179,12 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
     d.joins?.forEach(j => joins.add(j))
     return { id: m, d }
   })
+
+  // Os valores de filtro existem? Sem esta checagem, um id errado (ou o NOME no
+  // lugar do id) devolve zero linhas em silêncio, e o vazio passa por resposta.
+  // Achado 10 do diagnóstico de 26/ago — a explicação inteira em
+  // `validate-filters.ts`. Não custa nada quando não há filtro.
+  await validarFiltros(scope.organizationId, spec.filtros)
 
   const base = src.baseFilters(spec)
   base.joins.forEach(j => joins.add(j))

@@ -12,6 +12,86 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Hardening — 3ª bateria: os achados 9, 10 e 11 (26/ago)
+
+**Origem: Julio autorizou explicitamente a bateria irreversível — as funções `aplicar_*`
+executadas contra a organização real, com prefixo `TESTE MCP` para permitir limpeza. Quatro das
+cinco rodaram; a quinta ficou bloqueada pelo achado 9. Zero regressão. Verificado: 188/188
+escrita, 39/39 leitura, 23/23 motor, 113/113 painéis.**
+
+#### O que a bateria confirmou em execução real
+
+Dedup na segunda importação (1 inserida, 1 ignorada, exatamente como a prévia antecipara),
+prévia consumida no uso (a segunda chamada recusa), e o **maior resto** no rateio: R$ 100 em
+1:1:1 vira [33,34 / 33,33 / 33,33] e a soma fecha. A verificação cruzada é a mais valiosa —
+`consultar` agrupado por centro de custo sobre 5 lançamentos rateados em 3 devolveu **5 em cada
+centro, não 15 no total**, que é a promessa da 10.3 (`COUNT(DISTINCT transaction_id)`) medida do
+lado de fora.
+
+#### 9 — a ferramenta que não tinha sumido
+
+`prever_lancamento_de_orcamento` foi reportada como ausente: quatro buscas com formulações
+diferentes e ela nunca aparecia, deixando `aplicar_lancamento_de_orcamento` órfã. **Estava no
+catálogo o tempo todo** (`tools.ts:894`, registrada na 1580) — é a mesma classe do achado 7, e o
+relatório suspeitou disso.
+
+A causa: a descrição abria com o *comportamento* ("Mostra as ocorrências que um lançamento orçado
+geraria") em vez do *propósito*. Ninguém busca por "mostra as ocorrências"; busca por "criar
+lançamento no orçamento". Agora abre com **criar, orçar, planejar, lançar** e nomeia os quatro
+modos (fixo, parcelado, sazonal, com reajuste).
+
+E ganhou uma asserção estrutural que vale para o catálogo inteiro: **toda `aplicar_` tem a
+`prever_` correspondente**. Um par quebrado é uma ferramenta de gravação que ninguém consegue
+usar, e o teste não olhava para isso.
+
+#### 10 — o pior defeito possível numa ferramenta analítica
+
+Passar o NOME da conta onde se espera o id devolvia `linhas: []`. Sem erro. Sem aviso.
+Indistinguível de "não houve movimento no período" — e o modelo reporta isso ao usuário **com
+confiança**. Uma resposta errada apresentada como certa é pior que um erro, e numa tela
+financeira é o defeito que mais custa.
+
+`lib/query/validate-filters.ts` valida antes de executar: contas, categorias, as quatro
+dimensões, versão de orçamento e tipos de natureza (estes sem ir ao banco, contra a lista de 15).
+Nomeia o que não casou e aponta a ferramenta que lista os ids — o mesmo padrão que
+`prever_importacao` já usava para códigos de natureza.
+
+O que continua passando, de propósito: o sentinela `__null__` ("sem esta dimensão"), que é
+legítimo e não existe em tabela nenhuma; e id que EXISTE mas não tem lançamento no período — aí o
+vazio é a resposta, não um engano. Ganho colateral: um valor não-uuid numa dimensão antes
+explodia com erro cru do Postgres; agora vira frase.
+
+**O defeito que o próprio teste pegou.** A primeira versão usava `ANY(${'{valores}'})`. O Drizzle
+emite `ANY(($2))` com o array JS como parâmetro único, o driver não converte para array do
+Postgres, a query falha — e a falha era engolida como recusa. Resultado: **todo** filtro recusado,
+inclusive o certo, o que teria quebrado `/dre`, `/fluxo` e o dashboard inteiro. Só apareceu porque
+a asserção afirma os DOIS sentidos ("id errado recusa" **e** "id certo passa"). Virou `IN (…)` com
+`sql.join`, que é o padrão que o motor já usava três arquivos ao lado.
+
+#### 11 — a precedência existia, faltava estar escrita
+
+Regra escopada à conta vence a global — `applyRules` ordena as com `accountId` primeiro desde a
+Fase 6, e a primeira que casa decide. O relatório também investigou e descartou corretamente um
+falso positivo: a prévia dizer "criar" para uma descrição que já tem regra está certo, porque **a
+identidade de uma regra é o par descrição + conta**, e escopos diferentes são regras diferentes.
+
+Nada disso estava nas descrições que o modelo lê. Agora está, em `listar_regras` (com a palavra
+PRECEDÊNCIA) e em `prever_regras` (explicando por que "criar" pode aparecer para descrição
+conhecida).
+
+#### O resíduo da bateria, e a lição
+
+Ficaram na base: 1 conta, 5 lançamentos, 2 lotes de importação, 7 regras — todos com o prefixo
+`TESTE MCP`, removíveis pela tela. E **39 séries de orçamento sem marca**, porque a cópia do
+realizado deriva os nomes das naturezas de origem: é a única operação de escrita que não aceita
+marcação identificável, e por isso as séries ficaram indistinguíveis das 98 que já existiam.
+`substituirCopiasAnteriores: true` não serve para limpar — apagaria as 98 também.
+
+A recomendação do relatório é boa e fica registrada: **organização sintética descartável** para
+bateria de escrita, e **versão de orçamento descartável** para testar a cópia.
+
+---
+
 ### ✅ Hardening do MCP — os 8 achados do diagnóstico (26/ago)
 
 **Origem: Julio rodou uma bateria completa pelo claude.ai contra a organização "Financeiro

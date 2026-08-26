@@ -1305,6 +1305,80 @@ async function main() {
       'e a listagem volta a zero — criar e apagar fecham o ciclo, sem deixar lixo')
   }
 
+  // ═══ Achados 9, 10 e 11 (3ª bateria, 26/ago) ══════════════════════════════
+  console.log('\n── correções da 3ª bateria ──')
+  {
+    // Achado 9: a ferramenta NÃO tinha sumido — estava no catálogo e não era
+    // encontrada pela busca. A asserção prova que ela é publicada e chamável.
+    const catalogo = ((await rpc(comEscrita, 'tools/list')).result as {
+      tools: { name: string; description: string }[]
+    }).tools
+    const prever = catalogo.find(f => f.name === 'prever_lancamento_de_orcamento')
+    t(!!prever, 'achado 9: prever_lancamento_de_orcamento ESTÁ no catálogo')
+    t(!!prever && /criar|orçar|planejar/i.test(prever.description),
+      'e a descrição abre com os verbos que uma busca usaria')
+    // O par: toda `aplicar_` tem a `prever_` que gera o previaId dela.
+    const aplicares = catalogo.filter(f => f.name.startsWith('aplicar_')).map(f => f.name)
+    const semPar = aplicares.filter(a =>
+      !catalogo.some(f => f.name === a.replace(/^aplicar_/, 'prever_')))
+    t(semPar.length === 0, `toda aplicar_ tem a prever_ correspondente (${aplicares.length} pares)`)
+
+    // Achado 10: filtro com valor inexistente ERRA em vez de devolver vazio.
+    const contaPeloNome = await chamar(comEscrita, 'consultar', {
+      organizationId: ORG, medidas: ['valor_liquido'],
+      periodo: { tipo: 'intervalo', de: '2026-01-01', ate: '2026-12-31', regime: 'competencia' },
+      filtros: { contas: ['TESTE MCP CONTA'] },
+    })
+    t(contaPeloNome.isError, 'achado 10: conta pelo NOME é recusada em vez de devolver vazio')
+    t(/listar_contas/.test(contaPeloNome.texto),
+      'e a recusa aponta a ferramenta que dá os ids')
+
+    // O outro sentido: id que EXISTE continua respondendo.
+    const contasReais = await chamar(comEscrita, 'listar_contas', { organizationId: ORG })
+    const idReal = (contasReais.dados as { contas: { accountId: string }[] }).contas[0]?.accountId
+    if (idReal) {
+      const comIdCerto = await chamar(comEscrita, 'consultar', {
+        organizationId: ORG, medidas: ['valor_liquido'],
+        periodo: { tipo: 'intervalo', de: '2026-01-01', ate: '2026-12-31', regime: 'competencia' },
+        filtros: { contas: [idReal], excluirBalanco: false, visibilidade: 'todas' },
+      })
+      t(!comIdCerto.isError, 'e o id CERTO passa — a validação não virou muro')
+    }
+
+    // As outras dimensões têm o mesmo tratamento.
+    const ccInexistente = await chamar(comEscrita, 'consultar', {
+      organizationId: ORG, medidas: ['valor_liquido'],
+      periodo: { tipo: 'relativo', meses: 12 },
+      filtros: { centrosDeCusto: ['00000000-0000-4000-8000-0000000000ff'] },
+    })
+    t(ccInexistente.isError && /listar_dimensoes/.test(ccInexistente.texto),
+      'centro de custo inexistente também é recusado, apontando listar_dimensoes')
+
+    const tipoInventado = await chamar(comEscrita, 'consultar', {
+      organizationId: ORG, medidas: ['valor_liquido'],
+      periodo: { tipo: 'relativo', meses: 12 },
+      filtros: { tiposDeCategoria: ['despesa_inventada'] },
+    })
+    t(tipoInventado.isError, 'tipo de natureza inventado é recusado (sem ir ao banco)')
+
+    // O sentinela "sem esta dimensão" continua válido — não é id, e não existe
+    // em tabela nenhuma. Se a validação o recusasse, quebraria "sem centro de
+    // custo", que é filtro legítimo e muito usado.
+    const semCc = await chamar(comEscrita, 'consultar', {
+      organizationId: ORG, medidas: ['valor_liquido'], agruparPor: ['centro_de_custo'],
+      periodo: { tipo: 'relativo', meses: 12 },
+      filtros: { centrosDeCusto: ['__null__'], excluirBalanco: false, visibilidade: 'todas' },
+    })
+    t(!semCc.isError, 'e o sentinela __null__ ("sem centro de custo") continua aceito')
+
+    // Achado 11: a precedência está documentada onde o modelo lê.
+    const listar = catalogo.find(f => f.name === 'listar_regras')
+    t(!!listar && /PRECEDÊNCIA/.test(listar.description),
+      'achado 11: listar_regras documenta qual regra vence')
+    t(!!listar && /específica vence/i.test(listar.description),
+      'dizendo que a mais específica (por conta) vence a global')
+  }
+
   console.log('\n── auditoria ──')
 
   const [aud] = await db.execute<{ previas: number; aplicadas: number }>(sql`

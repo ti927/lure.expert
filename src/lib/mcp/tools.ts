@@ -895,10 +895,12 @@ const preverLancamentoOrcado: Ferramenta = {
   nome: 'prever_lancamento_de_orcamento',
   titulo: 'Prever lançamento de orçamento',
   descricao:
-    'Mostra as ocorrências que um lançamento orçado geraria, SEM gravar: mês a mês, com a data de ' +
-    'competência e a de caixa de cada uma. Duas datas por ocorrência é o desenho do orçamento — ' +
-    'competência alimenta a DRE orçada, caixa alimenta o fluxo projetado. ' +
-    'Apresente ao usuário e obtenha o aceite antes de aplicar.',
+    'Criar, orçar, planejar ou lançar uma despesa/receita no ORÇAMENTO: valor mensal fixo, ' +
+    'parcelado, sazonal ou com reajuste. É o primeiro passo — mostra as ocorrências que o ' +
+    'lançamento geraria, SEM gravar, e devolve o previaId que `aplicar_lancamento_de_orcamento` ' +
+    'exige. Mês a mês, com a data de competência e a de caixa de cada ocorrência. ' +
+    'Duas datas por ocorrência é o desenho do orçamento — competência alimenta a DRE orçada, caixa ' +
+    'alimenta o fluxo projetado. Apresente ao usuário e obtenha o aceite antes de aplicar.',
   entrada: entradaLancamentoOrcado,
   escopo: 'escrita',
   async executar(args, ctx) {
@@ -1137,6 +1139,11 @@ const listarRegrasFerramenta: Ferramenta = {
     'As regras que classificam sozinhas o que é importado. Uma regra é "descrição contém X (na ' +
     'conta Y) → vai para estes destinos", e o casamento é por trecho da descrição, sem diferenciar ' +
     'maiúsculas. É por aqui que se responde "por que este lançamento foi parar em SG&A?". ' +
+    'PRECEDÊNCIA: a mais específica vence. Uma regra com `contaId` só vale naquela conta e é ' +
+    'avaliada ANTES das globais (`contaId: null`, que valem em qualquer conta); a primeira que ' +
+    'casar decide, e as demais nem são olhadas. Então a mesma descrição pode ter uma regra global ' +
+    'e uma por conta apontando para naturezas diferentes, sem conflito — na conta escopada vence a ' +
+    'dela, no resto vence a global. ' +
     '`total` é o total REAL da empresa, não o tamanho da página — use `offset` para percorrer o ' +
     'resto enquanto `temMais` for verdadeiro. ' +
     `CUIDADO com vezesAplicada: o contador só passou a ser escrito em ${CONTADOR_VIVO_DESDE}, e ` +
@@ -1190,6 +1197,10 @@ const preverRegrasFerramenta: Ferramenta = {
     'o número que revela regra larga demais antes de ela virar dano. ' +
     'ATENÇÃO: regra não reclassifica o passado; ela vale da próxima categorização em diante. ' +
     'Para arrumar o que já está lançado, use prever_classificacao_em_lote. ' +
+    'A identidade de uma regra é o par DESCRIÇÃO + CONTA: a mesma descrição sem conta (global) e ' +
+    'com conta são regras DIFERENTES, e por isso a prévia pode dizer "criar" para uma descrição ' +
+    'que já tem regra — o escopo é outro. Na hora de classificar, a escopada à conta vence a ' +
+    'global. ' +
     'Regra inválida sai do lote com o motivo, sem derrubar as outras. ' +
     'Apresente o resumo ao usuário e obtenha o aceite antes de aplicar.',
   entrada: entradaPreverRegras,
