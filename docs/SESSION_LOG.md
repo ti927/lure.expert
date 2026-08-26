@@ -12,6 +12,68 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 5.A — Paleta categórica + biblioteca de gráficos (Fase 5 do plano de 23/ago)
+
+**Verificado: `tsc`, `next lint` e `next build` limpos (41 rotas, `/style-guide/charts` nova).
+Não verificado automaticamente (é visual por natureza): `/dashboard` e `/fluxo` idênticos ao
+que eram, e a paleta em `/style-guide/charts` — ambos aguardam o olho do Julio.**
+
+#### As decisões de fechamento da fase (respondidas antes de codificar)
+
+1. **Tela gerencia, expert cria** — a tela cria/renomeia painéis, reordena, redimensiona,
+   remove blocos e compartilha; bloco NOVO e edição da consulta ficam com o expert via MCP.
+   O formulário de QuerySpec na tela fica para v1.1.
+2. **Só admin+ cria e compartilha painel** — member e viewer consomem. Consequência resolvida
+   de desenho: o *seed preguiçoso* do plano criaria painel em nome de quem visita, e
+   member/viewer não podem criar — então o painel padrão dos 8 blocos vira **virtual**
+   (renderizado sem gravar) para quem não tem painel, e admin+ ganha o botão que o materializa.
+3. **7 tipos de bloco na v1** (kpi, serie, ranking, composicao, indicador, alertas, texto);
+   `matriz`/`tabela` ficam para v1.1.
+4. **Paleta: derivada por mim, conferida por Julio** no `/style-guide/charts` antes da 5.C.
+
+#### A paleta categórica (`--chart-1..8`)
+
+Emerald, sky, amber, violet, lime, blue, fuchsia, slate — ordem que intercala famílias de matiz
+para vizinhos contrastarem, com versões um tom mais claras no `.dark`. **Rose ficou fora de
+propósito**: numa tela financeira, fatia de pizza vermelha parece prejuízo, e a paleta é para
+séries SEM juízo de valor. Slate-500 é a cor do "outros". Entradas/saídas continuam nas
+semânticas; as projeções ganharam tokens (`--color-positive-soft`/`--color-negative-soft`,
+os emerald-300/red-300 que `/fluxo` já usava como literais). Classes `bg-chart-N` no Tailwind.
+
+#### A biblioteca (`src/components/charts/`, 7 arquivos)
+
+`chart-theme.ts` (paleta, `corCategorica` cíclica, `COR_ENTRADA/SAIDA` + projeções,
+`moedaCompacta`/`moedaCheia`, tipo `ChartSeries`) · `chart-container.tsx` (`ChartContainer`,
+`ChartTooltipContent` genérico, e os defaults `GRADE`/`EIXO_X`/`EIXO_Y`/`CURSOR_BARRA` como
+**objetos de props para espalhar** — o Recharts inspeciona o TIPO dos filhos diretos, então
+embrulhar `CartesianGrid` num componente próprio quebraria a inspeção) · `bar-chart` (agrupado,
+empilhado e o misto por `stackId`) · `line-chart` · `area-chart` · `composed-chart` (cada série
+declara `visual: barra|linha|area` — o caso realizado-barra + orçado-linha) · `pie-chart`
+(pizza/rosca com % no tooltip) · `horizontal-bar` (o ranking honesto — pizza de 5 fatias
+parecidas esconde a ordem).
+
+**O truque que elimina formatter de legenda:** cada gráfico passa `name={serie.label}` ao
+Recharts, então legenda E tooltip mostram o rótulo humano sem que nenhum consumidor precise de
+`legendFormatter` — o mapeamento chave→humano acontece uma vez, na declaração da série. O
+`ocultarZerosNoTooltip` reproduz o comportamento do gráfico de /fluxo (real e projeção nunca
+coexistem na mesma semana; sem o filtro, metade das linhas do tooltip seria R$ 0,00).
+
+#### A migração (princípio 8: mover, nunca duplicar)
+
+`dashboard-client.tsx` e `fluxo-client.tsx` perderam `yFormatter`, `ChartTooltip`,
+`legendFormatter` e todos os imports de Recharts — os dois gráficos viraram `<BarChart>` da
+biblioteca com as séries declaradas. Cores preservadas com exatidão: os hex antigos (#059669,
+#e11d48, #6ee7b7, #fca5a5) são exatamente os valores das variáveis que os substituíram.
+
+#### Vitrine e documentação
+
+`/style-guide/charts`: swatches da paleta + os 7 gráficos com dados de amostra, incluindo os
+DOIS gráficos reais do produto reproduzidos. Navegação entre as 3 páginas do style-guide.
+`docs/DESIGN_TOKENS.md` ganhou a seção da paleta com a regra: **nunca escolher cor de gráfico
+à mão em componente** — o acesso é por `chart-theme.ts`.
+
+---
+
 ### ✅ Sessão 4.B — Organização ativa + papéis valendo (e a Fase 4 fecha)
 
 **Verificado: 58/58 membros/papéis/resolução contra o banco, 134/134 escrita do MCP contra um

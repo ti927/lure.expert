@@ -67,6 +67,33 @@ CSS variable: `--primary: oklch(0.508 0.118 163)`
 style={{ color: "var(--color-positive)" }}
 ```
 
+### Categórica — gráficos (criada na Fase 5.A)
+
+Para séries e fatias **sem juízo de valor** (pizza, composição, ranking, séries
+multi-categoria). Distinta das semânticas de propósito: **rose fica fora** para
+fatia de pizza não parecer prejuízo. A ordem intercala famílias de matiz para
+vizinhos contrastarem; a 8ª (slate) é a cor do "outros".
+
+| Token CSS | Light | Dark | Classe Tailwind |
+|---|---|---|---|
+| `--chart-1` | emerald-600 | emerald-500 | `bg-chart-1` |
+| `--chart-2` | sky-600 | sky-500 | `bg-chart-2` |
+| `--chart-3` | amber-500 | amber-400 | `bg-chart-3` |
+| `--chart-4` | violet-600 | violet-500 | `bg-chart-4` |
+| `--chart-5` | lime-600 | lime-500 | `bg-chart-5` |
+| `--chart-6` | blue-600 | blue-500 | `bg-chart-6` |
+| `--chart-7` | fuchsia-600 | fuchsia-500 | `bg-chart-7` |
+| `--chart-8` | slate-500 | slate-400 | `bg-chart-8` |
+
+Complementos semânticos dos gráficos: `--color-positive-soft` (emerald-300) e
+`--color-negative-soft` (red-300) — a barra **clara** de projeção ao lado da
+cheia, padrão herdado de `/fluxo`.
+
+**Nunca escolher cor de gráfico à mão em componente.** O acesso é por
+`CHART_PALETTE` / `corCategorica(i)` em `src/components/charts/chart-theme.ts`;
+entradas e saídas usam `COR_ENTRADA` / `COR_SAIDA` de lá. Vitrine em
+`/style-guide/charts`.
+
 ---
 
 ## Tipografia

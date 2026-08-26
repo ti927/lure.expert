@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function StyleGuidePage() {
   return (
     <div className="min-h-screen bg-background p-8 space-y-16">
@@ -8,6 +10,10 @@ export default function StyleGuidePage() {
         <p className="text-sm text-muted-foreground mt-1">
           Tokens visuais de referência · Fase 0.5.1
         </p>
+        <nav className="flex gap-4 mt-3 text-sm">
+          <Link href="/style-guide/components" className="text-primary underline underline-offset-2">Componentes</Link>
+          <Link href="/style-guide/charts" className="text-primary underline underline-offset-2">Gráficos</Link>
+        </nav>
       </header>
 
       {/* TIPOGRAFIA */}

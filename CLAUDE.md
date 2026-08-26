@@ -141,6 +141,10 @@ Fase 3 daqui (Categorização).
   4 dimensões, do lote e do editor de modelos), `AllocationTemplateBar`
 - `/components/budget` — o que /orcamento e /dre compartilham: `SeriesDialog` (criar/editar
   lançamento, com os 3 escopos), `ScopeConfirmDialog`, `BudgetDrillDownDialog`
+- `/components/charts` — a biblioteca de gráficos (Fase 5.A): `chart-theme` (paleta categórica
+  `--chart-1..8`, `COR_ENTRADA/SAIDA` + projeções, formatadores), `chart-container` (tooltip e
+  defaults de eixo), `BarChart`, `LineChart`, `AreaChart`, `ComposedChart`, `PieChart`,
+  `HorizontalBarChart`. **Nunca escolher cor de gráfico à mão** — sempre via `chart-theme`
 - `/lib` — utilitários, clientes (supabase, anthropic, inngest)
 - `/lib/parsers` — parsers via LLM: `excel-csv.ts` (Excel/CSV/TXT → Claude Haiku), `pdf.ts` (PDF → Claude Haiku document API)
 
@@ -255,8 +259,10 @@ organização + OAuth/MCP + dashboard). A Fase 4.5 fechou (A, B e C). A **Fase 4
 papéis) está CONCLUÍDA** — 4.A e 4.B fechadas e **confirmadas na tela em 25/ago** (convite de
 ponta a ponta com aviso via Resend, seletor de organização, e o enforcement de papel visto de
 verdade: operador tentou apagar e foi recusado). Verificado: 58/58 membros, **134/134 escrita
-MCP** com o cenário do leitor. **Próxima e última do plano: a Fase 5 (dashboard configurável)**
-— fundação pronta desde a 1.4 (migration 0028 + `block-spec.ts`).
+MCP** com o cenário do leitor. **Em andamento: a Fase 5 (dashboard configurável)** — última do
+plano, aprovada em 25/ago com as 4 decisões de fechamento registradas na seção dela abaixo.
+**5.A (paleta + biblioteca de gráficos) concluída**; próxima sessão: **5.B (o miolo de painéis
+em `/lib`)**.
 
 **As 4 configurações de painel que a 4.A exigia FORAM FEITAS em 25/ago** e estão registradas na
 seção *Infraestrutura de Produção* (Supabase Auth — e-mail e convites), porque vivem no painel,
@@ -310,7 +316,41 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
 | **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
 | **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido **sem Haiku** (o princípio nº 2 saindo do papel), `prever_importacao` publica o nível de arquivo do contrato, e **BP pelo MCP passa a ser possível**. **132/132** | ✅ |
-| 5 | Dashboard configurável | 🔲 |
+| **5.A** | **Paleta categórica + biblioteca de gráficos** — `--chart-1..8` (light+dark), `src/components/charts/` (7 arquivos), `/dashboard` e `/fluxo` migrados no mesmo commit, vitrine `/style-guide/charts` | ✅ (aguardando confirmação na tela) |
+| 5.B | O miolo de painéis em `/lib`: CRUD + seed virtual + execução de bloco + compartilhamento com papel | 🔲 |
+| 5.C | O renderizador: `/dashboard` vira painel de blocos | 🔲 |
+| 5.D | O grupo MCP de dashboard (8 ferramentas) | 🔲 |
+
+### Fase 5 — dashboard configurável (EM ANDAMENTO — 5.A ✅)
+
+**As 4 decisões de fechamento, respondidas por Julio em 25/ago antes de codificar:**
+
+1. **Tela gerencia, expert cria.** A tela cria/renomeia painéis, reordena, redimensiona, remove
+   blocos e compartilha; **bloco novo e edição da consulta ficam com o expert via MCP**. O
+   formulário de QuerySpec na tela é v1.1.
+2. **Só admin+ cria e compartilha painel** — member e viewer consomem. Isso muda o *seed
+   preguiçoso* do plano: criar painel em nome de quem visita violaria a matriz, então o painel
+   padrão dos 8 blocos é **virtual** (renderizado sem gravar) para quem não tem painel, e
+   admin+ ganha o botão que o materializa para personalizar. A matriz de papéis da v1 ganha a
+   linha "Criar/editar/compartilhar painéis — admin+" quando a 5.B aplicar o enforcement.
+3. **7 tipos de bloco na v1** (kpi, serie, ranking, composicao, indicador, alertas, texto — os
+   já validados no `block-spec.ts`); `matriz`/`tabela` ficam para v1.1.
+4. **Paleta categórica derivada por mim, conferida por Julio** em `/style-guide/charts`.
+
+| Sessão | Entrega | Status |
+|---|---|---|
+| 5.A | Paleta `--chart-1..8` + `components/charts/` (chart-theme, chart-container, bar, line, area, composed, pie, horizontal-bar) + migração de `/dashboard` e `/fluxo` + vitrine | ✅ |
+| 5.B | Miolo em `/lib`: CRUD de painéis/blocos (Zod nas duas direções), painel padrão virtual, execução de bloco (spec → motor; escotilhas `indicador`/`alertas` extraídas para `/lib`), compartilhamento com enforcement admin+ | 🔲 |
+| 5.C | `/dashboard` vira carregador de painel; grid + um componente por tipo de bloco; heranças preservadas (delta de despesas invertido, dismiss por mês, drill-down); bloco inválido quebra sozinho | 🔲 |
+| 5.D | MCP: `listar_paineis`, `ler_painel`, `criar_painel`, `adicionar_bloco` (executa a query e devolve as linhas; `previa: true` não grava), `editar_bloco`, `remover_bloco`, `reordenar_blocos`, `compartilhar_painel` | 🔲 |
+
+**Da 5.A:** a regra nova de design — **nunca escolher cor de gráfico à mão em componente**; o
+acesso é por `chart-theme.ts` (`CHART_PALETTE`, `corCategorica`, `COR_ENTRADA/SAIDA` e as
+projeções `_PROJETADA`). Rose ficou FORA da paleta categórica de propósito (fatia de pizza não
+pode parecer prejuízo). Os defaults de eixo/grade são **objetos de props para espalhar**
+(`{...GRADE}`), porque o Recharts inspeciona o tipo dos filhos diretos e embrulhá-los em
+componente próprio quebraria. O rótulo humano de série vai em `name={label}` — legenda e
+tooltip herdam, e `legendFormatter` deixou de existir.
 
 ### Fase 4 — convites e papéis (CONCLUÍDA — 4.A e 4.B confirmadas na tela em 25/ago)
 
@@ -505,6 +545,10 @@ de novo e ver o aviso azul dizendo que nada é novo.
 IA (confira em `/configuracoes/consumo`, que não deve registrar chamada nova). E, pelo claude.ai,
 pedir a importação de um **balanço**, que passa a funcionar pela primeira vez.
 
+**Da 5.A:** `/style-guide/charts` — conferir a **paleta categórica** a olho (é a validação que a
+decisão 4 da Fase 5 pede antes da 5.C); e `/dashboard` + `/fluxo`, que devem estar **idênticos**
+ao que eram — a migração trocou o código dos gráficos, não a aparência.
+
 **Da 4.A: CONFIRMADA em 25/ago** — o convite de ponta a ponta rodou na tela (convidar → e-mail →
 definir senha → dashboard). Sai da lista de pendências.
 
@@ -666,6 +710,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Motor + MCP (plano de 23/ago)** | |
+| 5.A (gráficos) | **Paleta categórica + biblioteca `components/charts/`.** `--chart-1..8` (light+dark, classes `bg-chart-N`), com **rose fora de propósito** — fatia de pizza não pode parecer prejuízo — e slate como "outros"; projeções ganharam tokens (`--color-positive-soft`/`--color-negative-soft`, os emerald-300/red-300 que `/fluxo` usava como literais). 7 arquivos: `chart-theme` (paleta, `corCategorica` cíclica, formatadores, tipo `ChartSeries`), `chart-container` (tooltip genérico + defaults `GRADE`/`EIXO_X`/`EIXO_Y` como **objetos de props para espalhar**, porque o Recharts inspeciona o tipo dos filhos diretos), `bar` (agrupado/empilhado/misto por `stackId`), `line`, `area`, `composed` (série declara `visual`), `pie` (pizza/rosca, % no tooltip), `horizontal-bar` (ranking). **`name={label}` elimina formatter de legenda** — o mapeamento chave→humano acontece uma vez, na série. `/dashboard` e `/fluxo` migrados no mesmo commit perdendo `yFormatter`/`ChartTooltip`/`legendFormatter` locais; cores preservadas com exatidão (os hex antigos são os valores das variáveis novas). Vitrine `/style-guide/charts` + navegação entre as 3 páginas do style-guide. Verificado: `tsc`, lint e build limpos (41 rotas); o visual aguarda o olho do Julio |
 | 4.A (convites) | **Convites e aceite, sem migration** — o schema da Fase 1 antecipava tudo (`role`, `invited_email`, `invited_by_user_id`, `accepted_at`), e a escolha do e-mail automático manteve `user_id NOT NULL`: `inviteUserByEmail` cria a conta ANTES da membership. **Dois caminhos de convite** porque o Supabase recusa reconvidar e-mail cadastrado: novo → e-mail → `/auth/confirm` (verifyOtp server-side; o template PRECISA usar `{{ .TokenHash }}` — o padrão manda os tokens no fragmento, que nunca chega ao servidor) → `/convite/definir-senha` aceita todos os pendentes de uma vez; existente → convite pendente in-app, no `/onboarding` e em `/configuracoes`. **Miolo em `lib/members.ts`** (exercitável por script) com a matriz pura em `lib/members-types.ts` (client-safe, padrão `budget-types`); `server/members.ts` é casca. Regra do último owner é de CONTAGEM, não de matriz — e owner pendente não conta nem é protegido. Aceite/recusa autorizam pelo WHERE (id + user + pendente), sem oráculo de ids. Auditoria: 5 tipos de evento em `agent_events`. `destinoSeguro` mudou de casa para `lib/redirect-seguro.ts` (o `/auth/confirm` reusa a defesa do `?next=`). **Defeito achado pelo teste:** Drizzle 0.45 embrulha o erro do driver e o `23505` mora em `err.cause` — o catch do onboarding estava cego desde o upgrade (CNPJ duplicado caía na mensagem genérica); os três catches corrigidos. Verificado: **41/41** contra o banco em organizações descartáveis, `next build` limpo com 3 rotas novas. **Não verificado automaticamente** (exige SMTP + service key + template no painel): o envio real do e-mail e o `verifyOtp` do link |
 | 4.5.C (o MCP) | **O princípio nº 2 sai do papel na importação:** o parser era LLM-first — chamava Haiku em todo upload, de todo formato, porque nunca houve um formato para esperar. Agora testa o cabeçalho contra o documento publicado ANTES de qualquer chamada de IA; casou, lê direto. Coluna extra desconhecida não desqualifica, e cabeçalho que não casa cai no caminho de hoje **inalterado** — a promessa da Fase 2 continua de pé. `extraction_method='template'` ganhou significado novo ("lido sem IA") e um contador no relatório de conformidade. **O defeito que a planilha modelo expôs: o parser não lia "Saída"** — `deriveDirection` comparava `/saida/` sobre o texto cru, e `"Saída".toLowerCase()` mantém o acento; nunca casava. Toda linha de saída de um CSV que escrevesse a palavra corretamente saía sem direção, mascarado por três fallbacks. Apareceu quando o arquivo que NÓS oferecemos foi lido pelo nosso próprio parser. **BP pelo MCP passa a existir:** `reportType: 'other'` era cravado, e em silêncio — `getBpData` filtra `balance_sheet` e `domainFromReportType('other')` devolve `'dre'`. A ferramenta ganhou o nível de arquivo (tipo, data de referência, conta), revalidado no apply; `resolverNaturezas` ganhou filtro de domínio e passou a delegar a `findCategoryByText`, a MESMA regra da tela — tinha cópia própria, e duas cópias significam que o mesmo arquivo entra diferente conforme a porta; `accountId` deixou de receber texto cru do modelo. **`data`/`descricao`/`sentido` viraram opcionais** (balanço não tem nenhuma), com o tipo de relatório exigindo cada uma — e o teste cobre os dois sentidos. Quando TODAS as linhas eram recusadas, a resposta dizia "nenhuma linha para importar" **sem o motivo**; agora diz. Verificado: **132/132** escrita, 70/70 tela, 36/36 leitura |
 | 4.5.B (a tela) | **O DoD da Sessão 2.8 do guia, escrito em 2026 e nunca construído, foi cumprido:** subir o mesmo arquivo duas vezes dá **0 inserções na segunda**. A causa de "a caixa nunca difere" era **uma linha** — `process-document.ts` montava o insert do staging com date/amount/direction/description e nada mais, enquanto os DOIS parsers já produziam `effectiveDate` e a coluna existia desde a 0021; `approveAndInsert` fazia `r.effectiveDate ?? r.date` e caía sempre no `date` porque o valor era descartado antes. **Sem migration para o que importa:** staging, campos de conta, `reference_date` e o índice único de dedup já existiam; a 0031 troca só o prefixo (0 linhas). `lib/staging-import.ts` é **o mesmo código** que a tela usa para avisar e o insert para gravar — calcular separado faria o aviso mentir justamente sobre o número que decide o clique. **O balanço estava quebrado em TRÊS lugares, não num:** o filtro `date && amount && direction` na tela (corrigido), o `reportType: 'other'` do MCP (Sessão C) e — achado ao escrever o teste — **o seed não cria uma única natureza de BP**, então uma organização nova importaria com sucesso e `/balanco` continuaria vazio; a tela passa a avisar em vez de eu decidir o plano patrimonial padrão. **Conta manual passa a existir** (`data_sources` com `provider='manual'`, Decisão 22), respondendo à pergunta do Julio: `/contas` lê cadastro de **conexão**, não de conta, e o array de contas é JSON que só o Pluggy escreve. **A Decisão 18 mordeu pela terceira vez** — `${dataSources.id}` em subconsulta sem join zerava a contagem de uso e teria autorizado apagar conta em uso; o teste pegou porque a asserção era "a contagem SOBE". Verificado: **54/54** contra o banco numa organização descartável, migration 5/5 com ROLLBACK, 116/116 e 36/36 no MCP |

@@ -50,6 +50,24 @@
     --color-alert: 38 92% 50%;            /* amber-500 */
     --color-info: 200 98% 39%;            /* sky-600 */
 
+    /* Versões suaves das semânticas — projeções nos gráficos (barra clara ao
+       lado da barra cheia). Valores herdados dos gráficos de /fluxo. */
+    --color-positive-soft: 156 72% 67%;   /* emerald-300 */
+    --color-negative-soft: 0 94% 82%;     /* red-300 */
+
+    /* Paleta CATEGÓRICA — séries e fatias que não carregam juízo de valor
+       (pizza, séries multi-categoria, ranking). Distinta das semânticas de
+       propósito: rose fica FORA para fatia de pizza não parecer prejuízo.
+       A ordem intercala famílias de matiz para vizinhos contrastarem. */
+    --chart-1: 161 94% 30%;               /* emerald-600 — a marca */
+    --chart-2: 200 98% 39%;               /* sky-600 */
+    --chart-3: 38 92% 50%;                /* amber-500 */
+    --chart-4: 262 83% 58%;               /* violet-600 */
+    --chart-5: 85 85% 35%;                /* lime-600 */
+    --chart-6: 221 83% 53%;               /* blue-600 */
+    --chart-7: 293 69% 49%;               /* fuchsia-600 */
+    --chart-8: 215 16% 47%;               /* slate-500 — o "outros" */
+
     /* Sidebar — slate-50 */
     --sidebar: 210 40% 98%;
     --sidebar-foreground: 222 47% 11%;
@@ -93,6 +111,16 @@
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 215 25% 27%;
     --sidebar-ring: 161 94% 36%;
+
+    /* Paleta categórica no escuro: um tom mais claro de cada família. */
+    --chart-1: 160 84% 39%;               /* emerald-500 */
+    --chart-2: 199 89% 48%;               /* sky-500 */
+    --chart-3: 43 96% 56%;                /* amber-400 */
+    --chart-4: 258 90% 66%;               /* violet-500 */
+    --chart-5: 80 84% 44%;                /* lime-500 */
+    --chart-6: 217 91% 60%;               /* blue-500 */
+    --chart-7: 292 84% 61%;               /* fuchsia-500 */
+    --chart-8: 215 20% 65%;               /* slate-400 */
   }
 }
 

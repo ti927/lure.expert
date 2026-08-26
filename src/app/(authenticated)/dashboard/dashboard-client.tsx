@@ -10,16 +10,8 @@ import type { DashboardKPIs, CashFlowDay, FinancialIndicators, TopExpenseCategor
 import { getDashboardCategoryDrillDown } from '@/server/dashboard'
 import { format, parseISO, startOfWeek } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from 'recharts'
+import { BarChart } from '@/components/charts/bar-chart'
+import { COR_ENTRADA, COR_SAIDA } from '@/components/charts/chart-theme'
 import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart, Loader2, AlertTriangle, X } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
@@ -123,42 +115,11 @@ function groupByWeek(days: CashFlowDay[]): WeekData[] {
     .map(([, v]) => v)
 }
 
-function yFormatter(value: number): string {
-  const abs = Math.abs(value)
-  if (abs >= 1_000_000) return `R$ ${(value / 1_000_000).toFixed(1)}M`
-  if (abs >= 1_000)     return `R$ ${(value / 1_000).toFixed(0)}k`
-  return `R$ ${value.toFixed(0)}`
-}
+// Formatadores e tooltip mudaram de casa na 5.A: agora vivem em
+// `@/components/charts` (chart-theme e chart-container), compartilhados com
+// /fluxo e com os blocos do painel configurável.
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-
-function ChartTooltip({ active, payload, label }: {
-  active?: boolean
-  payload?: { name: string; value: number; color: string }[]
-  label?: string
-}) {
-  if (!active || !payload?.length) return null
-  return (
-    <div className="bg-background border border-border rounded-md shadow-md px-3 py-2 text-sm">
-      <p className="font-medium text-foreground mb-1.5">{label}</p>
-      {payload.map(entry => (
-        <div key={entry.name} className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full" style={{ background: entry.color }} />
-          <span className="text-muted-foreground">
-            {entry.name === 'inflow' ? 'Entradas' : 'Saídas'}:
-          </span>
-          <span className="font-medium tabular-nums" style={{ color: entry.color }}>
-            {brl.format(entry.value)}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function legendFormatter(value: string): string {
-  return value === 'inflow' ? 'Entradas' : 'Saídas'
-}
 
 type IndicatorStatus = 'good' | 'warn' | 'bad' | 'neutral'
 
@@ -500,35 +461,15 @@ export function DashboardClient({
               description="As movimentações dos últimos 90 dias aparecerão aqui assim que houver transações confirmadas."
             />
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={weeklyData} barCategoryGap="35%" barGap={2}>
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  vertical={false}
-                  stroke="hsl(var(--border))"
-                />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tickFormatter={yFormatter}
-                  tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={72}
-                />
-                <Tooltip
-                  content={<ChartTooltip />}
-                  cursor={{ fill: 'hsl(var(--muted))', opacity: 0.5 }}
-                />
-                <Legend formatter={legendFormatter} wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="inflow"  name="inflow"  fill="#059669" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="outflow" name="outflow" fill="#e11d48" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <BarChart
+              data={weeklyData}
+              x="label"
+              legenda
+              series={[
+                { key: 'inflow',  label: 'Entradas', cor: COR_ENTRADA },
+                { key: 'outflow', label: 'Saídas',   cor: COR_SAIDA },
+              ]}
+            />
           )}
         </CardContent>
       </Card>

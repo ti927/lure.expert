@@ -14,10 +14,10 @@ import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialo
 import { DimFilter } from '@/components/transacoes-shared/dim-filter'
 import { cn } from '@/lib/utils'
 import { monthLabel } from '@/lib/format'
+import { BarChart } from '@/components/charts/bar-chart'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer,
-} from 'recharts'
+  COR_ENTRADA, COR_SAIDA, COR_ENTRADA_PROJETADA, COR_SAIDA_PROJETADA,
+} from '@/components/charts/chart-theme'
 import { format, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { FluxoData } from '@/server/fluxo'
@@ -66,13 +66,6 @@ const LABEL_W     = 280
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-
-function yFormatter(value: number): string {
-  const abs = Math.abs(value)
-  if (abs >= 1_000_000) return `R$ ${(value / 1_000_000).toFixed(1)}M`
-  if (abs >= 1_000)     return `R$ ${(value / 1_000).toFixed(0)}k`
-  return `R$ ${value.toFixed(0)}`
-}
 
 // ─── Num (célula de valor) ────────────────────────────────────────────────────
 // O componente compartilhado vive em @/components/financial/num-cell. Aqui só
@@ -579,38 +572,9 @@ function FluxoCaixaCategoria({
   )
 }
 
-// ─── ChartTooltip ─────────────────────────────────────────────────────────────
-
-function ChartTooltip({ active, payload, label }: {
-  active?: boolean
-  payload?: { value: number; color: string; dataKey: string | number }[]
-  label?: string
-}) {
-  if (!active || !payload?.length) return null
-  const items = payload.filter(p => p.value > 0)
-  if (!items.length) return null
-  return (
-    <div className="bg-background border border-border rounded-md shadow-md px-3 py-2 text-sm">
-      <p className="font-medium text-foreground mb-1.5">{label}</p>
-      {items.map(entry => {
-        const key    = String(entry.dataKey)
-        const label2 = key.startsWith('inflow') ? 'Entradas' : 'Saídas'
-        const suffix = key.endsWith('Projetado') ? ' (proj.)' : ''
-        return (
-          <div key={key} className="flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: entry.color }} />
-            <span className="text-muted-foreground">{label2}{suffix}:</span>
-            <span className="font-medium tabular-nums" style={{ color: entry.color }}>
-              {brl.format(entry.value)}
-            </span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 // ─── FluxoClient ──────────────────────────────────────────────────────────────
+// O tooltip do gráfico mudou de casa na 5.A: é o padrão de
+// `@/components/charts`, com o rótulo vindo da declaração da série.
 
 interface FluxoClientProps {
   data:           FluxoData
@@ -669,36 +633,17 @@ export function FluxoClient({
             />
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={chartData} barCategoryGap="35%" barGap={2}>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    vertical={false}
-                    stroke="hsl(var(--border))"
-                  />
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={yFormatter}
-                    tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                    axisLine={false}
-                    tickLine={false}
-                    width={72}
-                  />
-                  <Tooltip
-                    content={<ChartTooltip />}
-                    cursor={{ fill: 'hsl(var(--muted))', opacity: 0.5 }}
-                  />
-                  <Bar dataKey="inflowReal"       fill="#059669" stackId="in"  radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="inflowProjetado"  fill="#6ee7b7" stackId="in"  radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="outflowReal"      fill="#e11d48" stackId="out" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="outflowProjetado" fill="#fca5a5" stackId="out" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <BarChart
+                data={chartData}
+                x="label"
+                ocultarZerosNoTooltip
+                series={[
+                  { key: 'inflowReal',       label: 'Entradas',         cor: COR_ENTRADA,           stackId: 'in' },
+                  { key: 'inflowProjetado',  label: 'Entradas (proj.)', cor: COR_ENTRADA_PROJETADA, stackId: 'in' },
+                  { key: 'outflowReal',      label: 'Saídas',           cor: COR_SAIDA,             stackId: 'out' },
+                  { key: 'outflowProjetado', label: 'Saídas (proj.)',   cor: COR_SAIDA_PROJETADA,   stackId: 'out' },
+                ]}
+              />
               <p className="text-xs text-muted-foreground/70 mt-2 text-center">
                 Cores escuras = histórico real · cores claras = projeção baseada em recorrências
               </p>
