@@ -1288,6 +1288,14 @@ Invertidas, a primeira já teria zerado a lista e a segunda não teria como dist
 Nenhum bloco de hoje cai no caso 1; a sentença existe porque a spec **permite** escolher regras, e
 uma escrita futura pelo MCP poderia ter escolhido só aquela.
 
+**Aplicada e conferida em 26/ago**, e a conferência reforçou o ponto de um jeito não previsto. A
+asserção "todo bloco `alertas` carrega as 7 regras" **falhou** — um bloco criado pelo expert via
+MCP tinha três (`lucro-negativo`, `despesas-alta`, `receita-queda`). O erro era da asserção, não da
+migration: lista parcial é o uso que a spec permite, e é exatamente o que a 2ª sentença trata. Vale
+registrar porque a asserção errada era a **otimista**: ela teria passado em silêncio enquanto todos
+os blocos viessem do painel padrão, e só quebraria depois que alguém personalizasse. Ao conferir
+dado escrito por um LLM, **assuma que ele usou a liberdade que a spec oferece**.
+
 ### O que NÃO muda
 
 **Painel já materializado não é reescrito.** O padrão caiu de 8 para 7 blocos, mas quem personalizou

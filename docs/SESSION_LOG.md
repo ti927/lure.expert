@@ -22,6 +22,15 @@ essa projeção baseada em recorrência."*
 **Verificado: 117/117 painéis, 13/13 migration com ROLLBACK, 188/188 escrita MCP, 39/39 leitura,
 23/23 motor. `tsc`, `next lint` e `next build` limpos (41 rotas).**
 
+**Migration 0032 aplicada por Julio no mesmo dia, e conferida contra o banco:** 0 blocos ainda
+carregam `'saldo-negativo'`, e os **22 blocos** existentes leem sem erro de spec. A conferência
+teve uma falha, e ela era **da asserção**: eu havia afirmado que todo bloco `alertas` carrega as 7
+regras, e um deles — criado pelo expert via MCP com subconjunto escolhido — tem 3
+(`lucro-negativo`, `despesas-alta`, `receita-queda`). Lista parcial não é anomalia: é o uso que a
+spec **permite**, e é exatamente o caso que a 2ª sentença da migration existe para tratar
+(remover o elemento preservando os outros). Vale registrar porque a asserção errada era a
+*otimista* — ela teria passado silenciosamente enquanto todos os blocos viessem do painel padrão.
+
 #### Duas razões, não uma
 
 O pedido junta dois cortes que parecem estéticos e não são.
