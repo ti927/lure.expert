@@ -649,6 +649,11 @@ de novo e ver o aviso azul dizendo que nada é novo.
 IA (confira em `/configuracoes/consumo`, que não deve registrar chamada nova). E, pelo claude.ai,
 pedir a importação de um **balanço**, que passa a funcionar pela primeira vez.
 
+**O teste que fecha o motivo real (26/ago):** no claude.ai, **reconectar** e pedir *"um gráfico de
+OPEX × CAPEX dos últimos meses"*. O expert tinha dito que não dava, porque somava as transferências;
+agora a descrição do schema o manda usar `visibilidade: 'caixa'`, e o CAPEX passa de −50.572 para
+**−88.528** — que é o total de "Investimentos Financeiros e Patrimoniais" da tela.
+
 **Da visibilidade herdada (26/ago):** em `/fluxo`, o ramo **Devoluções** tem de sumir — é o pai que
 você marcou e que antes não fazia efeito (31 lançamentos saem). Em `/configuracoes/categorias`, o
 botão FC/DRE do **pai** agora diz "e todos os filhos" ao passar o mouse. E o que **não** pode mudar:

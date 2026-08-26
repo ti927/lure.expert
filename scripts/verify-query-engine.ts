@@ -20,6 +20,8 @@ import { db } from '@/db'
 import { sql } from 'drizzle-orm'
 import { runQuery, explicarQuery } from '@/lib/query/engine'
 import { scopeFromJob, scopeFromSession } from '@/lib/query/scope'
+import { querySpecSchema } from '@/lib/query/spec'
+import * as z from 'zod'
 import { QueryValidationError, ScopeDeniedError } from '@/lib/query/errors'
 import { GROUPING_IDS } from '@/lib/query/groupings'
 import { MEASURE_IDS } from '@/lib/query/measures'
@@ -373,6 +375,27 @@ async function main() {
   })
   t(exp.periodo && 'de' in exp.periodo && exp.regime === 'caixa',
     `explicarQuery resolve "últimos 12 meses" em ${JSON.stringify(exp.periodo)}`)
+
+  // ── 11. O que o MODELO enxerga do schema ─────────────────────────────────
+  //
+  // A JSDoc do `spec.ts` não chega ao modelo: `z.toJSONSchema` publica só o que
+  // vem de `.describe()`. Em 26/ago o expert concluiu que não dava para montar
+  // um gráfico OPEX × CAPEX porque somava as transferências — ele tinha o
+  // filtro `visibilidade` disponível e via apenas o enum cru. Descrição que não
+  // chega ao modelo é descrição que não existe, e nada quebra quando ela some.
+  {
+    const publicado = JSON.stringify(z.toJSONSchema(querySpecSchema, { io: 'input' }))
+    t(publicado.includes('ocultar na DRE'),
+      'o schema publicado explica o que `visibilidade` faz')
+    t(publicado.includes('opex_capex') && publicado.includes('CAPEX'),
+      'e avisa que agrupar por opex_capex sem filtrar traz as transferências')
+    t(publicado.includes('Balan'),
+      'e explica `excluirBalanco`')
+    // O outro sentido: removida a `.describe()`, o schema segue VÁLIDO e o
+    // modelo volta a ficar sem pista. Os valores continuam publicados.
+    t(publicado.includes('"dre"') && publicado.includes('"caixa"') && publicado.includes('"todas"'),
+      'os três valores seguem publicados (a descrição não substituiu o enum)')
+  }
 
   console.log(`\n${ok} ok, ${falhas} falha(s)`)
   process.exit(falhas > 0 ? 1 : 0)

@@ -88,14 +88,33 @@ export const filtrosSchema = z.object({
    * Tipos de balanço patrimonial ficam fora por padrão: o app é orientado a
    * resultado, e somar ativo com receita produz número sem significado.
    */
-  excluirBalanco: z.boolean().default(true),
+  excluirBalanco: z.boolean().default(true)
+    .describe(
+      'Deixa de fora as naturezas de Balanço (ativo, passivo, patrimônio líquido). ' +
+      'Padrão true: somar ativo com receita produz número sem significado.'),
 
   /**
    * Respeita as marcações `hide_in_dre` / `hide_in_cashflow` do plano de contas.
+   *
    * Padrão `todas` — a ocultação é decisão de apresentação de uma tela
    * específica, e o motor não deve escondê-la por conta própria.
+   *
+   * A `.describe()` existe porque a JSDoc NÃO chega ao modelo: `z.toJSONSchema`
+   * só publica o que vem de `.describe()`. Sem ela o modelo via o enum cru
+   * `['dre','caixa','todas']` e nenhuma pista do que escolher — foi assim que,
+   * em 26/ago, o expert concluiu que não dava para montar um gráfico OPEX ×
+   * CAPEX: ele estava somando as transferências, que o cliente já havia marcado
+   * como ocultas, e não sabia que existia um filtro que as respeitasse.
    */
-  visibilidade: z.enum(['dre', 'caixa', 'todas']).default('todas'),
+  visibilidade: z.enum(['dre', 'caixa', 'todas']).default('todas')
+    .describe(
+      'Respeita os selos "ocultar na DRE" / "ocultar no Fluxo" do plano de contas — que o cliente ' +
+      'usa para tirar de análise o que é transitório (transferência entre contas próprias, ' +
+      'devolução, suprimento de caixa). Ocultar uma natureza PAI oculta o ramo inteiro. ' +
+      'Padrão "todas": nada é escondido, e é a escolha certa para conferir contra o extrato. ' +
+      'Use "caixa" em qualquer leitura de fluxo de caixa e "dre" em leitura de resultado — ' +
+      'INCLUSIVE ao agrupar por opex_capex, senão as transferências entram no balde CAPEX e ' +
+      'distorcem o número (medido numa base real: CAPEX ia de -50.572 para -88.528 ao filtrar).'),
 // No Zod 4 o default de um objeto é o valor de SAÍDA, então os dois campos com
 // default precisam aparecer aqui — omitir `filtros` inteiro tem de produzir o
 // mesmo resultado que passar `{}`.
@@ -109,7 +128,11 @@ export const ordenacaoSchema = z.object({
 export const querySpecSchema = z.object({
   fonte:      z.enum(SOURCE_IDS).default('realizado'),
   medidas:    z.array(z.enum(MEASURE_IDS)).min(1).max(MEDIDAS_MAX).default(['valor_liquido']),
-  agruparPor: z.array(z.enum(GROUPING_IDS)).max(AGRUPAR_MAX).default([]),
+  agruparPor: z.array(z.enum(GROUPING_IDS)).max(AGRUPAR_MAX).default([])
+    .describe(
+      `Até ${AGRUPAR_MAX} eixos. "opex_capex" separa operacional de não-operacional e vem da ` +
+      'natureza PAI — combine com filtros.visibilidade = "caixa", ou as transferências entre ' +
+      'contas próprias caem no balde CAPEX.'),
   periodo:    periodoSchema,
   filtros:    filtrosSchema,
   ordenarPor: z.array(ordenacaoSchema).max(2).default([]),

@@ -1386,3 +1386,39 @@ Líquido.
 Pessoal; −212.657 na ZARUR). Levantado e **deixado como está**, a pedido: *"não vai fechar, eu não
 tenho todas as contas registradas"*. Fica registrado para que ninguém trate o desequilíbrio como
 defeito no futuro.
+
+### 24.1 — O objetivo real era um gráfico, e a causa era descoberta
+
+Só depois de tudo entregue Julio contou **por que** queria o selo em branco: *"o claude.ai falou que
+não pode montar um gráfico usando as classificações opex/capex porque está puxando as
+transferências"*. A pergunta que ele fez era sobre o meio; o fim era outro.
+
+E o fim **já estava resolvido** pelo que a Decisão 24 entregou — medido na base real, agrupando por
+`opex_capex` no período do print:
+
+| filtro | CAPEX líquido | lançamentos |
+|---|---:|---:|
+| `visibilidade: 'todas'` (o padrão, o que o expert usou) | −50.572,86 | 131 |
+| `visibilidade: 'caixa'` | **−88.528,41** | **20** |
+
+O segundo número é exatamente o total de "Investimentos Financeiros e Patrimoniais" da tela. As 111
+linhas de transferência e devolução saem, e o CAPEX passa a ser investimento de verdade.
+
+**A causa de o expert não conseguir era de DESCOBERTA, não de capacidade** — a mesma classe dos
+achados 7 e 9 do hardening. `spec.ts` não tinha **uma única `.describe()`**: toda a documentação dos
+filtros estava em JSDoc, e `z.toJSONSchema` publica apenas o que vem de `.describe()`. O modelo
+recebia `visibilidade` como o enum cru `['dre','caixa','todas']`, sem uma palavra sobre o que
+significavam. Ele tinha a ferramenta na mão e nenhuma pista de que era ela.
+
+Corrigido em `visibilidade`, `excluirBalanco` e `agruparPor`, este último dizendo explicitamente que
+`opex_capex` vem da natureza PAI e precisa do filtro de visibilidade.
+
+**A regra que fica, e ela é geral:** documentação que não chega ao modelo é documentação que não
+existe — e nada quebra quando ela some, porque o schema segue válido. Por isso `verify-query-engine`
+ganhou uma seção que **afirma sobre o JSON Schema publicado**, não sobre o código-fonte. Sem essa
+asserção, remover uma `.describe()` seria uma regressão invisível.
+
+**E a lição de método:** eu respondi à pergunta literal ("posso deixar em branco?") com um
+levantamento correto, e só descobri o objetivo depois. Perguntar *para que serve* teria chegado ao
+mesmo lugar por um caminho mais curto — embora o defeito do selo do pai, que o caminho longo achou,
+fosse real e valesse a viagem.

@@ -69,6 +69,35 @@ abaixo da linha, em "Variação de Caixa".
 eu não tenho todas as contas registradas"*. +29.680 no período do print, +46.738 na base da Financeiro
 Pessoal, −212.657 na ZARUR. Anotado para que ninguém trate como defeito depois.
 
+#### O objetivo real, contado depois — e a causa era descoberta
+
+Entregue tudo, Julio contou o motivo: *"o claude.ai falou que não pode montar um gráfico usando as
+classificações opex/capex porque está puxando as transferências"*. A pergunta era sobre o meio; o fim
+era outro — e o fim **já estava resolvido**. Medido na base real, no período do print:
+
+| filtro | CAPEX líquido | lançamentos |
+|---|---:|---:|
+| `visibilidade: 'todas'` (padrão; o que o expert usou) | −50.572,86 | 131 |
+| `visibilidade: 'caixa'` | **−88.528,41** | **20** |
+
+O segundo é exatamente o total de "Investimentos Financeiros e Patrimoniais" da tela.
+
+**A causa de o expert não conseguir era DESCOBERTA** — mesma classe dos achados 7 e 9 do hardening.
+`spec.ts` não tinha **uma única `.describe()`**: a documentação toda estava em JSDoc, e
+`z.toJSONSchema` publica só o que vem de `.describe()`. O modelo via `visibilidade` como o enum cru
+`['dre','caixa','todas']`, sem uma palavra sobre o significado. Corrigido em `visibilidade`,
+`excluirBalanco` e `agruparPor` — este dizendo que `opex_capex` vem da natureza PAI e precisa do
+filtro.
+
+**Documentação que não chega ao modelo é documentação que não existe, e nada quebra quando ela
+some.** Por isso `verify-query-engine` ganhou uma seção 11 que afirma sobre o **JSON Schema
+publicado**, não sobre o código: remover uma `.describe()` seria regressão invisível. 23 → **27
+asserções**.
+
+**Método:** respondi à pergunta literal e só soube do objetivo depois. Perguntar *para que serve*
+teria encurtado o caminho — ainda que o defeito do selo do pai, achado pelo caminho longo, fosse
+real.
+
 ---
 
 ### ✅ Corte do saldo e da projeção por recorrência (26/ago)
