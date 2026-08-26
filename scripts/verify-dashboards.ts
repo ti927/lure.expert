@@ -611,6 +611,63 @@ async function main() {
     t(chaves.join() === [...chaves].sort().join(), 'em ordem cronológica')
   }
 
+  // ═══ 14. O DoD da 5.C: o painel virtual == a tela clássica ════════════════
+  //
+  // Sobre as organizações REAIS, em vários meses, e só leitura. É a conciliação
+  // do ritual da casa (9.7, 10.3): trocar a tela por blocos só vale se o número
+  // não mudar. Compara o cálculo clássico contra o que os blocos produzem.
+  console.log('\n── 14. conciliação com os dados reais ──')
+  {
+    const reais = await db.select({ id: organizations.id, nome: organizations.name })
+      .from(organizations)
+      .where(sql`${organizations.name} NOT LIKE 'ZZ Teste%'`)
+    const mesesReais = ['2026-08', '2026-07', '2026-06', '2026-05', '2026-03', '2025-12']
+
+    let comparados = 0, divergentes = 0, comDado = 0
+    for (const o of reais) {
+      const sc = await scopeFromSession(DONO, o.id).catch(() => null)
+      // `scopeFromSession` exige membership: nas organizações onde o usuário de
+      // teste não tem vínculo, usa-se o escopo de job (é leitura pura).
+      const escopo = sc ?? (await import('@/lib/query/scope')).scopeFromJob(o.id)
+      const blocos = blocosDoPainelPadraoValidados()
+
+      for (const m of mesesReais) {
+        const classico = await calcularKpisDoMes(o.id, m)
+        const [bReceita, bDespesa, bLucro, bSaldo] = await Promise.all([
+          executarBloco(escopo, blocos[0], { mes: m }),
+          executarBloco(escopo, blocos[1], { mes: m }),
+          executarBloco(escopo, blocos[2], { mes: m }),
+          executarBloco(escopo, blocos[3], { mes: m }),
+        ])
+        const doBloco = {
+          receita: bReceita.tipo === 'kpi' ? bReceita.valor : NaN,
+          despesas: bDespesa.tipo === 'kpi' ? bDespesa.valor : NaN,
+          lucro: bLucro.tipo === 'kpi' ? bLucro.valor : NaN,
+          saldo: bSaldo.tipo === 'kpi' ? bSaldo.valor : NaN,
+        }
+        const doClassico = {
+          receita: classico.receita.current,
+          despesas: classico.despesas.current,
+          lucro: classico.lucroLiquido.current,
+          saldo: classico.saldoCaixa,
+        }
+        comparados += 4
+        if (classico.hasData) comDado += 4
+        for (const k of ['receita', 'despesas', 'lucro', 'saldo'] as const) {
+          // Centavo: os dois lados somam `numeric` do Postgres, mas o bloco
+          // passa pelo motor (transaction_lines) e o clássico lê transactions.
+          if (Math.abs(doBloco[k] - doClassico[k]) > 0.005) {
+            divergentes++
+            console.log(`  DIVERGE | ${o.nome} ${m} ${k}: bloco ${doBloco[k]} × clássico ${doClassico[k]}`)
+          }
+        }
+      }
+    }
+    t(divergentes === 0,
+      `${reais.length} organizações × ${mesesReais.length} meses × 4 KPIs = ${comparados} comparações (${comDado} com dado), ${divergentes} divergência(s)`)
+    t(comDado > 0, `e ${comDado} delas tinham dado de verdade — a conciliação não passou no vazio`)
+  }
+
   // ═══ Fim ═════════════════════════════════════════════════════════════════
   await limpar()
   const restou = await db.select({ id: dashboards.id })

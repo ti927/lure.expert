@@ -1,163 +1,24 @@
 'use server'
 
-import { getAuthContext } from '@/lib/auth-context'
+// O que sobrou de `server/dashboard.ts` depois da Fase 5.
+//
+// A tela clássica virou um painel de blocos na 5.C, e as leituras que a
+// alimentavam foram substituídas: os 4 KPIs e os 7 indicadores mudaram de casa
+// para `lib/dashboard/` na 5.B (o bloco os chama direto), e o Top 5 e o gráfico
+// de 90 dias viraram os blocos `ranking` e `serie` — uma spec por cima do motor,
+// que é o ponto da fase: "top 5 UENs" deixou de exigir função nova.
+//
+// Ficou só o DRILL-DOWN, que não é agregação: ele lista lançamentos e assina
+// URLs de logo pelo Storage, coisa de sessão de navegador. Todo export num
+// arquivo `'use server'` é um endpoint HTTP, então manter as quatro funções sem
+// chamador seria superfície sem propósito.
 
+import { getAuthContext } from '@/lib/auth-context'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { categories } from '@/db/schema'
-import { eq, and, inArray, sql } from 'drizzle-orm'
-import { alias } from 'drizzle-orm/pg-core'
-import { subDays, format, parseISO } from 'date-fns'
+import { sql } from 'drizzle-orm'
 import type { DrillDownTransaction } from '@/lib/dre-types'
-import { runQuery } from '@/lib/query/engine'
-import { scopeFromSession } from '@/lib/query/scope'
-import {
-  calcularKpisDoMes, resolveMonthRange, TIPOS_SAIDA_CAIXA,
-  type DashboardKPIs, type KPIValue,
-} from '@/lib/dashboard/kpis'
-import { calcularIndicadores, type FinancialIndicators } from '@/lib/dashboard/indicators'
 
-// KPIs, indicadores e as listas de tipos MUDARAM DE CASA na 5.B para
-// `src/lib/dashboard/` — o bloco de painel precisa deles fora de uma sessão
-// HTTP. Aqui ficaram as cascas e o que é específico da tela (drill-down, que
-// assina URLs pelo Storage).
-export type { DashboardKPIs, KPIValue, FinancialIndicators }
-
-export type CashFlowDay = {
-  date: string
-  inflow: number
-  outflow: number
-}
-
-export type TopExpenseCategory = {
-  // Categoria-folha (Filho, ou Pai-sem-filhos quando a transação está direto nela).
-  categoryId:   string
-  categoryName: string
-  categoryCode: string | null
-  categoryType: string
-  // Contexto: Natureza Pai. Null quando a categoria-folha já é uma Pai-sem-filhos.
-  parentId:     string | null
-  parentName:   string | null
-  parentCode:   string | null
-  total:        number
-  txCount:      number
-}
-
-/**
- * Os 4 KPIs do mês.
- *
- * O cálculo MUDOU DE CASA na 5.B para `lib/dashboard/kpis.ts` — o bloco
- * `alertas` do painel precisa dos mesmos números fora de uma sessão HTTP, e
- * duas cópias divergiriam na primeira mudança de regra. Aqui ficou a casca que
- * resolve a organização ativa.
- */
-export async function getDashboardKPIs(referenceMonth?: string): Promise<DashboardKPIs> {
-  const { organizationId } = await getAuthContext()
-  return calcularKpisDoMes(organizationId, referenceMonth)
-}
-
-/**
- * Os 7 indicadores financeiros.
- *
- * Miolo em `lib/dashboard/indicators.ts` desde a 5.B, pelo mesmo motivo dos
- * KPIs: o bloco `indicador` do painel o consome direto.
- */
-export async function getFinancialIndicators(referenceMonth?: string): Promise<FinancialIndicators> {
-  const { organizationId } = await getAuthContext()
-  return calcularIndicadores(organizationId, referenceMonth)
-}
-
-// Top 5 categorias-folha (Filho) com maior SAÍDA de caixa no mês.
-// - Inclui tipos DRE de despesa (sga, cpv, etc.) + emprestimos + investimentos
-//   (saídas não-operacionais que o usuário também considera "despesa")
-// - Exclui receita, transfer e BP
-// - Conta SÓ outflows (não neta com inflows — assim financiamentos com receivement +
-//   pagamento no mesmo mês não somem do top)
-// - Respeita hide_in_cashflow (mesmo critério de /fluxo)
-// Quando uma transação está classificada direto numa Pai-sem-filhos, a própria Pai
-// aparece como categoria-folha (parentId fica null).
-//
-// `TIPOS_SAIDA_CAIXA` mudou de casa para `lib/dashboard/kpis.ts` na 5.B: o bloco
-// de ranking do painel padrão monta o filtro a partir da MESMA lista.
-
-/**
- * Top N categorias de despesa do mês.
- *
- * Passou a ser uma consulta do motor na Fase 1.3, e o `limite` deixou de estar
- * cravado no SQL — era literalmente `LIMIT 5`, e foi esse detalhe que motivou o
- * motor inteiro: trocar `agruparPor` para `unidade_de_negocio` agora responde
- * "top 5 UENs" sem função nova.
- *
- * Mudança de fonte junto: lê `transaction_lines` em vez de `transactions`, o que
- * corrige a atribuição de lançamentos rateados (a soma não muda, porque a
- * natureza não é rateada, mas a contagem passa a ser de lançamentos e não de
- * partes).
- */
-export async function getTopExpenseCategories(
-  referenceMonth?: string,
-  limite = 5,
-): Promise<TopExpenseCategory[]> {
-  const { userId, organizationId } = await getAuthContext()
-  const { curFrom, curTo } = resolveMonthRange(referenceMonth)
-
-  const scope = await scopeFromSession(userId, organizationId)
-  const resultado = await runQuery(scope, {
-    fonte:      'realizado',
-    medidas:    ['saidas', 'contagem'],
-    agruparPor: ['categoria'],
-    periodo:    { tipo: 'intervalo', de: curFrom, ate: curTo, regime: 'caixa' },
-    // `direcao` filtra LINHAS, não só a medida. Sem ele, uma categoria que só
-    // teve entrada no mês apareceria na lista com R$ 0,00 de saída, ocupando
-    // uma das cinco vagas — a query original filtrava `direction = 'outflow'`
-    // e por isso nunca a via.
-    filtros: {
-      direcao: 'outflow',
-      tiposDeCategoria: [...TIPOS_SAIDA_CAIXA],
-      visibilidade: 'caixa',
-      excluirBalanco: true,
-    },
-    ordenarPor: [{ por: 'saidas', direcao: 'desc' }],
-    limite,
-  })
-
-  const ids = resultado.linhas.map(l => l.chaves[0].id).filter((x): x is string => !!x)
-  if (ids.length === 0) return []
-
-  // A hierarquia que a tela mostra não é agregação — vem do plano de contas.
-  const parent = alias(categories, 'parent')
-  const hierarquia = await db
-    .select({
-      id: categories.id, name: categories.name, code: categories.code, type: categories.type,
-      parentId: parent.id, parentName: parent.name, parentCode: parent.code,
-    })
-    .from(categories)
-    .leftJoin(parent, eq(categories.parentId, parent.id))
-    .where(and(eq(categories.organizationId, organizationId), inArray(categories.id, ids)))
-
-  const porId = new Map(hierarquia.map(h => [h.id, h]))
-
-  return resultado.linhas
-    .map((l): TopExpenseCategory | null => {
-      const id = l.chaves[0].id
-      const h = id ? porId.get(id) : undefined
-      if (!id || !h) return null
-      return {
-        categoryId:   id,
-        categoryName: h.name,
-        categoryCode: h.code,
-        categoryType: h.type,
-        parentId:     h.parentId,
-        parentName:   h.parentName,
-        parentCode:   h.parentCode,
-        total:        l.medidas.saidas,
-        txCount:      l.medidas.contagem,
-      }
-    })
-    .filter((x): x is TopExpenseCategory => x !== null)
-}
-
-// Drill-down para qualquer conjunto de categoryIds + range de datas. Usado pelo card
-// Top 5 categorias do dashboard, mas é genérico — não filtra por document_id (≠ /balanco).
 export async function getDashboardCategoryDrillDown(
   categoryIds: string[],
   dateRange:   { from: string; to: string },
@@ -303,41 +164,3 @@ export async function getDashboardCategoryDrillDown(
 
   return { transactions }
 }
-
-/**
- * Movimentação diária dos 90 dias que terminam no mês de referência.
- *
- * Migrada para o motor na Fase 1.3. Sem filtro de tipo — o gráfico mostra o
- * caixa como ele é, incluindo transferências e contas patrimoniais, então
- * `excluirBalanco` vai explicitamente `false` e a visibilidade fica em `todas`.
- * Os padrões do motor são mais restritivos que isso, e herdá-los mudaria o
- * gráfico em silêncio.
- *
- * O teto de 500 linhas do motor cabe: 90 dias.
- */
-export async function getCashFlowChart(referenceMonth?: string): Promise<CashFlowDay[]> {
-  const { userId, organizationId } = await getAuthContext()
-
-  const { curTo } = resolveMonthRange(referenceMonth)
-  const fromDate = format(subDays(parseISO(curTo), 89), 'yyyy-MM-dd')
-
-  const scope = await scopeFromSession(userId, organizationId)
-  const resultado = await runQuery(scope, {
-    fonte:      'realizado',
-    medidas:    ['entradas', 'saidas'],
-    agruparPor: ['dia'],
-    periodo:    { tipo: 'intervalo', de: fromDate, ate: curTo, regime: 'caixa' },
-    filtros:    { excluirBalanco: false, visibilidade: 'todas' },
-    ordenarPor: [{ por: 'dia', direcao: 'asc' }],
-    limite:     500,
-  })
-
-  return resultado.linhas
-    .filter(l => l.chaves[0].id !== null)
-    .map(l => ({
-      date:    l.chaves[0].id as string,
-      inflow:  l.medidas.entradas,
-      outflow: l.medidas.saidas,
-    }))
-}
-

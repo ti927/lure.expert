@@ -141,6 +141,10 @@ Fase 3 daqui (Categorização).
   4 dimensões, do lote e do editor de modelos), `AllocationTemplateBar`
 - `/components/budget` — o que /orcamento e /dre compartilham: `SeriesDialog` (criar/editar
   lançamento, com os 3 escopos), `ScopeConfirmDialog`, `BudgetDrillDownDialog`
+- `/components/dashboard` — o painel configurável (Fase 5.C): `DashboardGrid` (grade de 12
+  colunas, seletores, modo Organizar), `BlockView` (**um ramo por tipo de bloco, e nenhum
+  consulta nada** — o dado chega pronto do servidor), `AlertsSection`, `IndicatorItem` +
+  `CATALOGO_DE_INDICADORES`, `SharePanelDialog`, `NomeDoPainelDialog`
 - `/components/charts` — a biblioteca de gráficos (Fase 5.A): `chart-theme` (paleta categórica
   `--chart-1..8`, `COR_ENTRADA/SAIDA` + projeções, formatadores), `chart-container` (tooltip e
   defaults de eixo), `BarChart`, `LineChart`, `AreaChart`, `ComposedChart`, `PieChart`,
@@ -341,8 +345,28 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 |---|---|---|
 | 5.A | Paleta `--chart-1..8` + `components/charts/` (chart-theme, chart-container, bar, line, area, composed, pie, horizontal-bar) + migração de `/dashboard` e `/fluxo` + vitrine | ✅ |
 | 5.B | Miolo em `/lib`: CRUD de painéis/blocos (Zod nas duas direções), painel padrão virtual, execução de bloco (spec → motor; escotilhas `indicador`/`alertas` extraídas para `/lib`), compartilhamento com enforcement admin+. **111/111** contra o banco + conciliação 54 comparações / 0 divergências | ✅ |
-| 5.C | `/dashboard` vira carregador de painel; grid + um componente por tipo de bloco; heranças preservadas (delta de despesas invertido, dismiss por mês, drill-down); bloco inválido quebra sozinho | 🔲 |
+| 5.C | `/dashboard` virou carregador de painel; grade de 12 colunas + `BlockView` (um ramo por tipo); seletor de painel, organizar (mover/redimensionar/remover), compartilhar; heranças preservadas. **113/113**, com conciliação de 144 comparações reais / 0 divergências | ✅ (aguardando confirmação na tela) |
 | 5.D | MCP: `listar_paineis`, `ler_painel`, `criar_painel`, `adicionar_bloco` (executa a query e devolve as linhas; `previa: true` não grava), `editar_bloco`, `remover_bloco`, `reordenar_blocos`, `compartilhar_painel` | 🔲 |
+
+**Da 5.C, o que ficou decidido no código:**
+
+- **`server/dashboard.ts` encolheu de 548 para 166 linhas.** Os 4 KPIs e os 7 indicadores já
+  tinham mudado de casa na 5.B; o Top 5 e o gráfico de 90 dias **viraram blocos** (`ranking` e
+  `serie` por cima do motor) e as quatro funções ficaram sem chamador. Foram removidas: em arquivo
+  `'use server'` **todo export é um endpoint HTTP**, e quatro sem chamador é superfície sem
+  propósito. Sobrou `getDashboardCategoryDrillDown`, que não é agregação — lista lançamentos e
+  assina URLs de logo pelo Storage.
+- **A tela edita LAYOUT, o expert edita CONTEÚDO.** "Organizar" move, redimensiona (em passos de 3
+  colunas) e remove blocos; criar bloco e mudar a consulta são do claude.ai. O painel vazio e o
+  virtual dizem isso na tela, com exemplo de pedido.
+- **Drill-down só no ranking por natureza.** A leitura de detalhe filtra por categoria; ranking por
+  unidade de negócio não tem por onde abrir. Declarado, não escondido — a linha só vira botão
+  quando `agruparPor[0] === 'categoria'`.
+- **O catálogo dos 7 indicadores virou DADO** (`CATALOGO_DE_INDICADORES`), com rótulo, ícone,
+  formato, limiares e a explicação do popover. Eram 7 blocos de JSX repetidos; como mapa, o bloco
+  `indicador` escolhe quais mostrar — que é o que o `block-spec` promete desde a 1.4.
+- **A inversão do delta de despesas sobreviveu**, agora declarada: `menorEhMelhor` faz o
+  `KPICard` receber `-deltaPct`, no lugar do `delta={-kpis.despesas.delta}` que a tela fazia na mão.
 
 **Da 5.B, o que ficou decidido no código:**
 
@@ -577,6 +601,13 @@ pedir a importação de um **balanço**, que passa a funcionar pela primeira vez
 **Da 5.A: CONFIRMADA em 25/ago** — Julio conferiu a paleta em `/style-guide/charts` e aprovou;
 `/dashboard` e `/fluxo` idênticos. Sai da lista de pendências.
 
+**Da 5.C, o que precisa de olho humano** — `/dashboard` mudou de natureza (é um painel de blocos
+agora), e nada disso passa por script: (1) a tela deve estar **igual à de sempre** — 4 KPIs,
+alertas, gráfico de 90 dias, Top 5 e indicadores, nessa ordem; (2) o botão **Personalizar**
+(admin+), que materializa o padrão e libera o **Organizar** — mover, estreitar/alargar e remover
+bloco; (3) o **seletor de painel** e o **Compartilhar** (com a empresa ou com pessoas, em ler ou
+editar); (4) o seletor de mês e o **drill-down** clicando numa linha do Top 5.
+
 **Da 4.A: CONFIRMADA em 25/ago** — o convite de ponta a ponta rodou na tela (convidar → e-mail →
 definir senha → dashboard). Sai da lista de pendências.
 
@@ -744,6 +775,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Motor + MCP (plano de 23/ago)** | |
+| 5.C (o renderizador) | **`/dashboard` deixou de ser tela e virou painel de blocos.** `page.tsx` é carregador; `dashboard-client.tsx` (727 linhas) foi **dissolvido** em `components/dashboard/`: `dashboard-grid` (grade de 12 colunas, seletor de painel e de mês, modo Organizar), `block-view` (um ramo por tipo, e **nenhum ramo consulta nada** — o dado chega pronto, que é o que permite o mesmo componente servir o painel virtual, o gravado e a prévia do MCP), `alerts-section`, `indicator-item` e os dois diálogos. **`server/dashboard.ts` caiu de 548 para 166 linhas**: o Top 5 e o gráfico de 90 dias viraram os blocos `ranking` e `serie`, e as quatro funções órfãs foram removidas — em `'use server'` todo export é endpoint HTTP, e quatro sem chamador é superfície sem propósito; sobrou o drill-down, que lista lançamentos e assina URL de logo. **A tela edita LAYOUT, o expert edita CONTEÚDO** (decisão de 25/ago): mover, redimensionar em passos de 3 colunas e remover ficam na tela; bloco novo e mudança de consulta são do claude.ai, e a tela diz isso com exemplo de pedido. O **catálogo dos 7 indicadores virou dado** (`CATALOGO_DE_INDICADORES`) — eram 7 blocos de JSX repetidos, e como mapa o bloco escolhe quais mostrar. Drill-down só no ranking **por natureza**, porque a leitura de detalhe filtra por categoria — declarado, e a linha só vira botão nesse caso. Heranças preservadas: dismiss de alerta por mês no `localStorage`, e a inversão do delta de despesas agora declarada em `menorEhMelhor`. Verificado: **113/113**, incluindo a conciliação do DoD — **144 comparações sobre as 6 organizações REAIS (52 com dado), 0 divergências** entre o que os blocos calculam e o cálculo clássico |
 | 5.B (miolo dos painéis) | **`lib/dashboard/`: store, executor de bloco, painel padrão virtual — e três mudanças de casa.** `getDashboardKPIs` e `getFinancialIndicators` viraram cascas de 3 linhas (o SQL foi para `kpis.ts`/`indicators.ts`) e as 8 regras de alerta saíram de um `useMemo` de 88 linhas no cliente para `alerts.ts` — o bloco `alertas` precisa delas no SERVIDOR, e como função pura ficam legíveis pelo MCP. **O painel padrão é virtual**, consequência direta de "só admin+ cria": seed preguiçoso gravaria linha em nome do primeiro visitante, que pode ser viewer. **A janela é do bloco, o regime é da consulta** — `mes`/`ultimos_meses`/`ultimos_dias`/`acumulado` ancoram no mês do painel e substituem as datas, e `acumulado` não tem anterior (delta **nulo**, não zero). KPI ganhou `inverterSinal` (senão "Despesas" mostra −4.000, porque `valor_liquido` é entrada−saída) e recusa `agruparPor` na ESCRITA. Reordenar exige a lista completa e idêntica — a defesa da assinatura de plano da 3.3, contra apagar bloco que o autor da ordem nunca viu. Papel vem ANTES do share: admin+ edita, **só o dono** apaga/compartilha/define o próprio padrão, share `editar` não dá direito de apagar. Agrupamento **`semana`** novo no motor (ISO, chave na segunda). Verificado: **111/111** contra o banco numa organização descartável, incluindo os 4 KPIs batendo com o cálculo clássico, bloco lido do jsonb devolvendo o mesmo número, spec corrompida quebrando SÓ o próprio bloco, e o isolamento entre organizações; mais **conciliação de 54 comparações (6 organizações × 9 meses) com 0 divergências** entre o SQL antigo e o novo |
 | 5.A (gráficos) | **Paleta categórica + biblioteca `components/charts/`.** `--chart-1..8` (light+dark, classes `bg-chart-N`), com **rose fora de propósito** — fatia de pizza não pode parecer prejuízo — e slate como "outros"; projeções ganharam tokens (`--color-positive-soft`/`--color-negative-soft`, os emerald-300/red-300 que `/fluxo` usava como literais). 7 arquivos: `chart-theme` (paleta, `corCategorica` cíclica, formatadores, tipo `ChartSeries`), `chart-container` (tooltip genérico + defaults `GRADE`/`EIXO_X`/`EIXO_Y` como **objetos de props para espalhar**, porque o Recharts inspeciona o tipo dos filhos diretos), `bar` (agrupado/empilhado/misto por `stackId`), `line`, `area`, `composed` (série declara `visual`), `pie` (pizza/rosca, % no tooltip), `horizontal-bar` (ranking). **`name={label}` elimina formatter de legenda** — o mapeamento chave→humano acontece uma vez, na série. `/dashboard` e `/fluxo` migrados no mesmo commit perdendo `yFormatter`/`ChartTooltip`/`legendFormatter` locais; cores preservadas com exatidão (os hex antigos são os valores das variáveis novas). Vitrine `/style-guide/charts` + navegação entre as 3 páginas do style-guide. Verificado: `tsc`, lint e build limpos (41 rotas); o visual aguarda o olho do Julio |
 | 4.A (convites) | **Convites e aceite, sem migration** — o schema da Fase 1 antecipava tudo (`role`, `invited_email`, `invited_by_user_id`, `accepted_at`), e a escolha do e-mail automático manteve `user_id NOT NULL`: `inviteUserByEmail` cria a conta ANTES da membership. **Dois caminhos de convite** porque o Supabase recusa reconvidar e-mail cadastrado: novo → e-mail → `/auth/confirm` (verifyOtp server-side; o template PRECISA usar `{{ .TokenHash }}` — o padrão manda os tokens no fragmento, que nunca chega ao servidor) → `/convite/definir-senha` aceita todos os pendentes de uma vez; existente → convite pendente in-app, no `/onboarding` e em `/configuracoes`. **Miolo em `lib/members.ts`** (exercitável por script) com a matriz pura em `lib/members-types.ts` (client-safe, padrão `budget-types`); `server/members.ts` é casca. Regra do último owner é de CONTAGEM, não de matriz — e owner pendente não conta nem é protegido. Aceite/recusa autorizam pelo WHERE (id + user + pendente), sem oráculo de ids. Auditoria: 5 tipos de evento em `agent_events`. `destinoSeguro` mudou de casa para `lib/redirect-seguro.ts` (o `/auth/confirm` reusa a defesa do `?next=`). **Defeito achado pelo teste:** Drizzle 0.45 embrulha o erro do driver e o `23505` mora em `err.cause` — o catch do onboarding estava cego desde o upgrade (CNPJ duplicado caía na mensagem genérica); os três catches corrigidos. Verificado: **41/41** contra o banco em organizações descartáveis, `next build` limpo com 3 rotas novas. **Não verificado automaticamente** (exige SMTP + service key + template no painel): o envio real do e-mail e o `verifyOtp` do link |

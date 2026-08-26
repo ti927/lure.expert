@@ -12,6 +12,70 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 5.C — O renderizador: `/dashboard` vira painel de blocos
+
+**Verificado: 113/113 (`scripts/verify-dashboards.ts`), incluindo a conciliação do DoD — 144
+comparações sobre as 6 organizações REAIS, 52 com dado, 0 divergências entre o que os blocos
+calculam e o cálculo clássico. `tsc`/`next lint`/`next build` limpos. O visual aguarda o olho do
+Julio: a tela mudou de natureza e nenhum script vê pixel.**
+
+#### A dissolução
+
+`dashboard-client.tsx` (727 linhas) deixou de existir. No lugar, `components/dashboard/`:
+
+| Arquivo | O quê |
+|---|---|
+| `dashboard-grid.tsx` | grade de 12 colunas, seletor de painel e de mês, modo Organizar, os diálogos |
+| `block-view.tsx` | **um ramo por tipo de bloco** — e nenhum ramo consulta nada |
+| `alerts-section.tsx` | a tira de alertas, com o dismiss por mês |
+| `indicator-item.tsx` | a linha de indicador + o `CATALOGO_DE_INDICADORES` |
+| `share-panel-dialog.tsx` | com quem o painel é compartilhado |
+| `panel-name-dialog.tsx` | criar e renomear |
+
+A regra que organiza o `block-view`: **o dado chega pronto do servidor**. É o que permite o mesmo
+componente servir o painel virtual, o gravado e — na 5.D — a prévia que a ferramenta MCP devolve.
+
+#### `server/dashboard.ts`: 548 → 166 linhas
+
+Os 4 KPIs e os 7 indicadores já tinham mudado de casa na 5.B. Nesta sessão o **Top 5 e o gráfico
+de 90 dias viraram blocos** (`ranking` e `serie`, especificações por cima do motor), e as quatro
+funções ficaram sem chamador. Removidas — e o motivo não é estético: em arquivo `'use server'`
+**todo export é um endpoint HTTP acessível**, então quatro funções sem chamador são superfície de
+ataque sem propósito, e código morto mente para o próximo leitor. Sobrou
+`getDashboardCategoryDrillDown`, que não é agregação: lista lançamentos e assina URLs de logo pelo
+Storage, coisa de sessão de navegador.
+
+#### A tela edita LAYOUT, o expert edita CONTEÚDO
+
+A decisão de 25/ago virou interface: "Organizar" move, redimensiona (passos de 3 colunas, mínimo
+3, máximo 12) e remove blocos. Criar bloco e mudar a consulta são do claude.ai — e a tela **diz
+isso**, com exemplo de pedido, tanto no painel vazio quanto no virtual. O formulário do QuerySpec
+inteiro é praticamente uma segunda tela de DRE, e fica para a v1.1.
+
+#### Três detalhes que valem registro
+
+**O catálogo dos 7 indicadores virou dado.** Eram 7 blocos de JSX quase idênticos, cada um com
+rótulo, ícone, formato, limiares e três parágrafos de explicação no popover. Como
+`CATALOGO_DE_INDICADORES`, o bloco `indicador` consegue escolher quais mostrar — que é o que o
+`block-spec` promete desde a 1.4 e que o JSX repetido tornava impossível.
+
+**Drill-down só no ranking por natureza.** `getDashboardCategoryDrillDown` filtra por categoria;
+um ranking por unidade de negócio não tem por onde abrir. Em vez de fingir, a linha só vira botão
+quando `agruparPor[0] === 'categoria'` — e a nota de rodapé só convida ao clique nesse caso.
+
+**A inversão do delta de despesas sobreviveu, agora declarada.** A tela antiga fazia
+`delta={-kpis.despesas.delta}` na mão, com um comentário. Agora é `menorEhMelhor` na spec, que o
+`BlockView` traduz em `-deltaPct`: crescer 20% em despesa continua aparecendo em vermelho.
+
+#### A conciliação
+
+Seção 14 do script, sobre as organizações reais e só leitura: para cada uma, em 6 meses, os 4 KPIs
+do painel padrão contra `calcularKpisDoMes`. 144 comparações, 52 com dado de verdade, **0
+divergências** — e a asserção "52 tinham dado" existe para a conciliação não passar no vazio, que
+é o defeito que o próprio projeto já registrou como classe (campo publicado tem de variar).
+
+---
+
 ### ✅ Sessão 5.B — O miolo dos painéis em `/lib`
 
 **Verificado: 111/111 contra o banco real numa organização descartável
