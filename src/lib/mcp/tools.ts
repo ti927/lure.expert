@@ -44,6 +44,7 @@ import {
 import {
   cabecalhoDoArquivoSchema, TIPOS_DE_RELATORIO, TIPOS_DE_CONTA, ROTULO_DE_CONTA,
 } from '@/lib/import-contract'
+import { listarContasUsadas } from '@/lib/accounts'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -139,10 +140,18 @@ const descreverOrganizacao: Ferramenta = {
       .from(transactions)
       .where(eq(transactions.organizationId, scope.organizationId))
 
+    // `isActive` para bater com `listar_categorias`, que sempre filtrou por ele.
+    // Sem o filtro, as duas ferramentas anunciavam contagens diferentes do MESMO
+    // plano de contas (80 × 79 no diagnóstico de 26/ago, achado 5) — e uma
+    // natureza inativa não é destino de classificação, então a contagem que
+    // importa é a das ativas.
     const [plano] = await db
       .select({ naturezas: sql<number>`COUNT(*)::int` })
       .from(categories)
-      .where(eq(categories.organizationId, scope.organizationId))
+      .where(and(
+        eq(categories.organizationId, scope.organizationId),
+        eq(categories.isActive, true),
+      ))
 
     return {
       id: scope.organizationId,
@@ -201,11 +210,23 @@ const explicarConsulta: Ferramenta = {
   titulo: 'Explicar consulta',
   descricao:
     'Resolve uma consulta sem executá-la: devolve o período concreto, o regime, os agrupamentos e ' +
-    'as medidas que seriam usados. Serve para conferir um pedido caro ou ambíguo antes de rodar.',
-  entrada: entradaConsulta.partial({ organizationId: true }),
+    'as medidas que seriam usados. Serve para conferir um pedido caro ou ambíguo antes de rodar. ' +
+    'Exige o mesmo organizationId de `consultar` — conferir o plano contra uma empresa e executar ' +
+    'contra outra daria um resultado certo para a pergunta errada.',
+  // `organizationId` era OPCIONAL e, pior, ignorado: `explicarQuery` é pura e
+  // não toca o banco, então a chamada "funcionava" sem empresa nenhuma. Num
+  // consentimento com várias empresas isso é a pior forma de falha — a
+  // ferramenta que existe para VALIDAR era a única que não validava, e o modelo
+  // recebia confirmação de um plano que ninguém conferiu contra o escopo.
+  // Achado 3 do diagnóstico de 26/ago.
+  entrada: entradaConsulta,
   escopo: 'leitura',
-  async executar(args) {
-    const { organizationId: _ignorado, ...spec } = args as Record<string, unknown>
+  async executar(args, ctx) {
+    const { organizationId, ...spec } = args as Record<string, unknown>
+    // O escopo não entra no cálculo (a explicação é pura), mas a checagem
+    // precisa acontecer: sem ela, "explicar" aceitaria uma empresa que a
+    // conexão não alcança e devolveria um plano com ar de aprovado.
+    await escopoDe(ctx, String(organizationId))
     return explicarQuery(spec as never)
   },
 }
@@ -257,6 +278,32 @@ const listarCategorias: Ferramenta = {
       .limit(400)
 
     return { naturezas: linhas, total: linhas.length }
+  },
+}
+
+const listarContas: Ferramenta = {
+  nome: 'listar_contas',
+  titulo: 'Listar contas',
+  descricao:
+    'As contas e cartões que aparecem nos lançamentos: id, nome, tipo, número, quantos lançamentos ' +
+    'e o período. É o que traduz um `contaId` cru (que `listar_regras` e `consultar` devolvem) em ' +
+    'algo legível, e o que permite preencher `filtros.contas` sem adivinhar. ' +
+    '`nomeAmbiguo: true` marca contas que dividem o mesmo nome com outra — nesse caso use o número ' +
+    'ou o período para desempatar, e NUNCA suponha qual é qual pelo nome.',
+  entrada: alvo,
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const scope = await escopoDe(ctx, String(args.organizationId))
+    const contas = await listarContasUsadas(scope.organizationId)
+    const ambiguas = contas.filter(c => c.nomeAmbiguo).length
+    return {
+      contas,
+      total: contas.length,
+      ...(ambiguas > 0 ? {
+        aviso: `${ambiguas} conta(s) dividem o nome com outra. Desempate pelo número ou pelo ` +
+          'período antes de usar o id em qualquer filtro.',
+      } : {}),
+    }
   },
 }
 
@@ -1515,6 +1562,7 @@ const CATALOGO: Ferramenta[] = [
   listarOrganizacoes,
   descreverOrganizacao,
   listarCategorias,
+  listarContas,
   listarDimensoes,
   listarModelosDeRateio,
   listarVersoesDeOrcamento,
@@ -1551,9 +1599,17 @@ export function acharFerramenta(nome: string, scopes: Escopo[]): Ferramenta | nu
  * `io: 'input'` é o detalhe que importa: no modo de saída, todo campo com
  * `.default()` viraria obrigatório, e o modelo passaria a preencher à força
  * `filtros`, `limite` e `ordenarPor` em toda chamada.
+ *
+ * `reused: 'ref'` fatora o que se repete em `$defs`. Sem ele, `adicionar_bloco`
+ * publicava 16KB: sete tipos de bloco, e os quatro que consultam repetindo o
+ * schema INTEIRO de `query` — filtros, período, medidas e agrupamentos, quatro
+ * vezes. Com `$ref` são 7KB. O diagnóstico de 26/ago (achado 7) mediu o efeito
+ * disso do lado do cliente: precisou de quatro buscas para achar a ferramenta,
+ * inclusive procurando pela descrição literal dela — e é a ferramenta que o
+ * próprio `criar_painel` indica como próximo passo.
  */
 export function schemaDeEntrada(f: Ferramenta): Record<string, unknown> {
-  return z.toJSONSchema(f.entrada, { io: 'input' }) as Record<string, unknown>
+  return z.toJSONSchema(f.entrada, { io: 'input', reused: 'ref' }) as Record<string, unknown>
 }
 
 /** Erro de domínio → texto que o modelo consegue corrigir sozinho. */

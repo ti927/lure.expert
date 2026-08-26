@@ -16,12 +16,13 @@
 import { z } from 'zod'
 import { blockSpecSchema } from '@/lib/dashboard/block-spec'
 import {
-  listarPaineis, lerPainel, criarPainel, adicionarBloco, editarBloco,
+  listarPaineis, lerPainel, criarPainel, apagarPainel, adicionarBloco, editarBloco,
   removerBloco, reordenarBlocos, compartilharPainel,
 } from '@/lib/dashboard/store'
 import { executarBloco } from '@/lib/dashboard/run-block'
 import { papelNaOrganizacao } from '@/lib/members'
 import { scopeFromMcpGrant } from '@/lib/query/scope'
+import { exigirConfirmacao, PALAVRA_DE_CONFIRMACAO } from './preview'
 import type { Ferramenta, ContextoMcp } from './tools-types'
 
 const uuid = z.string().uuid()
@@ -168,11 +169,69 @@ const entradaAdicionarBloco = alvo.extend({
   ),
 })
 
+/**
+ * O par de `criar_painel`.
+ *
+ * Faltava — achado 8 do diagnóstico de 26/ago: dava para criar painel e remover
+ * os blocos um a um, mas o painel vazio ficava, e só a tela o apagava. Criar sem
+ * excluir deixa lixo que quem criou não consegue limpar.
+ *
+ * É a ÚNICA exclusão do catálogo, e o que a torna aceitável é o que ela não
+ * apaga: painel não contém dado financeiro, só a forma de olhar para ele. As
+ * exclusões que ficaram de fora da v1 (lançamentos, regras, versão de orçamento)
+ * apagam contabilidade e pedem `prever_exclusao_*` com contagem antes.
+ */
+const apagarPainelFerramenta: Ferramenta = {
+  nome: 'apagar_painel',
+  titulo: 'Apagar painel',
+  descricao:
+    'Apaga o painel, com os blocos e os compartilhamentos dele. **Não apaga lançamento, natureza ' +
+    'nem orçamento** — some a forma de visualizar, e os números continuam intactos em /transacoes ' +
+    'e na DRE. Ainda assim é irreversível: confirme com o usuário, pelo NOME do painel, antes de ' +
+    'chamar. Só o dono do painel apaga.',
+  entrada: alvo.extend({
+    painelId: uuid,
+    confirmacao: z.string().describe(
+      `A palavra literal "${PALAVRA_DE_CONFIRMACAO}". Serve para o aceite do usuário aparecer na ` +
+      'conversa, onde ele lê — o mesmo dente das outras escritas.',
+    ),
+  }),
+  escopo: 'escrita',
+  async executar(args, ctx) {
+    const a = args as { organizationId: string; painelId: string; confirmacao: string }
+    const scope = await escopoDe(ctx, a.organizationId)
+
+    const falta = exigirConfirmacao(a.confirmacao)
+    if (falta) throw new Error(falta)
+
+    // Lê ANTES de apagar: sem o nome e a contagem, o resultado seria "apagado"
+    // sem dizer o quê, e o usuário não teria como conferir que foi o certo.
+    const antes = await lerPainel(ctx.userId, scope.organizationId, a.painelId)
+    if ('erro' in antes) throw new Error(antes.erro)
+
+    const r = await apagarPainel({
+      userId: ctx.userId, organizationId: scope.organizationId,
+      papel: await papelDe(ctx, scope.organizationId),
+      painelId: a.painelId,
+    })
+    if ('erro' in r) throw new Error(r.erro)
+
+    return {
+      apagado: true,
+      nome: antes.painel.nome,
+      blocosRemovidos: antes.painel.blocos.length,
+      compartilhamentosRemovidos: antes.painel.compartilhamentos.length,
+    }
+  },
+}
+
 const adicionarBlocoFerramenta: Ferramenta = {
   nome: 'adicionar_bloco',
   titulo: 'Adicionar bloco ao painel',
   descricao:
-    'Acrescenta um bloco ao fim do painel. **Chame primeiro com `previa: true`**: a ferramenta ' +
+    'Adicionar, acrescentar ou criar um bloco novo num painel: KPI, gráfico, série temporal, ' +
+    'ranking, top N, composição, pizza, indicadores ou texto. É o passo seguinte a criar_painel. ' +
+    '**Chame primeiro com `previa: true`**: a ferramenta ' +
     'valida a especificação, executa a consulta uma vez e devolve as linhas — assim você confere o ' +
     'número antes de gravar, sem uma rodada extra. Depois repita com `previa: false`. ' +
     'Tipos: `kpi` (um número com variação), `serie` (evolução no tempo), `ranking` (top N), ' +
@@ -226,6 +285,7 @@ const editarBlocoFerramenta: Ferramenta = {
   nome: 'editar_bloco',
   titulo: 'Editar bloco do painel',
   descricao:
+    'Editar, alterar ou trocar a consulta, o título, o tamanho ou o visual de um bloco existente. ' +
     'Substitui a especificação de um bloco. A spec enviada é a nova INTEIRA, não um remendo — leia ' +
     'o bloco com ler_painel, altere o que precisa e mande de volta o objeto completo, senão os ' +
     'campos omitidos voltam ao padrão. Aceita `previa: true` do mesmo jeito que adicionar_bloco. ' +
@@ -344,6 +404,7 @@ export const FERRAMENTAS_DE_DASHBOARD: Ferramenta[] = [
   listarPaineisFerramenta,
   lerPainelFerramenta,
   criarPainelFerramenta,
+  apagarPainelFerramenta,
   adicionarBlocoFerramenta,
   editarBlocoFerramenta,
   removerBlocoFerramenta,

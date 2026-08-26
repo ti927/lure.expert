@@ -135,10 +135,10 @@ async function main() {
     'e chamá-la mesmo assim dá -32601 — não enxergar é mais forte que recusar')
 
   const catalogoE = ((await rpc(comEscrita, 'tools/list')).result as { tools: { name: string }[] }).tools
-  // 12 dos seis pares prever_/aplicar_ + 6 escritas de painel (5.D).
-  t(catalogoE.length === catalogoL.length + 18,
-    `com escrita, o catálogo ganha 12 dos seis pares + 6 de painel (${catalogoL.length} → ${catalogoE.length})`)
-  t(catalogoL.length === 11, `leitura: 9 de consulta + 2 de painel (${catalogoL.length})`)
+  // 12 dos seis pares + 7 escritas de painel (6 da 5.D + apagar_painel).
+  t(catalogoE.length === catalogoL.length + 19,
+    `com escrita, o catálogo ganha 12 dos seis pares + 7 de painel (${catalogoL.length} → ${catalogoE.length})`)
+  t(catalogoL.length === 12, `leitura: 9 de consulta + listar_contas + 2 de painel (${catalogoL.length})`)
   t(catalogoL.some(f => f.name === 'listar_paineis') && catalogoL.some(f => f.name === 'ler_painel'),
     'as duas LEITURAS de painel estão no consentimento de leitura')
   t(!catalogoL.some(f => f.name === 'criar_painel'),
@@ -1182,6 +1182,127 @@ async function main() {
     t(!removido.isError, 'remover_bloco funciona')
     const depoisDeRemover = await chamar(comEscrita, 'ler_painel', { organizationId: ORG, painelId: painelDoTeste })
     t((depoisDeRemover.dados as { blocos: unknown[] }).blocos.length === 1, 'e sobra 1 bloco')
+  }
+
+  // ═══ Os 8 achados do diagnóstico de 26/ago ════════════════════════════════
+  console.log('\n── correções do diagnóstico (26/ago) ──')
+  {
+    // Achado 1 e 2: o schema não oferece mais o que não existe.
+    const esquemas = ((await rpc(comEscrita, 'tools/list')).result as {
+      tools: { name: string; inputSchema: Record<string, unknown> }[]
+    }).tools
+    const txtConsultar = JSON.stringify(esquemas.find(f => f.name === 'consultar')?.inputSchema ?? {})
+    const txtBloco = JSON.stringify(esquemas.find(f => f.name === 'adicionar_bloco')?.inputSchema ?? {})
+    t(!txtConsultar.includes('"balanco"') && !txtConsultar.includes('"snapshot"'),
+      'achado 1: `consultar` não publica mais `balanco` nem `snapshot`')
+    t(!txtBloco.includes('"balanco"') && !txtBloco.includes('"snapshot"'),
+      'achado 2: e a spec do BLOCO também não — os dois schemas irmãos voltaram a concordar')
+
+    const comBalanco = await chamar(comEscrita, 'consultar', {
+      organizationId: ORG, fonte: 'balanco', medidas: ['valor_liquido'],
+      periodo: { tipo: 'intervalo', de: '2026-01-01', ate: '2026-12-31' },
+    })
+    t(comBalanco.isError, 'e pedir balanço mesmo assim é recusado pela validação')
+
+    // Achado 3: explicar_consulta exige organizationId.
+    const semOrg = await chamar(comEscrita, 'explicar_consulta', {
+      medidas: ['valor_liquido'], periodo: { tipo: 'relativo', meses: 3 },
+    })
+    t(semOrg.isError, 'achado 3: explicar_consulta SEM organizationId é recusada')
+    const comOrg = await chamar(comEscrita, 'explicar_consulta', {
+      organizationId: ORG, medidas: ['valor_liquido'], periodo: { tipo: 'relativo', meses: 3 },
+    })
+    t(!comOrg.isError, 'e com organizationId responde normalmente')
+    const orgAlheia = await chamar(comEscrita, 'explicar_consulta', {
+      organizationId: '00000000-0000-4000-8000-000000000000',
+      medidas: ['valor_liquido'], periodo: { tipo: 'relativo', meses: 3 },
+    })
+    t(orgAlheia.isError, 'e a empresa fora do consentimento é recusada — antes ela nem era olhada')
+
+    // Achado 4: listar_contas. A asserção mede a VARIAÇÃO, não um piso: o que
+    // o teste plantar depois tem de aparecer, e um `>= 1` passaria mesmo se a
+    // ferramenta ignorasse a semeadura.
+    const contas = await chamar(comEscrita, 'listar_contas', { organizationId: ORG })
+    const c = contas.dados as {
+      contas: { accountId: string; nome: string | null; lancamentos: number; nomeAmbiguo: boolean }[]
+      total: number
+    }
+    t(!contas.isError && Array.isArray(c.contas),
+      `achado 4: listar_contas responde (${c.total} conta(s) antes da semeadura)`)
+    t(c.contas.every(x => !!x.accountId && x.lancamentos > 0),
+      'cada uma com id e contagem de lançamentos — o que traduz um contaId cru')
+    t(c.contas.every(x => typeof x.nomeAmbiguo === 'boolean'),
+      'e todas declaram se dividem o nome com outra')
+    const totalAntes = c.total
+
+    // O campo tem de VARIAR: semeio duas contas homônimas e confiro que acusa.
+    const [dsA] = await db.insert(dataSources).values({
+      organizationId: ORG, type: 'bank', provider: 'manual', name: 'Homonima A', status: 'active',
+    }).returning({ id: dataSources.id })
+    await db.insert(transactions).values([
+      {
+        organizationId: ORG, dataSourceId: dsA.id, date: '2026-05-01', description: 'h1',
+        amount: '10.00', direction: 'inflow', status: 'confirmed',
+        accountId: 'conta-x', accountName: 'Banco Igual', accountNumber: '111',
+      },
+      {
+        organizationId: ORG, dataSourceId: dsA.id, date: '2026-05-02', description: 'h2',
+        amount: '10.00', direction: 'inflow', status: 'confirmed',
+        accountId: 'conta-y', accountName: 'Banco Igual', accountNumber: '222',
+      },
+    ])
+    const comHomonimo = await chamar(comEscrita, 'listar_contas', { organizationId: ORG })
+    const ch = comHomonimo.dados as {
+      contas: { accountId: string; nomeAmbiguo: boolean; numero: string | null }[]
+      total: number
+      aviso?: string
+    }
+    t(ch.total === totalAntes + 2,
+      `as duas contas semeadas APARECEM na listagem (${totalAntes} → ${ch.total})`)
+    const ambiguas = ch.contas.filter(x => x.nomeAmbiguo)
+    t(ambiguas.length === 2, `duas contas de nome igual são marcadas como ambíguas (${ambiguas.length})`)
+    t(typeof ch.aviso === 'string' && ch.aviso.includes('nome'),
+      'e a resposta avisa para desempatar pelo número — o caso real que o diagnóstico achou ("itau" × "itau")')
+    t(ambiguas.map(x => x.numero).sort().join() === '111,222',
+      'com os números distintos disponíveis para desempatar')
+
+    // Achado 6: ticket_medio com 2 casas.
+    const tm = await chamar(comEscrita, 'consultar', {
+      organizationId: ORG, medidas: ['ticket_medio', 'entradas'],
+      periodo: { tipo: 'intervalo', de: '2026-01-01', ate: '2026-12-31', regime: 'competencia' },
+      filtros: { excluirBalanco: false, visibilidade: 'todas' },
+    })
+    const linhaTm = (tm.dados as { linhas: { medidas: Record<string, number> }[] }).linhas[0]
+    const casas = (v: number) => (String(v).split('.')[1] ?? '').length
+    t(!!linhaTm && casas(linhaTm.medidas.ticket_medio) <= 2,
+      `achado 6: ticket_medio vem com no máximo 2 casas (${linhaTm?.medidas.ticket_medio})`)
+
+    // Achado 5: as duas contagens de natureza concordam.
+    const desc = await chamar(comEscrita, 'descrever_organizacao', { organizationId: ORG })
+    const cats = await chamar(comEscrita, 'listar_categorias', { organizationId: ORG })
+    const nDesc = (desc.dados as { naturezasCadastradas: number }).naturezasCadastradas
+    const nList = (cats.dados as { total: number }).total
+    t(nDesc === nList, `achado 5: descrever_organizacao e listar_categorias concordam (${nDesc} × ${nList})`)
+
+    // Achado 8: apagar_painel.
+    const semConfirmar = await chamar(comEscrita, 'apagar_painel', {
+      organizationId: ORG, painelId: painelDoTeste, confirmacao: 'sim',
+    })
+    t(semConfirmar.isError, 'achado 8: apagar_painel sem a palavra literal é recusado')
+
+    const apagado = await chamar(comEscrita, 'apagar_painel', {
+      organizationId: ORG, painelId: painelDoTeste, confirmacao: 'aplicar',
+    })
+    const ap = apagado.dados as { apagado: boolean; nome: string; blocosRemovidos: number }
+    t(!apagado.isError && ap.apagado === true, 'com a palavra, apaga')
+    t(ap.nome === 'Painel do Conselho' && ap.blocosRemovidos === 1,
+      `e diz O QUE apagou: "${ap.nome}", ${ap.blocosRemovidos} bloco(s)`)
+
+    const sumiu = await chamar(comEscrita, 'ler_painel', { organizationId: ORG, painelId: painelDoTeste })
+    t(sumiu.isError, 'o painel some da leitura')
+    const listaFinal = await chamar(comEscrita, 'listar_paineis', { organizationId: ORG })
+    t((listaFinal.dados as { paineis: unknown[] }).paineis.length === 0,
+      'e a listagem volta a zero — criar e apagar fecham o ciclo, sem deixar lixo')
   }
 
   console.log('\n── auditoria ──')

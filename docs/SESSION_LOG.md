@@ -12,6 +12,88 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Hardening do MCP — os 8 achados do diagnóstico (26/ago)
+
+**Origem: Julio rodou uma bateria completa pelo claude.ai contra a organização "Financeiro
+Pessoal" e trouxe o relatório. Manchete do diagnóstico: nenhuma função quebrou — os 8 achados
+eram de contrato, cobertura ou descoberta. Verificado: 177/177 escrita, 39/39 leitura, 23/23
+motor, 113/113 painéis.**
+
+#### 1 e 2 — o schema oferecia o que não existe
+
+`fonte: 'balanco'` e `periodo.tipo: 'snapshot'` estavam no enum do Zod sem ter descritor no
+registro do motor: **aceitos na validação e recusados na execução**. Um modelo que lê o schema
+monta um pedido legítimo e só descobre no erro. Pior no bloco de painel, que publicava `balanco`
+enquanto `consultar` já o escondia — dois schemas irmãos discordando sobre o que é uma consulta
+válida, exatamente o que o desenho "um Zod, três consumidores" existe para impedir.
+
+Os dois saíram de `SOURCE_IDS` e do `periodoSchema`. O tipo `QuerySource` **mantém** `'balanco'`,
+porque `SourceDescriptor` precisa poder declará-lo quando a fonte for construída — a separação
+entre *o que o motor sabe representar* e *o que o schema publica* é o que permite preparar sem
+prometer. O `tsc` apontou cada trecho que virou inalcançável (engine e run-block), e todos foram
+limpos.
+
+#### 3 — a ferramenta que valida era a que não validava
+
+`explicar_consulta` declarava `organizationId` como opcional e, pior, **recebia e descartava**
+(`const { organizationId: _ignorado, ...spec }`). Era defensável no papel: `explicarQuery` é pura
+e não toca o banco. Mas numa conexão com várias empresas o efeito é o pior possível — o modelo
+confere o plano contra empresa nenhuma e executa contra uma, e nada sinaliza. Agora exige o id e
+chama `escopoDe`: o cálculo não usa o escopo, a checagem acontece assim mesmo.
+
+#### 4 — `listar_contas`, a lacuna que aparecia em quatro ferramentas
+
+`contaId` volta cru em `listar_regras`, o filtro `contas` existe em `consultar` e nas escritas em
+lote, e `prever_importacao` **cria** conta — mas não havia como listar. O diagnóstico achou o
+efeito no dado real: duas contas de nome "itau" com ids diferentes, indistinguíveis na resposta.
+
+`listarContasUsadas` lê de `transactions`, não de `data_sources`, porque é lá que o id vive: as
+quatro colunas de conta são desnormalizadas e sem FK (o cabeçalho de `accounts.ts` já registrava
+isso). Marca `nomeAmbiguo` em vez de renomear por conta própria — o nome é do usuário. E o dado
+real revelou um caso que o diagnóstico não viu: o **mesmo** `account_id` com dois números
+diferentes (cartão titular e adicional), daí o campo `numerosDistintos`.
+
+#### 5 e 6 — duas incoerências pequenas de leitura
+
+`descrever_organizacao` contava natureza inativa e `listar_categorias` não (80 × 79), e as duas se
+apresentavam como "a contagem do plano de contas". `ticket_medio` voltava com 13 casas decimais ao
+lado de valores com 2, porque é a única medida que **divide** — `arredondar` passou a respeitar o
+`formato` que a própria medida declara.
+
+#### 7 — o schema que travava a descoberta
+
+`adicionar_bloco` exigiu **quatro buscas** para ser encontrada, inclusive procurando pela descrição
+literal dela. E é a ferramenta que `criar_painel` indica como próximo passo — o fluxo travava
+exatamente onde o produto manda seguir.
+
+A causa medida: 16KB de JSON Schema, com os quatro tipos de bloco que consultam repetindo o schema
+INTEIRO de `query`. `reused: 'ref'` no `z.toJSONSchema` fatora o repetido em `$defs` e derruba para
+**7.240 bytes (−55%)**. Aplicado a todo o catálogo, não só a essa ferramenta. As descrições de
+`adicionar_bloco` e `editar_bloco` passaram a abrir com os termos que uma busca usaria
+("adicionar", "acrescentar", "criar bloco novo", "KPI", "gráfico", "ranking").
+
+#### 8 — criar sem excluir
+
+`criar_painel` existia, `apagar_painel` não: dava para remover os blocos um a um, mas o painel
+vazio ficava, e só a tela o apagava. É a **única** exclusão do catálogo, e o que a torna aceitável
+é o que ela não apaga — painel não contém dado financeiro, só a forma de olhar para ele. Exige a
+palavra literal de confirmação e lê o painel antes, para dizer o que apagou (nome, quantos blocos,
+quantos compartilhamentos) em vez de um "apagado" sem sujeito.
+
+#### O que o teste pegou, e um susto de ambiente
+
+Três asserções de contagem de catálogo quebraram (esperado: o catálogo cresceu de 29 para 31) e
+duas quebraram por motivo bom: `props.fonte.enum` deixou de existir porque o `$ref` moveu o enum
+para `$defs` — a asserção passou a olhar o schema inteiro, senão mediria a ausência da
+*propriedade* em vez da ausência da *fonte*.
+
+O susto: a primeira rodada acusou seis falhas que não existiam. Causa: `pkill -f "next start"` não
+alcança processos Windows, o servidor velho continuou na porta 3100, o `next start` novo morreu com
+`EADDRINUSE` — e o teste rodou contra o binário anterior. **Encerrar servidor de teste neste
+ambiente é `Get-NetTCPConnection -LocalPort <porta> | Stop-Process`**, não `pkill`.
+
+---
+
 ### ✅ Sessão 5.D — As 8 ferramentas de painel (e o plano de 23/ago fecha)
 
 **Verificado: 157/157 escrita contra um `next start` real, 37/37 leitura, 113/113 painéis,

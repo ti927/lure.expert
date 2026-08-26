@@ -104,8 +104,7 @@ function janelaHerdadaAnterior(p: PeriodoHerdado, mes?: string): Janela | null {
 }
 
 /** Espelho de `resolverPeriodo` do motor, para o comparativo do modo próprio. */
-function janelaPropria(qp: Periodo): Janela | null {
-  if (qp.tipo === 'snapshot') return null
+function janelaPropria(qp: Periodo): Janela {
   if (qp.tipo === 'intervalo') return { de: qp.de, ate: qp.ate }
   const hoje = new Date()
   const fim = endOfMonth(hoje)
@@ -131,21 +130,14 @@ export function resolverPeriodos(
   mes?: string,
 ): { atual: Periodo; anterior: Periodo | null } {
   if (p.modo === 'proprio') {
-    const j = janelaPropria(qp)
-    if (!j) return { atual: qp, anterior: null }
-    const anterior = janelaAnteriorDe(j)
-    const regime = qp.tipo === 'snapshot' ? 'competencia' : qp.regime
+    const anterior = janelaAnteriorDe(janelaPropria(qp))
     return {
       atual: qp,
-      anterior: { tipo: 'intervalo', de: anterior.de, ate: anterior.ate, regime },
+      anterior: { tipo: 'intervalo', de: anterior.de, ate: anterior.ate, regime: qp.regime },
     }
   }
 
   // Herdado: a âncora é o mês do painel.
-  if (qp.tipo === 'snapshot') {
-    const j = janelaHerdada(p, mes)
-    return { atual: { tipo: 'snapshot', em: j.ate }, anterior: null }
-  }
   const regime = qp.regime
   const j = janelaHerdada(p, mes)
   const ant = janelaHerdadaAnterior(p, mes)
@@ -205,13 +197,11 @@ export async function executarBloco(
         deltaPct = pct(valor, valorAnterior)
       }
 
-      const periodoRelatado = atual.tipo === 'snapshot'
-        ? { em: atual.em }
-        : atual.tipo === 'intervalo'
-          ? { de: atual.de, ate: atual.ate }
-          // 'relativo' só sobrevive no modo próprio; o motor o resolve, mas o
-          // relatório do bloco precisa da janela concreta.
-          : (janelaPropria(spec.query.periodo) ?? { de: '', ate: '' })
+      // 'relativo' só sobrevive no modo próprio; o motor o resolve, mas o
+      // relatório do bloco precisa da janela concreta.
+      const periodoRelatado = atual.tipo === 'intervalo'
+        ? { de: atual.de, ate: atual.ate }
+        : janelaPropria(atual)
 
       return {
         tipo: 'kpi',

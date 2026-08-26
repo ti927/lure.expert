@@ -222,6 +222,93 @@ export async function listarContasManuais(
   })
 }
 
+export interface ContaUsada {
+  /** `transactions.account_id` — o valor que o filtro `contas` do motor espera. */
+  accountId: string
+  nome: string | null
+  tipo: string | null
+  /** O número mais recente. Um cartão com adicional tem mais de um. */
+  numero: string | null
+  /** Quantos números distintos o mesmo id já carregou (adicional, renumeração). */
+  numerosDistintos: number
+  lancamentos: number
+  periodo: { de: string; ate: string } | null
+  origem: string | null
+  /** Outro accountId tem o MESMO nome — sem isto, os dois são indistinguíveis. */
+  nomeAmbiguo: boolean
+}
+
+/**
+ * TODAS as contas que aparecem em lançamentos — não só as manuais.
+ *
+ * Existe porque o filtro `contas` do motor e o `contaId` que várias leituras
+ * devolvem falam de `transactions.account_id`, que vem de qualquer origem
+ * (Pluggy, upload, manual). `listarContasManuais` cobre só o cadastro próprio, e
+ * era a única listagem — então não havia como traduzir um `contaId` recebido
+ * numa resposta em algo legível, nem escolher entre duas contas de nome igual.
+ * Achado 4 do diagnóstico do MCP, 26/ago.
+ *
+ * Lê de `transactions` e não de `data_sources` porque é lá que o id vive: as
+ * quatro colunas de conta são desnormalizadas e sem FK (ver o cabeçalho deste
+ * arquivo), então a fonte da verdade do que EXISTE é o uso.
+ */
+export async function listarContasUsadas(
+  organizationId: string,
+  exec: Exec = db,
+): Promise<ContaUsada[]> {
+  const linhas = await exec.execute<{
+    account_id: string
+    nome: string | null
+    tipo: string | null
+    numero: string | null
+    numeros_distintos: number
+    lancamentos: number
+    de: string | null
+    ate: string | null
+    origem: string | null
+  }>(sql`
+    SELECT
+      t.account_id::text AS account_id,
+      -- O nome e o tipo do lançamento MAIS RECENTE: conta renomeada mostra o
+      -- nome de hoje, não o de dois anos atrás.
+      (ARRAY_AGG(t.account_name  ORDER BY t.date DESC NULLS LAST))[1] AS nome,
+      (ARRAY_AGG(t.account_type  ORDER BY t.date DESC NULLS LAST))[1] AS tipo,
+      (ARRAY_AGG(t.account_number ORDER BY t.date DESC NULLS LAST))[1] AS numero,
+      COUNT(DISTINCT t.account_number)::int AS numeros_distintos,
+      COUNT(*)::int AS lancamentos,
+      MIN(t.date) AS de,
+      MAX(t.date) AS ate,
+      (ARRAY_AGG(ds.provider ORDER BY t.date DESC NULLS LAST))[1] AS origem
+    FROM transactions t
+    LEFT JOIN data_sources ds ON ds.id = t.data_source_id
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.account_id IS NOT NULL
+    GROUP BY t.account_id
+    ORDER BY COUNT(*) DESC
+  `)
+
+  // Homônimo é o defeito que o diagnóstico encontrou no dado real: duas contas
+  // "itau" com ids diferentes, indistinguíveis na resposta. Marcar é melhor que
+  // renomear por conta própria — o nome é do usuário.
+  const porNome = new Map<string, number>()
+  for (const l of linhas) {
+    const chave = (l.nome ?? '').trim().toLowerCase()
+    if (chave) porNome.set(chave, (porNome.get(chave) ?? 0) + 1)
+  }
+
+  return linhas.map(l => ({
+    accountId: l.account_id,
+    nome: l.nome,
+    tipo: l.tipo,
+    numero: l.numero,
+    numerosDistintos: Number(l.numeros_distintos ?? 0),
+    lancamentos: Number(l.lancamentos ?? 0),
+    periodo: l.de && l.ate ? { de: l.de, ate: l.ate } : null,
+    origem: l.origem,
+    nomeAmbiguo: (porNome.get((l.nome ?? '').trim().toLowerCase()) ?? 0) > 1,
+  }))
+}
+
 /**
  * Apagar conta manual.
  *

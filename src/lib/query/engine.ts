@@ -53,10 +53,13 @@ type ChaveDimensao = keyof typeof COLUNA_DIMENSAO
  * `relativo` vira intervalo aqui, e não no SQL, para o resultado poder dizer
  * qual janela foi de fato consultada — um gráfico de "últimos 12 meses" que não
  * declara o período fica impossível de conferir.
+ *
+ * O tipo de retorno mantém a forma `{ em }` porque `QueryResult.periodo` a
+ * declara: quando o balanço virar fonte, a variante `snapshot` volta ao schema e
+ * este é o ponto que a produz.
  */
 function resolverPeriodo(spec: QuerySpec): { de: string; ate: string } | { em: string } {
   const p = spec.periodo
-  if (p.tipo === 'snapshot') return { em: p.em }
   if (p.tipo === 'intervalo') {
     if (p.de > p.ate) {
       throw new QueryValidationError('periodo', `A data inicial (${p.de}) é depois da final (${p.ate}).`)
@@ -88,6 +91,21 @@ function filtroDimensao(alias: string, coluna: string, ids: string[] | undefined
   return querNulo ? sql`(${lista} OR ${col} IS NULL)` : lista
 }
 
+/**
+ * Arredonda a medida conforme o formato que ela declara.
+ *
+ * Somas de `numeric` já vêm com 2 casas do Postgres, mas as medidas que DIVIDEM
+ * (hoje `ticket_medio`) voltavam com a precisão inteira do float:
+ * `3644.0337614678897` ao lado de `197900.26`. Quem lê conclui que a medida tem
+ * outra natureza, e um modelo repassa o número cru ao usuário. Achado 6 do
+ * diagnóstico de 26/ago.
+ */
+function arredondar(id: MeasureId, bruto: unknown): number {
+  const n = Number(bruto ?? 0)
+  if (!Number.isFinite(n)) return 0
+  return MEASURES[id].formato === 'moeda' ? Math.round(n * 100) / 100 : n
+}
+
 export async function runQuery(scope: QueryScope, input: QueryInput): Promise<QueryResult> {
   const parsed = querySpecSchema.safeParse(input)
   if (!parsed.success) {
@@ -104,16 +122,18 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
 
   // ── Período e regime ──────────────────────────────────────────────────────
   const periodo = resolverPeriodo(spec)
-  if (src.periodKind === 'snapshot' && !('em' in periodo)) {
-    throw new QueryValidationError('periodo',
-      `A fonte "${spec.fonte}" é uma foto numa data, não um intervalo. Use periodo.tipo = "snapshot".`)
-  }
-  if (src.periodKind === 'range' && 'em' in periodo) {
-    throw new QueryValidationError('periodo',
-      `A fonte "${spec.fonte}" cobre um intervalo. Use periodo.tipo = "intervalo" ou "relativo".`)
+  // Fonte de snapshot com o schema atual é combinação impossível — a variante
+  // `snapshot` saiu do período em 26/ago, junto com a fonte `balanco`. A guarda
+  // fica porque `periodKind` continua no descritor: uma fonte declarada
+  // 'snapshot' hoje seria consultada como intervalo, em silêncio, e o número
+  // sairia errado sem ninguém perceber.
+  if (src.periodKind === 'snapshot') {
+    throw new QueryValidationError('fonte',
+      `A fonte "${spec.fonte}" é uma foto numa data e ainda não é consultável por aqui.`,
+      Object.keys(SOURCES))
   }
 
-  const regime = spec.periodo.tipo === 'snapshot' ? 'competencia' : spec.periodo.regime
+  const regime = spec.periodo.regime
   const colunaData = src.dateColumns[regime]
   if (!colunaData) {
     throw new QueryValidationError('periodo.regime',
@@ -268,7 +288,7 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
           : String(rotulo),
       }
     }),
-    medidas: Object.fromEntries(medidas.map((m, i) => [m.id, Number(r[`m${i}`] ?? 0)])),
+    medidas: Object.fromEntries(medidas.map((m, i) => [m.id, arredondar(m.id, r[`m${i}`])])),
   }))
 
   return {
@@ -335,7 +355,7 @@ export function explicarQuery(input: QueryInput) {
   return {
     fonte:      spec.fonte,
     periodo:    resolverPeriodo(spec),
-    regime:     spec.periodo.tipo === 'snapshot' ? null : spec.periodo.regime,
+    regime:     spec.periodo.regime,
     agruparPor: spec.agruparPor.map(g => ({ id: g, rotulo: GROUPINGS[g].rotulo })),
     medidas:    spec.medidas.map(m => ({ id: m, rotulo: MEASURES[m].rotulo, formato: MEASURES[m].formato })),
     limite:     spec.limite,

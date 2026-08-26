@@ -136,10 +136,12 @@ async function main() {
 
   const lista = await rpc(accessToken, 'tools/list')
   const tools = ((lista.json?.result ?? {}) as { tools?: { name: string; inputSchema: Record<string, unknown> }[] }).tools ?? []
-  // 9 de contexto/consulta + as 2 de painel que a 5.D acrescentou.
-  t(tools.length === 11, `11 ferramentas de leitura (${tools.map(x => x.name).join(', ')})`)
+  // 9 de contexto/consulta + as 2 de painel (5.D) + `listar_contas` (26/ago).
+  t(tools.length === 12, `12 ferramentas de leitura (${tools.map(x => x.name).join(', ')})`)
   t(tools.some(x => x.name === 'listar_paineis') && tools.some(x => x.name === 'ler_painel'),
     'incluindo as duas de painel')
+  t(tools.some(x => x.name === 'listar_contas'),
+    'e `listar_contas`, que traduz o contaId cru que várias respostas devolvem')
   const consultarTool = tools.find(x => x.name === 'consultar')
   const props = (consultarTool?.inputSchema?.properties ?? {}) as Record<string, unknown>
   t(!!props.organizationId && !!props.medidas && !!props.periodo,
@@ -148,12 +150,16 @@ async function main() {
   t(obrigatorios.includes('organizationId') && obrigatorios.includes('periodo') && !obrigatorios.includes('limite'),
     'io:input funcionou — só o que não tem default é obrigatório (limite ficou de fora)')
 
-  // O catálogo tem de descrever o que o servidor FAZ. `balanco` está no enum do
-  // Zod e não está no registro do motor: anunciá-la faria o modelo oferecê-la ao
-  // usuário e falhar só na chamada.
-  const fontes = ((props.fonte ?? {}) as { enum?: string[] }).enum ?? []
-  t(fontes.length === 3 && !fontes.includes('balanco'),
-    `só as fontes que o motor registra são anunciadas (${fontes.join(', ')})`)
+  // O catálogo tem de descrever o que o servidor FAZ. Desde 26/ago `balanco`
+  // saiu do próprio enum do Zod (achado 1 do diagnóstico), então a asserção olha
+  // o schema INTEIRO em vez de `properties.fonte.enum`: com `reused: 'ref'` o
+  // enum pode morar em `$defs`, e um teste que só olhasse o caminho antigo
+  // passaria a medir a ausência da propriedade em vez da ausência da fonte.
+  const textoDoSchema = JSON.stringify(consultarTool?.inputSchema ?? {})
+  t(textoDoSchema.includes('"realizado"') && !textoDoSchema.includes('"balanco"'),
+    'só as fontes que o motor registra são anunciadas (balanco fora)')
+  t(!textoDoSchema.includes('"snapshot"'),
+    'e o período não oferece `snapshot`, que nenhuma fonte atual aceita')
 
   const fonteInexistente = saida(await rpc(accessToken, 'tools/call', {
     name: 'consultar',
@@ -300,9 +306,11 @@ async function main() {
   }))
   t(limiteAlto.isError, 'limite acima do teto é recusado pelo Zod antes de tocar o banco')
 
+  // `organizationId` passou a ser OBRIGATÓRIO em 26/ago (achado 3): era opcional
+  // e ignorado, então a ferramenta que existe para validar não validava nada.
   const explicado = saida(await rpc(accessToken, 'tools/call', {
     name: 'explicar_consulta',
-    arguments: { periodo: { tipo: 'relativo', meses: 3 }, medidas: ['valor_liquido'] },
+    arguments: { organizationId: EMPRESA, periodo: { tipo: 'relativo', meses: 3 }, medidas: ['valor_liquido'] },
   }))
   const exp = explicado.dados as { periodo: { de: string; ate: string }; regime: string }
   t(!explicado.isError && /^\d{4}-\d{2}-\d{2}$/.test(exp?.periodo?.de ?? ''),

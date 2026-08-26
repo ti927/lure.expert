@@ -203,10 +203,16 @@ async function main() {
     `filtro "sem centro de custo" devolve ${semCc.linhas[0]?.medidas.contagem} = esperado ${esperado}`)
 
   // ── 5. As recusas ───────────────────────────────────────────────────────
-  await deveRecusar('fonte "balanco", ainda não registrada',
+  //
+  // `balanco` e `snapshot` saíram do SCHEMA em 26/ago (achado 1 do diagnóstico
+  // do MCP): eram aceitos pelo Zod e recusados pelo motor, o que fazia o
+  // catálogo publicar duas opções que nunca funcionaram. Agora a recusa vem
+  // ANTES, na validação — daí o `as never`, que é o teste forçando um valor que
+  // o tipo já não permite.
+  await deveRecusar('fonte "balanco" é recusada pelo SCHEMA, não mais pelo motor',
     async () => runQuery(scope, {
-      fonte: 'balanco', medidas: ['valor_liquido'],
-      periodo: { tipo: 'snapshot', em: ate },
+      fonte: 'balanco' as never, medidas: ['valor_liquido'],
+      periodo: { tipo: 'intervalo', de, ate, regime: 'competencia' },
     }), 'QueryValidationError')
   await deveRecusar('limite acima do teto',
     async () => runQuery(scope, { fonte: 'realizado', periodo, medidas: ['valor_liquido'], limite: 5000 }),
@@ -226,10 +232,10 @@ async function main() {
       fonte: 'realizado', medidas: ['valor_liquido'],
       periodo: { tipo: 'intervalo', de: '2026-12-31', ate: '2026-01-01', regime: 'competencia' },
     }), 'QueryValidationError')
-  await deveRecusar('snapshot numa fonte de intervalo',
+  await deveRecusar('periodo "snapshot" é recusado pelo SCHEMA — a variante saiu junto com o balanço',
     async () => runQuery(scope, {
       fonte: 'realizado', medidas: ['valor_liquido'],
-      periodo: { tipo: 'snapshot', em: '2026-06-30' },
+      periodo: { tipo: 'snapshot', em: '2026-06-30' } as never,
     }), 'QueryValidationError')
 
   // ── 6. O escopo recusa organização de terceiro ──────────────────────────

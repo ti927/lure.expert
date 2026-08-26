@@ -9,8 +9,25 @@ import { z } from 'zod'
 import { MEASURE_IDS } from './measures'
 import { GROUPING_IDS } from './groupings'
 
-export const SOURCE_IDS = ['realizado', 'orcado', 'nfe', 'balanco'] as const
-export type QuerySource = (typeof SOURCE_IDS)[number]
+/**
+ * As fontes que o motor RESPONDE hoje.
+ *
+ * `balanco` saiu daqui em 26/ago (achado 1 do diagnóstico do MCP). Ele estava no
+ * enum sem ter descritor em `sources/index.ts`, então toda chamada com
+ * `fonte: 'balanco'` era aceita pelo Zod e recusada pelo motor — um contrato que
+ * oferece o que não entrega. O tipo `QuerySource` continua com ele (é a
+ * preparação do descritor, legítima), mas o SCHEMA só publica o que funciona.
+ */
+export const SOURCE_IDS = ['realizado', 'orcado', 'nfe'] as const
+
+/**
+ * O tipo interno do motor, que já conhece o balanço.
+ *
+ * A separação existe porque `SourceDescriptor` precisa poder declarar
+ * `id: 'balanco'` e `periodKind: 'snapshot'` quando a fonte for construída —
+ * o que não deve implicar anunciá-la antes da hora.
+ */
+export type QuerySource = (typeof SOURCE_IDS)[number] | 'balanco'
 
 const uuid = z.string().uuid()
 const dataIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-DD')
@@ -47,13 +64,12 @@ export const periodoSchema = z.discriminatedUnion('tipo', [
     meses:  z.number().int().min(1).max(60),
     regime: z.enum(['competencia', 'caixa']).default('competencia'),
   }),
-  z.object({
-    // Só `balanco`: o BP não é série temporal, é foto numa data. Ver a Decisão
-    // registrada no plano — `getBpData` busca o documento mais recente com
-    // `reference_date <= X`, não um intervalo.
-    tipo: z.literal('snapshot'),
-    em:   dataIso,
-  }),
+  // A variante `snapshot` (foto numa data, para o Balanço Patrimonial) saiu em
+  // 26/ago junto com a fonte `balanco` — achado 1 do diagnóstico. Ela só servia
+  // a uma fonte com `periodKind: 'snapshot'`, e nenhuma das três existentes é
+  // assim: toda chamada com `tipo: 'snapshot'` passava no Zod e morria no motor
+  // com "esta fonte cobre um intervalo". As duas voltam juntas quando o balanço
+  // virar fonte de verdade.
 ])
 export type Periodo = z.infer<typeof periodoSchema>
 
