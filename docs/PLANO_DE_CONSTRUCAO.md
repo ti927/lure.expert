@@ -44,6 +44,13 @@ nunca vieram.** Ver o bloco *"A dívida declarada"* dentro da Fase 2.
 **4. O chat do expert (Fase 5.E) foi removido do produto** em 23/ago. Estava marcado ✅ sem
 ressalva.
 
+**5. O fluxo de caixa projetado (Fase 5.F) foi removido do produto** em 26/ago — junto com os
+KPIs de saldo do `/fluxo` **e do dashboard**, e com a regra de alerta que lia o mesmo número.
+Também estava marcado ✅ sem ressalva. Os dois motivos, separados, em 5.F e na Decisão 23 de
+`SCHEMA_DECISIONS.md`. **Consequência para quem lê o pitch abaixo:** onde este documento promete
+*"fluxo de caixa projetado"*, a projeção hoje vem do **orçamento** (Fase 9), não de recorrência
+detectada.
+
 **Onde está o status vivo:** no `CLAUDE.md`, seção *Fase atual*. Este documento é o mapa e o
 porquê; o `CLAUDE.md` é o onde-estamos-agora. Quando os dois divergirem, o `CLAUDE.md` vence, e
 a divergência é defeito deste arquivo.
@@ -789,12 +796,26 @@ Parser determinístico descartado por falhar sistematicamente em formatos reais 
 - `conversations`, `messages` e `organization_facts` ficaram **sem escritor**. O `DROP` das três
   (têm FK entre si, saem juntas) aguarda decisão sobre o histórico
 
-**✅ 5.F — Fluxo de Caixa Projetado em `/fluxo`**
-- `src/server/fluxo.ts`: `getFluxoData()` detecta recorrências via SQL (CTE em 3 passos: deduplicação por dia, agrupamento, intervalo médio)
-- Filtra: 2+ ocorrências, intervalo 7–40 dias, last_date nos últimos 90 dias
-- Projeta próximos 90 dias; KPI cards com Saldo Atual + Projetado 30d/60d/90d
-- Gráfico de barras: histórico (60d, cores escuras) + projeção (90d, cores claras), empilhados por `stackId`
-- Tabela de recorrências: descrição, tipo, valor médio, próxima data, intervalo
+**~~5.F — Fluxo de Caixa Projetado em `/fluxo`~~ — ❌ REMOVIDA em 26/ago**
+
+Foi entregue e rodou por três meses. Saiu por decisão do Julio, e por duas razões separadas
+(Decisão 23 em `SCHEMA_DECISIONS.md`):
+
+- **Os KPIs de saldo não mediam saldo.** `SUM(inflow − outflow)` sobre `transactions` sem corte de
+  data e sem saldo inicial: numa base com seis meses importados, o "Saldo Atual" era a soma desses
+  seis meses — medida de *movimento* rotulada como medida de *posição*. O app não controla saldo
+  bancário, então parou de afirmar um. O mesmo corte tirou o KPI "Saldo em Caixa" do dashboard e a
+  regra de alerta `saldo-negativo`, que lia o mesmo número.
+- **A projeção resolvia um problema que ganhou dono.** Extrapolar pela média dos intervalos passados
+  era a melhor resposta possível *enquanto não havia orçamento*. Existe desde a Fase 9, com data de
+  competência, data de caixa, versão e responsável.
+
+**O que sobreviveu:** a *detecção* de recorrências (≠ a projeção). Mudou de casa para
+`src/lib/recurrence-detect.ts` e hoje só alimenta "aceitar recorrências detectadas" em `/orcamento`,
+onde **sugere o que orçar** em vez de prever. `src/server/fluxo.ts` foi apagado.
+
+**O que restou em `/fluxo`:** a tabela de geração de caixa por natureza (Fase 6), mês a mês,
+separando OPEX de CAPEX, agora em viewport-fill.
 
 **~~Fase futura~~ — ✅ ENTREGUE, por fora:** o "expert com tool use real" previsto aqui existe desde
 23/ago, mas **não dentro do app**. É o servidor **MCP** (`/api/mcp`, 21 ferramentas) consumido pelo
@@ -809,7 +830,8 @@ interativo (que, aliás, morreu).
 - ✅ Dashboard com KPIs, gráfico de fluxo e indicadores financeiros em tempo real
 - ✅ DRE 12 meses com filtros por dimensão, drill-down e coluna Total
 - ~~✅ Expert no drawer com contexto financeiro da org, histórico persistente~~ — **removido em 23/ago**, ver 5.E
-- ✅ Fluxo de Caixa projetado 30/60/90 dias baseado em recorrências detectadas
+- ~~✅ Fluxo de Caixa projetado 30/60/90 dias baseado em recorrências detectadas~~ — **removido em
+  26/ago**, ver 5.F. A projeção do futuro passou a ser o **orçamento** (Fase 9)
 
 **Tempo:** ~3 semanas (5.0 a 5.F concluídas)
 
@@ -893,14 +915,14 @@ interativo (que, aliás, morreu).
 - Edição e exclusão em lote com 3 escopos (somente este mês / este e os próximos / toda a série), preservando ocorrências ajustadas à mão
 - Rota `/orcamento` com abas Planejamento, Orçado × Realizado e Versões
 - Coluna "Projeção do ano" = realizado dos meses fechados + orçado dos meses restantes
-- Aceleradores: copiar do realizado com %, duplicar versão, importar CSV, aceitar recorrências detectadas pelo `/fluxo`
+- Aceleradores: copiar do realizado com %, duplicar versão, importar CSV, aceitar recorrências detectadas (a detecção morava no `/fluxo`; desde 26/ago mora em `lib/recurrence-detect.ts` e o `/orcamento` é o único consumidor — ver 5.F)
 
 **Sessões:** 9.0 fundação · 9.1 CRUD + Planejamento · 9.2 Orçado × Realizado (primeiro uso real) · 9.3 escopos de edição · 9.4 copiar/duplicar · 9.5 CSV + recorrências.
 
 **Divergências do plano original, todas para mais:**
 - Os aceleradores viraram **quatro**, não três: copiar do realizado ganhou dois eixos independentes (formato mês-a-mês × média mensal, e detalhamento por categoria × por dimensão) em vez de um parâmetro só de granularidade.
 - O import de CSV virou **grade de 12 meses** (categorias nas linhas, meses nas colunas) em vez de uma linha por lançamento — é o formato em que o orçamento já existe na planilha do cliente.
-- As recorrências detectadas passaram a ser **mensalizadas**: a detecção do `/fluxo` trabalha em dias e o orçamento em meses, então uma recorrência semanal de R$ 100 entra como R$ 400/mês, não R$ 100.
+- As recorrências detectadas passaram a ser **mensalizadas**: a detecção trabalha em dias e o orçamento em meses, então uma recorrência semanal de R$ 100 entra como R$ 400/mês, não R$ 100.
 
 **Decisões estruturais:** `docs/SCHEMA_DECISIONS.md` Decisão 13 (13.1 a 13.13).
 
@@ -1435,8 +1457,17 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
   banco; (f) a morte do **chat do expert** (5.E), que estava ✅ sem ressalva, e o registro de que o
   "tool use real" previsto como fase futura foi entregue **por fora**, no MCP.
 
+- **v2.3** — **A Fase 5 fechou (dashboard configurável) e a 5.F foi REMOVIDA do produto.** Entram:
+  (a) o **plano de 23/ago concluído** — as seis fases entregues, com o `/dashboard` deixando de ser
+  tela fixa e virando painel de blocos que o expert monta pelo claude.ai, e o catálogo do MCP em 31
+  ferramentas; (b) a **remoção da 5.F** (fluxo projetado por recorrência), agora riscada no corpo com
+  as duas razões separadas — os KPIs de saldo não mediam saldo, e a projeção estatística perdeu
+  sentido diante do orçamento da Fase 9 —, mais o registro do que sobreviveu (a *detecção* de
+  recorrências, hoje em `lib/recurrence-detect.ts`, servindo só ao `/orcamento`); (c) o Definition of
+  Done da Fase 5 com o item de projeção riscado. Decisão 23 em `SCHEMA_DECISIONS.md`.
+
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-08-24*
-*Versão: 2.2*
+*Última atualização: 2026-08-26*
+*Versão: 2.3*

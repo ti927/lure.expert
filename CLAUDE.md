@@ -265,8 +265,19 @@ Colunas adicionadas em fases posteriores: `transactions_staging.effective_date` 
 
 **Status: o PLANO DE 23/ago/2026 ESTÁ COMPLETO.** As seis fases fecharam — motor de consulta,
 chave de IA por organização, OAuth/MCP, convites e papéis, o contrato de importação (4.5) e o
-dashboard configurável (5.A a 5.D). O catálogo do MCP terminou com **29 ferramentas** e o
-`/dashboard` deixou de ser tela fixa: é um painel de blocos que o expert monta pelo claude.ai.
+dashboard configurável (5.A a 5.D). Depois vieram **duas baterias de hardening** a partir de
+diagnósticos que o Julio rodou pelo claude.ai contra o MCP real (8 achados + 3), e o catálogo
+terminou com **31 ferramentas**. O `/dashboard` deixou de ser tela fixa: é um painel de blocos que
+o expert monta pelo claude.ai.
+
+**Última mudança de produto — 26/ago, a pedido do Julio: o app deixou de afirmar saldo.** O `/fluxo`
+perdeu os 4 cartões de saldo, o gráfico de projeção e a lista de recorrências, ficando só com a
+tabela de geração de caixa; o `/dashboard` perdeu o KPI "Saldo em Caixa"; e a regra de alerta
+`saldo-negativo` saiu junto, porque lia o mesmo número. Duas razões distintas, em
+`docs/SCHEMA_DECISIONS.md` **Decisão 23**: (1) somar movimento e chamar de posição é pior que não
+mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatística por recorrência
+perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
+`lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
 **Falta a confirmação humana da Fase 5** — 5.A confirmada em 25/ago; 5.C (a tela nova) e 5.D (as
 ferramentas de painel) aguardam o olho do Julio, listadas em *Confirmações na tela que Julio ainda
@@ -279,8 +290,15 @@ alertas dos painéis materializados vem com `erroDeSpec` na tela.
 
 **Próximo passo é uma escolha de rumo**, não uma continuação: as frentes abertas estão na tabela
 *Frentes anteriores, ainda abertas* (Fase 8 adquirentes, 11 agente proativo, 12 onboarding/billing,
-contato pela NF-e), mais as duas pendências de produto registradas — o plano patrimonial padrão do
-BP e o `DROP` das três tabelas do chat.
+contato pela NF-e), mais as **três** pendências de produto registradas — o plano patrimonial padrão
+do BP, o `DROP` das três tabelas do chat e, agora, **se o saldo bancário deve passar a existir de
+verdade** (ver abaixo).
+
+**Pendência de produto nova, aberta pela Decisão 23:** o app tirou o saldo porque não o controla.
+Passar a controlá-lo é possível e não foi decidido — o Pluggy já traz a posição das contas em
+`data_sources.metadata.accounts`, e ancorar nela daria um saldo **de verdade** para as contas
+conectadas (não para as importadas por arquivo, que continuariam sem âncora). Isso é fase própria,
+não um cartão de volta: exige decidir o que mostrar para quem tem as duas origens misturadas.
 
 **As 4 configurações de painel que a 4.A exigia FORAM FEITAS em 25/ago** e estão registradas na
 seção *Infraestrutura de Produção* (Supabase Auth — e-mail e convites), porque vivem no painel,
@@ -335,9 +353,11 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
 | **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido **sem Haiku** (o princípio nº 2 saindo do papel), `prever_importacao` publica o nível de arquivo do contrato, e **BP pelo MCP passa a ser possível**. **132/132** | ✅ |
 | **5.A** | **Paleta categórica + biblioteca de gráficos** — `--chart-1..8` (light+dark), `src/components/charts/` (7 arquivos), `/dashboard` e `/fluxo` migrados no mesmo commit, vitrine `/style-guide/charts` | ✅ **confirmada na tela em 25/ago** (paleta aprovada; /dashboard e /fluxo idênticos) |
-| 5.B | O miolo de painéis em `/lib`: CRUD + seed virtual + execução de bloco + compartilhamento com papel | 🔲 |
-| 5.C | O renderizador: `/dashboard` vira painel de blocos | 🔲 |
-| 5.D | O grupo MCP de dashboard (8 ferramentas) | 🔲 |
+| 5.B | O miolo de painéis em `/lib`: CRUD + seed virtual + execução de bloco + compartilhamento com papel. **111/111** | ✅ |
+| 5.C | O renderizador: `/dashboard` vira painel de blocos. **113/113** | ✅ (aguardando confirmação na tela) |
+| 5.D | O grupo MCP de dashboard (8 ferramentas). **157/157** | ✅ (aguardando confirmação no claude.ai) |
+| — | **Hardening do MCP**, 2 baterias de diagnóstico do Julio: os 8 achados de 26/ago + os 3 da bateria irreversível. Catálogo 21 → **31** | ✅ |
+| — | **Corte do saldo e da projeção** (26/ago): `/fluxo` fica só com a tabela, dashboard perde o 4º KPI, `server/fluxo.ts` apagado. Migration **0032 a aplicar** | ✅ |
 
 ### Fase 5 — dashboard configurável (CONCLUÍDA — 5.A a 5.D)
 

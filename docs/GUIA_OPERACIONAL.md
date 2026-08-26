@@ -1,8 +1,8 @@
 # Guia Operacional — lure.expert
 
 **Documento de protocolo de execução do MVP com Claude Code.**
-**Versão:** 1.1
-**Última atualização:** 19/05/2026
+**Versão:** 1.2
+**Última atualização:** 26/08/2026
 
 ---
 
@@ -363,13 +363,18 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 
 **✅ Sessão 5.A — Página DRE** — tabela 12 meses, filtros de dimensão, drill-down por célula e por Total
 
-**✅ Sessão 5.B — Dashboard** — KPI cards (Receita, Despesas, Lucro, Saldo) + gráfico de barras semanal Recharts
+**✅ Sessão 5.B — Dashboard** — KPI cards (Receita, Despesas, Lucro, ~~Saldo~~) + gráfico de barras semanal Recharts
+> O cartão de **Saldo saiu em 26/ago**: somava todo lançamento importado, sem saldo inicial — medida
+> de movimento com rótulo de posição. Hoje são três KPIs. Ver Decisão 23.
 
 **✅ Sessão 5.D — Indicadores Financeiros** — Margem EBITDA, Liquidez Corrente, DCSR com semáforo verde/âmbar/vermelho
 
 **✅ Sessão 5.E — Expert drawer** — chat Sonnet 4.6 com contexto KPI, histórico persistente, "Nova conversa"
 
-**✅ Sessão 5.F — Fluxo de Caixa Projetado** — detecção de recorrências via SQL, projeção 90d, KPIs 30/60/90d
+**~~✅ Sessão 5.F — Fluxo de Caixa Projetado~~ — ❌ REMOVIDA DO PRODUTO em 26/ago** — a projeção
+> estatística perdeu sentido diante do orçamento (Fase 9), e os KPIs de saldo não mediam saldo. A
+> **detecção** de recorrências sobreviveu, em `lib/recurrence-detect.ts`, servindo ao `/orcamento`.
+> Ver Decisão 23 e a 5.F no `PLANO_DE_CONSTRUCAO.md`.
 
 **Fase futura — Expert agentivo com tool use:**
 - Tools: `search_transactions`, `aggregate_by_period`, `compare_periods`, `get_balance`
@@ -608,3 +613,7 @@ As subdivisões abaixo são sugestão, não lei. Algumas sessões podem ser comb
 
 - **v1.0** (16/05/2026) — Documento criado. Subdivisão das 8 fases do MVP em 43-65 sessões concretas, com ritual de início/fim, template de sessão, checklists e procedimento pra erros.
 - **v1.1** (19/05/2026) — Fase 5 reescrita para refletir execução real: analytics financeiro (Dashboard, DRE, Indicadores, Fluxo de Caixa) + expert drawer com Sonnet. Sessões 5.0 a 5.F marcadas ✅. Chat agentivo com tool use diferido para fase futura. Próxima sessão: 5.G (relatório fechamento mensal).
+- **v1.2** (26/08/2026) — Sessão 5.F marcada como **removida do produto** e o cartão de Saldo
+  riscado da 5.B, com o porquê (Decisão 23). O documento seguia afirmando duas entregas que não
+  existem mais. **Nada foi apagado** — a fase entregue continua registrada, riscada, porque o
+  histórico de um plano é parte do plano.

@@ -169,6 +169,14 @@ Todas as queries de caixa usam `COALESCE(t.effective_date, t.date)` em SELECT, W
 - `src/server/fluxo.ts`: histórico diário + CTE de recorrências
 - `src/server/fluxo-mensal.ts`: agregação mensal
 
+> **Onde essas queries vivem hoje** (a lista acima é de Fase 6 e envelheceu; a **convenção** segue
+> valendo inteira). Fase 5.B/5.C: `getTopExpenseCategories` e `getCashFlowChart` viraram blocos por
+> cima do motor, e o COALESCE passou a ser emitido por `lib/query/sources/` conforme o regime da
+> consulta. 26/ago (Decisão 23): `src/server/fluxo.ts` **não existe mais** — a CTE de recorrências
+> mudou para `lib/recurrence-detect.ts`, e `saldoCaixa` foi removido de `lib/dashboard/kpis.ts`
+> junto com o KPI. Continuam de pé, com o COALESCE: `fluxo-mensal.ts`,
+> `getDashboardCategoryDrillDown` e as fontes do motor no regime de caixa.
+
 **Queries de competência — NÃO alterar (usam `date` direto):**
 - `src/server/dre.ts` — DRE usa `date` (competência)
 - `src/server/balance-sheet.ts` — BP usa `date` (posição de balanço na data de referência)
@@ -561,7 +569,11 @@ mês é o número, então aí o arquivo inteiro para.
 
 ### 13.12 — Recorrências detectadas: a conversão dias → meses (Sessão 9.5)
 
-A detecção do `/fluxo` trabalha em **dias** (agrupa por descrição nos últimos 180 dias e aceita
+> **Atualização de 26/ago (Decisão 23):** a detecção deixou de morar no `/fluxo` — a projeção de 90
+> dias saiu do ar e a função virou `detectarRecorrencias`, em `lib/recurrence-detect.ts`. O
+> `/orcamento` passou a ser o **único** consumidor, e nada abaixo mudou.
+
+A detecção trabalha em **dias** (agrupa por descrição nos últimos 180 dias e aceita
 intervalos médios de 7 a 40). O orçamento trabalha em **meses**. Copiar `valorMedio` direto para
 uma série mensal seria um erro caro e silencioso: uma recorrência semanal de R$ 100 viraria
 R$ 100/mês em vez de R$ 400/mês — quatro vezes menos.
@@ -1188,3 +1200,102 @@ Pluggy** de `metadata.accounts` para linhas. Isso seria o cadastro estruturalmen
 migration, backfill de 2.594 lançamentos, mudança no sync do Pluggy e reescrita de `/contas`. Fica
 como fase própria, com a desconexão entre `metadata.accounts` e `transactions.account_id` registrada
 aqui.
+
+---
+
+## Decisão 23 — O app não afirma saldo, e apertar vocabulário publicado custa migration (26/ago)
+
+**O pedido do Julio:** *"na página /fluxo existem indicadores de saldo, coisa que não controlamos no
+nosso sistema, e também gráficos baseados em recorrência encontrada; quero retirar esses indicadores
+e gráficos; vamos concentrar tudo no dashboard e agora com orçamento não faz sentido essa projeção
+baseada em recorrência."*
+
+São **duas decisões independentes** que o mesmo pedido carrega, e vale separá-las porque cada uma
+vai reaparecer sozinha.
+
+### 23.1 — Medida de movimento não pode ser apresentada como medida de posição
+
+O "Saldo Atual" do `/fluxo` era:
+
+```sql
+SELECT SUM(CASE WHEN direction='inflow' THEN amount ELSE -amount END) FROM transactions
+```
+
+Sem corte de data. Sem saldo inicial de conta nenhuma. Numa organização que importou seis meses de
+extrato, aquilo era **a soma desses seis meses** — o resultado de caixa do período, exibido com o
+rótulo de posição patrimonial. O KPI do dashboard (`kpis.saldoCaixa`) tinha o mesmo defeito,
+apenas limitado ao fim do mês de referência.
+
+E os dois **discordavam entre si**: o do `/fluxo` filtrava `hide_in_cashflow = false`, o do
+dashboard não. Duas telas do mesmo produto afirmando dois saldos diferentes, nenhum dos quais era o
+dinheiro em conta.
+
+**A regra que fica:** o produto só afirma um número quando controla o que ele mede. Saldo bancário
+exige saldo inicial ou leitura de posição da instituição — o Pluggy traz isso em
+`data_sources.metadata.accounts`, e enquanto ninguém decidir usá-lo como âncora, o app não tem
+saldo para mostrar. Somar movimento e chamar de saldo é pior que não mostrar nada, porque o número
+parece responder à pergunta.
+
+**Corolário, e é a parte que quase passou batido:** a regra de alerta `saldo-negativo` lia esse
+mesmo número. **Alerta é o pior destino possível para uma medida que não mede o que promete** — o
+cartão errado informa mal; o alerta errado *interrompe*. Um "saldo em caixa negativo" que na verdade
+diz "importei mais saída que entrada" manda o cliente caçar um problema que não existe. Ao remover
+um número, procurar quem mais o consome não é higiene: é parte da decisão.
+
+### 23.2 — Projeção estatística morre quando existe projeção declarada
+
+A projeção de 90 dias do `/fluxo` extrapolava o futuro pela média dos intervalos entre ocorrências
+passadas. Era a melhor resposta possível **enquanto não havia orçamento**. Desde a Fase 9 há, com
+data de competência, data de caixa, versão, responsável e histórico de edição.
+
+Manter as duas produziria **dois futuros na mesma tela, derivados de regras diferentes** — e o
+derivado de regra estatística é o que ninguém consegue corrigir, porque não há onde discordar dele.
+
+**O que sobreviveu, e por quê:** a *detecção* de recorrências ≠ a *projeção*. Desde a Sessão 9.5 ela
+tem segundo dono: em `/orcamento`, "aceitar recorrências detectadas" a usa para **sugerir o que
+orçar**. Ali ela não prevê — preenche um formulário que a pessoa revisa. É o oposto de substituir o
+orçamento: é atalho para escrevê-lo. Por isso a função mudou de casa
+(`server/fluxo.ts` → `lib/recurrence-detect.ts`) em vez de ser apagada, e `server/fluxo.ts` deixou
+de existir: com o último export sem chamador, um arquivo `'use server'` é endpoint HTTP aberto sem
+propósito (mesma razão que apagou quatro funções de `server/dashboard.ts` na 5.C).
+
+### 23.3 — Enum validado na LEITURA: apertar o vocabulário exige migration de dados
+
+Esta é a parte que não estava no pedido e teria quebrado a tela do Julio.
+
+Remover a regra `saldo-negativo` obriga a tirá-la de `REGRAS_DE_ALERTA`, em `block-spec.ts`. Mas
+aquele enum é validado **nas duas direções** — na escrita e na leitura —, que é a decisão da Sessão
+1.4 responsável por uma spec corrompida quebrar só o próprio bloco em vez de derrubar o painel.
+
+E o Zod **materializa o `.default([...])` na gravação**: um bloco `alertas` criado sem escolher
+regras não guarda "nenhuma regra escolhida", guarda **a lista inteira por extenso**. Conferido no
+banco antes de decidir: 3 painéis materializados, 17 blocos, e os blocos `alertas` carregavam as 8
+regras. Apertar o enum sem tocar no gravado transformaria o bloco de alertas de quem personalizou em
+bloco com `erroDeSpec`.
+
+**A regra de método:** antes de estreitar qualquer vocabulário publicado (enum de spec, lista de
+medidas do motor, tipos de bloco), **consultar o banco pelos valores já gravados**. Se houver, a
+migration de dados vai no mesmo commit — não como limpeza, como pré-requisito do deploy.
+
+A migration 0032 não toca estrutura; edita `jsonb`. Duas sentenças, e **a ordem importa**:
+
+1. Apaga a chave `regras` de quem tinha *só* a regra removida. Lista vazia falharia no `.min(1)`;
+   sem a chave, o `.default` volta a valer na leitura.
+2. Remove o elemento de quem tem outras, preservando a ordem original — reordenar em silêncio é
+   ruído numa auditoria.
+
+Invertidas, a primeira já teria zerado a lista e a segunda não teria como distinguir os casos.
+Nenhum bloco de hoje cai no caso 1; a sentença existe porque a spec **permite** escolher regras, e
+uma escrita futura pelo MCP poderia ter escolhido só aquela.
+
+### O que NÃO muda
+
+**Painel já materializado não é reescrito.** O padrão caiu de 8 para 7 blocos, mas quem personalizou
+continua com os blocos que escolheu — reescrever o painel de alguém para acompanhar o padrão seria
+desfazer trabalho que a pessoa fez. Medido: os dois painéis "Visão geral" do banco já estavam com 7
+blocos e nenhum de saldo, porque o Julio já havia removido o cartão à mão pelo Organizar.
+
+**A janela `acumulado` continua no schema.** Nenhum bloco do padrão a usa agora, mas ela é
+capacidade genérica dos blocos e segue alcançável pelo expert via MCP. Por isso o teste que a
+provava não foi apagado junto com o bloco — foi reescrito sobre uma spec montada à mão. Capacidade
+publicada sem teste é capacidade que ninguém sabe se responde.
