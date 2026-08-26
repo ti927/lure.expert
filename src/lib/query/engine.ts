@@ -29,6 +29,10 @@ import {
  */
 const GRUPO_TEMPORAL: Partial<Record<GroupingId, { unidade: string; formato: string }>> = {
   dia:       { unidade: 'day',     formato: 'YYYY-MM-DD' },
+  // A chave é a segunda-feira (DATE_TRUNC('week') é ISO, semana começa na
+  // segunda) — a mesma convenção do agrupamento que o dashboard fazia no
+  // cliente com `startOfWeek(…, { weekStartsOn: 1 })`.
+  semana:    { unidade: 'week',    formato: 'YYYY-MM-DD' },
   mes:       { unidade: 'month',   formato: 'YYYY-MM' },
   trimestre: { unidade: 'quarter', formato: 'YYYY-"T"Q' },
   ano:       { unidade: 'year',    formato: 'YYYY' },

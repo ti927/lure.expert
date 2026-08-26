@@ -316,7 +316,7 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | **4.5.A** | **O contrato e o modelo de colunas** — `docs/FORMATO_DE_IMPORTACAO.md`, `lib/import-contract.ts`, `lib/import-dedup.ts`, planilha modelo gerada, script de conformidade. **Nenhum insert tocado** | ✅ |
 | **4.5.B** | **A tela cumpre o contrato** — data de caixa chega na staging, BP funciona, dedup liga, e **conta manual passa a existir** (`data_sources` com `provider='manual'`). DoD cumprido: mesmo arquivo duas vezes → 0 inserções na segunda. **54/54** | ✅ migration 0031 **a aplicar** |
 | **4.5.C** | **O asfalto do MCP** — cabeçalho canônico lido **sem Haiku** (o princípio nº 2 saindo do papel), `prever_importacao` publica o nível de arquivo do contrato, e **BP pelo MCP passa a ser possível**. **132/132** | ✅ |
-| **5.A** | **Paleta categórica + biblioteca de gráficos** — `--chart-1..8` (light+dark), `src/components/charts/` (7 arquivos), `/dashboard` e `/fluxo` migrados no mesmo commit, vitrine `/style-guide/charts` | ✅ (aguardando confirmação na tela) |
+| **5.A** | **Paleta categórica + biblioteca de gráficos** — `--chart-1..8` (light+dark), `src/components/charts/` (7 arquivos), `/dashboard` e `/fluxo` migrados no mesmo commit, vitrine `/style-guide/charts` | ✅ **confirmada na tela em 25/ago** (paleta aprovada; /dashboard e /fluxo idênticos) |
 | 5.B | O miolo de painéis em `/lib`: CRUD + seed virtual + execução de bloco + compartilhamento com papel | 🔲 |
 | 5.C | O renderizador: `/dashboard` vira painel de blocos | 🔲 |
 | 5.D | O grupo MCP de dashboard (8 ferramentas) | 🔲 |
@@ -340,9 +340,38 @@ nunca aparecem juntas. Ver `docs/SCHEMA_DECISIONS.md` 13.14 e 13.15.
 | Sessão | Entrega | Status |
 |---|---|---|
 | 5.A | Paleta `--chart-1..8` + `components/charts/` (chart-theme, chart-container, bar, line, area, composed, pie, horizontal-bar) + migração de `/dashboard` e `/fluxo` + vitrine | ✅ |
-| 5.B | Miolo em `/lib`: CRUD de painéis/blocos (Zod nas duas direções), painel padrão virtual, execução de bloco (spec → motor; escotilhas `indicador`/`alertas` extraídas para `/lib`), compartilhamento com enforcement admin+ | 🔲 |
+| 5.B | Miolo em `/lib`: CRUD de painéis/blocos (Zod nas duas direções), painel padrão virtual, execução de bloco (spec → motor; escotilhas `indicador`/`alertas` extraídas para `/lib`), compartilhamento com enforcement admin+. **111/111** contra o banco + conciliação 54 comparações / 0 divergências | ✅ |
 | 5.C | `/dashboard` vira carregador de painel; grid + um componente por tipo de bloco; heranças preservadas (delta de despesas invertido, dismiss por mês, drill-down); bloco inválido quebra sozinho | 🔲 |
 | 5.D | MCP: `listar_paineis`, `ler_painel`, `criar_painel`, `adicionar_bloco` (executa a query e devolve as linhas; `previa: true` não grava), `editar_bloco`, `remover_bloco`, `reordenar_blocos`, `compartilhar_painel` | 🔲 |
+
+**Da 5.B, o que ficou decidido no código:**
+
+- **`lib/dashboard/` reúne o miolo**, e três coisas MUDARAM DE CASA de `server/dashboard.ts` e de
+  `dashboard-client.tsx` (movidas, não copiadas): `kpis.ts` (os 4 KPIs + as listas de tipos +
+  `resolveMonthRange`), `indicators.ts` (os 7 indicadores) e `alerts.ts` (as 8 regras, que eram um
+  `useMemo` de 88 linhas). As listas `TIPOS_DESPESA`/`TIPOS_RESULTADO`/`TIPOS_SAIDA_CAIXA` passaram a
+  ter **um dono só** — o painel padrão monta os filtros a partir delas.
+- **O painel padrão é VIRTUAL** (consequência de "só admin+ cria"): quem não tem painel vê os 8
+  blocos renderizados sem nada ir ao banco; admin+ tem `materializarPainelPadrao` para gravá-los e
+  personalizar. Seed preguiçoso criaria linha em nome de um viewer que visitasse primeiro.
+- **A janela do período é do BLOCO, o regime é da CONSULTA.** `periodo.janela` ∈ mes |
+  ultimos_meses | ultimos_dias | acumulado ancora no mês do painel e substitui as datas;
+  competência/caixa continua vindo de `query.periodo`. `acumulado` **não tem período anterior** —
+  delta nulo, não zero (o Saldo em Caixa).
+- **`inverterSinal` + `menorEhMelhor` no KPI**: com tipos de despesa, `valor_liquido` sai negativo;
+  o cartão mostra o gasto positivo e sabe que subir é ruim. Sem isso, "Despesas" apareceria −4.000.
+- **KPI recusa `agruparPor` e exige 1 medida** na escrita: agrupar produziria N linhas e só a
+  primeira apareceria — truncar em silêncio na leitura é pior que recusar na escrita.
+- **Reordenar exige a lista COMPLETA e idêntica ao conjunto atual** (a defesa da assinatura de plano
+  da 3.3): se alguém adicionou um bloco no intervalo, reordenar por cima apagaria o que o autor da
+  lista nunca viu.
+- **Papel vem antes do compartilhamento.** admin+ para criar/editar/compartilhar; **só o dono**
+  apaga, compartilha e define o próprio padrão — nem o owner da organização mexe em painel alheio
+  sem share `editar`, e share `editar` **não** dá direito de apagar. Compartilhar com pessoa exige
+  membership **aceita**.
+- **Agrupamento `semana` novo no motor** (`DATE_TRUNC('week')`, ISO — a chave é a segunda-feira),
+  que o gráfico de 90 dias usa. O teste prova a convenção: 5/mar (quinta) e 8/mar (**domingo**) caem
+  na MESMA semana.
 
 **Da 5.A:** a regra nova de design — **nunca escolher cor de gráfico à mão em componente**; o
 acesso é por `chart-theme.ts` (`CHART_PALETTE`, `corCategorica`, `COR_ENTRADA/SAIDA` e as
@@ -545,9 +574,8 @@ de novo e ver o aviso azul dizendo que nada é novo.
 IA (confira em `/configuracoes/consumo`, que não deve registrar chamada nova). E, pelo claude.ai,
 pedir a importação de um **balanço**, que passa a funcionar pela primeira vez.
 
-**Da 5.A:** `/style-guide/charts` — conferir a **paleta categórica** a olho (é a validação que a
-decisão 4 da Fase 5 pede antes da 5.C); e `/dashboard` + `/fluxo`, que devem estar **idênticos**
-ao que eram — a migração trocou o código dos gráficos, não a aparência.
+**Da 5.A: CONFIRMADA em 25/ago** — Julio conferiu a paleta em `/style-guide/charts` e aprovou;
+`/dashboard` e `/fluxo` idênticos. Sai da lista de pendências.
 
 **Da 4.A: CONFIRMADA em 25/ago** — o convite de ponta a ponta rodou na tela (convidar → e-mail →
 definir senha → dashboard). Sai da lista de pendências.
@@ -629,6 +657,12 @@ Candidatas avulsas, nunca comprometidas:
 - Expert lendo o orçamento no system prompt ("você está 18% acima do orçado em SG&A")
 - Orçado no `/fluxo`, por data de caixa — a mecânica da DRE serve, mudando o regime
 - Contato preenchido automaticamente pela NF-e (`invoices.contact_id` existe e nunca foi escrito)
+- **Blocos livres em sandbox** (discutido em 25/ago, na abertura da Fase 5): IA gerando o
+  CÓDIGO do gráfico (ex.: mapa), rodando em iframe de origem separada + CSP sem rede, dados
+  entrando prontos por postMessage — o app roda a consulta, o código só desenha. Fase própria
+  (~3-4 sessões) SE o cardápio de blocos se provar apertado com frequência. Até lá: gráfico
+  livre já existe na conversa do claude.ai; visual recorrente vira tipo de bloco novo. A
+  decisão travada "nunca executar código gerado" segue de pé dentro do app
 
 **Renumeração:** o módulo de Orçamento assumiu o número 9. As fases antes numeradas
 9 (Agente Proativo) e 10 (Onboarding/Billing) passam a **10** e **11**.
@@ -710,6 +744,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 | Sessão | O que foi entregue |
 |---|---|
 | **Motor + MCP (plano de 23/ago)** | |
+| 5.B (miolo dos painéis) | **`lib/dashboard/`: store, executor de bloco, painel padrão virtual — e três mudanças de casa.** `getDashboardKPIs` e `getFinancialIndicators` viraram cascas de 3 linhas (o SQL foi para `kpis.ts`/`indicators.ts`) e as 8 regras de alerta saíram de um `useMemo` de 88 linhas no cliente para `alerts.ts` — o bloco `alertas` precisa delas no SERVIDOR, e como função pura ficam legíveis pelo MCP. **O painel padrão é virtual**, consequência direta de "só admin+ cria": seed preguiçoso gravaria linha em nome do primeiro visitante, que pode ser viewer. **A janela é do bloco, o regime é da consulta** — `mes`/`ultimos_meses`/`ultimos_dias`/`acumulado` ancoram no mês do painel e substituem as datas, e `acumulado` não tem anterior (delta **nulo**, não zero). KPI ganhou `inverterSinal` (senão "Despesas" mostra −4.000, porque `valor_liquido` é entrada−saída) e recusa `agruparPor` na ESCRITA. Reordenar exige a lista completa e idêntica — a defesa da assinatura de plano da 3.3, contra apagar bloco que o autor da ordem nunca viu. Papel vem ANTES do share: admin+ edita, **só o dono** apaga/compartilha/define o próprio padrão, share `editar` não dá direito de apagar. Agrupamento **`semana`** novo no motor (ISO, chave na segunda). Verificado: **111/111** contra o banco numa organização descartável, incluindo os 4 KPIs batendo com o cálculo clássico, bloco lido do jsonb devolvendo o mesmo número, spec corrompida quebrando SÓ o próprio bloco, e o isolamento entre organizações; mais **conciliação de 54 comparações (6 organizações × 9 meses) com 0 divergências** entre o SQL antigo e o novo |
 | 5.A (gráficos) | **Paleta categórica + biblioteca `components/charts/`.** `--chart-1..8` (light+dark, classes `bg-chart-N`), com **rose fora de propósito** — fatia de pizza não pode parecer prejuízo — e slate como "outros"; projeções ganharam tokens (`--color-positive-soft`/`--color-negative-soft`, os emerald-300/red-300 que `/fluxo` usava como literais). 7 arquivos: `chart-theme` (paleta, `corCategorica` cíclica, formatadores, tipo `ChartSeries`), `chart-container` (tooltip genérico + defaults `GRADE`/`EIXO_X`/`EIXO_Y` como **objetos de props para espalhar**, porque o Recharts inspeciona o tipo dos filhos diretos), `bar` (agrupado/empilhado/misto por `stackId`), `line`, `area`, `composed` (série declara `visual`), `pie` (pizza/rosca, % no tooltip), `horizontal-bar` (ranking). **`name={label}` elimina formatter de legenda** — o mapeamento chave→humano acontece uma vez, na série. `/dashboard` e `/fluxo` migrados no mesmo commit perdendo `yFormatter`/`ChartTooltip`/`legendFormatter` locais; cores preservadas com exatidão (os hex antigos são os valores das variáveis novas). Vitrine `/style-guide/charts` + navegação entre as 3 páginas do style-guide. Verificado: `tsc`, lint e build limpos (41 rotas); o visual aguarda o olho do Julio |
 | 4.A (convites) | **Convites e aceite, sem migration** — o schema da Fase 1 antecipava tudo (`role`, `invited_email`, `invited_by_user_id`, `accepted_at`), e a escolha do e-mail automático manteve `user_id NOT NULL`: `inviteUserByEmail` cria a conta ANTES da membership. **Dois caminhos de convite** porque o Supabase recusa reconvidar e-mail cadastrado: novo → e-mail → `/auth/confirm` (verifyOtp server-side; o template PRECISA usar `{{ .TokenHash }}` — o padrão manda os tokens no fragmento, que nunca chega ao servidor) → `/convite/definir-senha` aceita todos os pendentes de uma vez; existente → convite pendente in-app, no `/onboarding` e em `/configuracoes`. **Miolo em `lib/members.ts`** (exercitável por script) com a matriz pura em `lib/members-types.ts` (client-safe, padrão `budget-types`); `server/members.ts` é casca. Regra do último owner é de CONTAGEM, não de matriz — e owner pendente não conta nem é protegido. Aceite/recusa autorizam pelo WHERE (id + user + pendente), sem oráculo de ids. Auditoria: 5 tipos de evento em `agent_events`. `destinoSeguro` mudou de casa para `lib/redirect-seguro.ts` (o `/auth/confirm` reusa a defesa do `?next=`). **Defeito achado pelo teste:** Drizzle 0.45 embrulha o erro do driver e o `23505` mora em `err.cause` — o catch do onboarding estava cego desde o upgrade (CNPJ duplicado caía na mensagem genérica); os três catches corrigidos. Verificado: **41/41** contra o banco em organizações descartáveis, `next build` limpo com 3 rotas novas. **Não verificado automaticamente** (exige SMTP + service key + template no painel): o envio real do e-mail e o `verifyOtp` do link |
 | 4.5.C (o MCP) | **O princípio nº 2 sai do papel na importação:** o parser era LLM-first — chamava Haiku em todo upload, de todo formato, porque nunca houve um formato para esperar. Agora testa o cabeçalho contra o documento publicado ANTES de qualquer chamada de IA; casou, lê direto. Coluna extra desconhecida não desqualifica, e cabeçalho que não casa cai no caminho de hoje **inalterado** — a promessa da Fase 2 continua de pé. `extraction_method='template'` ganhou significado novo ("lido sem IA") e um contador no relatório de conformidade. **O defeito que a planilha modelo expôs: o parser não lia "Saída"** — `deriveDirection` comparava `/saida/` sobre o texto cru, e `"Saída".toLowerCase()` mantém o acento; nunca casava. Toda linha de saída de um CSV que escrevesse a palavra corretamente saía sem direção, mascarado por três fallbacks. Apareceu quando o arquivo que NÓS oferecemos foi lido pelo nosso próprio parser. **BP pelo MCP passa a existir:** `reportType: 'other'` era cravado, e em silêncio — `getBpData` filtra `balance_sheet` e `domainFromReportType('other')` devolve `'dre'`. A ferramenta ganhou o nível de arquivo (tipo, data de referência, conta), revalidado no apply; `resolverNaturezas` ganhou filtro de domínio e passou a delegar a `findCategoryByText`, a MESMA regra da tela — tinha cópia própria, e duas cópias significam que o mesmo arquivo entra diferente conforme a porta; `accountId` deixou de receber texto cru do modelo. **`data`/`descricao`/`sentido` viraram opcionais** (balanço não tem nenhuma), com o tipo de relatório exigindo cada uma — e o teste cobre os dois sentidos. Quando TODAS as linhas eram recusadas, a resposta dizia "nenhuma linha para importar" **sem o motivo**; agora diz. Verificado: **132/132** escrita, 70/70 tela, 36/36 leitura |

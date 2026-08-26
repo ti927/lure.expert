@@ -32,11 +32,37 @@ const base = {
  * O período pode ser herdado do painel — que é o que faz o seletor de mês
  * mexer em todos os blocos de uma vez — ou fixo no bloco, para o caso do
  * comparativo que sempre olha 12 meses independentemente do mês escolhido.
+ *
+ * No modo herdado, a `janela` diz COMO ancorar no mês M do painel, e as datas
+ * de `query.periodo` são ignoradas (o regime competência/caixa vem de lá):
+ *
+ * - `mes`           → o próprio mês M
+ * - `ultimos_meses` → `tamanho` meses terminando no fim de M
+ * - `ultimos_dias`  → `tamanho` dias terminando no fim de M (o "90 dias" do
+ *                     gráfico de fluxo do dashboard)
+ * - `acumulado`     → do início dos tempos até o fim de M (o "Saldo em Caixa")
  */
 export const periodoDoBlocoSchema = z.discriminatedUnion('modo', [
-  z.object({ modo: z.literal('herda_do_painel') }),
+  z.object({
+    modo: z.literal('herda_do_painel'),
+    janela: z.enum(['mes', 'ultimos_meses', 'ultimos_dias', 'acumulado']).default('mes'),
+    /** Tamanho da janela — exigido em ultimos_meses (1..60) e ultimos_dias (1..366). */
+    tamanho: z.number().int().min(1).max(366).optional(),
+  }).superRefine((v, ctx) => {
+    if ((v.janela === 'ultimos_meses' || v.janela === 'ultimos_dias') && v.tamanho === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['tamanho'], message: `A janela "${v.janela}" exige o tamanho.` })
+    }
+    if (v.janela === 'ultimos_meses' && (v.tamanho ?? 0) > 60) {
+      ctx.addIssue({ code: 'custom', path: ['tamanho'], message: 'No máximo 60 meses.' })
+    }
+    if ((v.janela === 'mes' || v.janela === 'acumulado') && v.tamanho !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['tamanho'], message: `A janela "${v.janela}" não usa tamanho.` })
+    }
+  }),
   z.object({ modo: z.literal('proprio') }),
-]).default({ modo: 'herda_do_painel' })
+]).default({ modo: 'herda_do_painel', janela: 'mes' })
+
+export type PeriodoDoBloco = z.infer<typeof periodoDoBlocoSchema>
 
 // ─── Blocos que consultam dados ──────────────────────────────────────────────
 //
@@ -51,7 +77,27 @@ const kpi = z.object({
   formato: z.enum(['moeda', 'inteiro', 'percentual']).default('moeda'),
   /** Mostra a variação contra o período anterior. */
   comparar: z.boolean().default(true),
+  /**
+   * Multiplica o valor por −1 antes de exibir. É o que faz "Despesas" aparecer
+   * positivo: com `tiposDeCategoria` de despesa, `valor_liquido` sai negativo
+   * (entrada − saída), e o cartão mostra o gasto como número positivo.
+   */
+  inverterSinal: z.boolean().default(false),
+  /**
+   * Semântica do delta: subir é ruim (despesas). O renderizador usa para
+   * colorir a variação — o número não muda.
+   */
+  menorEhMelhor: z.boolean().default(false),
   meta: z.number().optional(),
+}).superRefine((v, ctx) => {
+  // KPI é UM número: agrupamento produziria várias linhas e só a primeira
+  // apareceria — melhor recusar na escrita que truncar em silêncio na leitura.
+  if (v.query.agruparPor.length > 0) {
+    ctx.addIssue({ code: 'custom', path: ['query', 'agruparPor'], message: 'Bloco kpi não agrupa — use serie, ranking ou composicao.' })
+  }
+  if (v.query.medidas.length !== 1) {
+    ctx.addIssue({ code: 'custom', path: ['query', 'medidas'], message: 'Bloco kpi usa exatamente uma medida.' })
+  }
 })
 
 const serie = z.object({

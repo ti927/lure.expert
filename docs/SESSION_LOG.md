@@ -12,6 +12,89 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Sessão 5.B — O miolo dos painéis em `/lib`
+
+**Verificado: 111/111 contra o banco real numa organização descartável
+(`scripts/verify-dashboards.ts`), conciliação de 54 comparações (6 organizações × 9 meses) com
+0 divergências entre o SQL antigo e o novo, `tsc`/`next lint`/`next build` limpos. Nada mudou
+na tela — o renderizador é a 5.C.**
+
+#### Três mudanças de casa (movidas, não copiadas)
+
+| De | Para | Por quê |
+|---|---|---|
+| `server/dashboard.ts` (KPIs, ~70 linhas de SQL) | `lib/dashboard/kpis.ts` | o bloco `alertas` do painel precisa dos 4 números no SERVIDOR, fora de sessão HTTP |
+| `server/dashboard.ts` (indicadores, ~130 linhas) | `lib/dashboard/indicators.ts` | o bloco `indicador` os consome direto |
+| `dashboard-client.tsx` (`useMemo` das 8 regras, 88 linhas) | `lib/dashboard/alerts.ts` | como função pura, viram bloco E ficam legíveis pelo MCP |
+
+As duas server actions viraram cascas de 3 linhas. As listas `TIPOS_DESPESA`,
+`TIPOS_RESULTADO` e `TIPOS_SAIDA_CAIXA` passaram a ter **um dono só** — o painel padrão monta
+os filtros dos blocos a partir delas, e duas cópias divergiriam na primeira mudança de plano de
+contas. A conciliação existiu porque a mudança de casa trocou `sql.raw` com lista literal por
+`sql.join` parametrizado: SQL diferente, resultado que **tinha** de ser idêntico.
+
+#### O painel padrão é virtual — e isso saiu da decisão de papéis
+
+Julio decidiu "só admin+ cria e compartilha". O *seed preguiçoso* que o plano previa (na primeira
+visita sem painel, gravar os 8 blocos) violaria isso: o primeiro visitante pode ser um viewer, e
+gravar em nome dele seria criar painel sem poder criar painel. Então `blocosDoPainelPadrao()`
+devolve os 8 blocos que reproduzem a tela clássica, renderizados **sem nada ir ao banco**, e
+`materializarPainelPadrao` (admin+) os grava quando alguém quiser personalizar. Materializar duas
+vezes é recusado.
+
+#### A janela é do BLOCO, o regime é da CONSULTA
+
+O `periodo` do bloco ganhou `janela` ∈ `mes` | `ultimos_meses` | `ultimos_dias` | `acumulado`, com
+`tamanho` exigido nas duas do meio e **recusado** nas outras (campo que não faz nada mentiria).
+Ela ancora no mês do painel e SUBSTITUI as datas de `query.periodo`; competência/caixa continua
+vindo de lá. `acumulado` **não tem período anterior** — delta `null`, não `0`: o Saldo em Caixa
+compara contra o quê? "Desde o início até o fim do mês passado" não é janela de mesmo tamanho.
+
+#### Dois campos que o KPI não tinha e precisava
+
+`inverterSinal` e `menorEhMelhor`. Sem o primeiro, o cartão "Despesas" mostraria **−4.000**:
+`valor_liquido` é entrada menos saída, e com tipos de despesa o número nasce negativo. O segundo
+só diz ao renderizador que subir é ruim — o número não muda. É a herança do
+`delta={-kpis.despesas.delta}` que a tela clássica fazia na mão.
+
+E o KPI passou a **recusar `agruparPor` e exigir exatamente 1 medida na escrita**: agrupado, a
+consulta devolveria N linhas e só a primeira apareceria. Truncar em silêncio na leitura é pior
+que recusar na escrita.
+
+#### As regras de papel, e a que surpreende
+
+Papel vem **antes** do compartilhamento: admin+ para criar/editar/compartilhar. Mas o vínculo com
+o painel manda depois disso — **só o dono** apaga, compartilha e define o próprio padrão. O teste
+que prova o desenho: *"nem o OWNER da organização compartilha painel alheio"*, e *"share `editar`
+NÃO dá direito de apagar"*. O padrão é por usuário (o índice parcial é `(org, owner)`), então
+marcar o painel de outra pessoa como padrão mexeria na tela inicial DELA — recusado.
+`compartilharPainel` faz upsert manual (o índice único usa `COALESCE` e o Drizzle não o expressa),
+então recompartilhar o mesmo alvo **altera a permissão** em vez de duplicar.
+
+#### Reordenar exige a lista completa — a defesa da 3.3 transposta
+
+`reordenarBlocos` recusa se a lista não bater **exatamente** com o conjunto atual. Se alguém
+acrescentou ou removeu um bloco entre a leitura e o clique, reordenar por cima apagaria a mudança
+que o autor da lista nunca viu — a mesma razão da assinatura de plano nas regras.
+
+#### Agrupamento `semana` no motor
+
+`DATE_TRUNC('week')` é ISO: a chave é a **segunda-feira**, a mesma convenção do
+`startOfWeek(…, { weekStartsOn: 1 })` que o dashboard fazia no cliente. O teste prova a semântica
+em vez de assumi-la: os 4 lançamentos de março (dias 5, 8, 12, 20) caem em **3** semanas, porque
+8/mar é **domingo** e fecha a semana que começou em 2/mar. Foi uma das duas asserções que eu havia
+calibrado errado — as duas falhas do teste eram do teste, não do código, e viraram asserções mais
+fortes (a outra: as despesas dobraram de fevereiro para março, então o alerta `despesas-alta`
+**deve** disparar; asseverar "zero alertas" ali esconderia a regra).
+
+#### Bloco quebrado quebra sozinho
+
+`lerPainel` valida cada spec e devolve `spec: null` + `erroDeSpec` no bloco que não valida mais,
+sem derrubar os outros nem sumir da lista. Testado gravando uma spec de tipo inexistente por fora
+do store.
+
+---
+
 ### ✅ Sessão 5.A — Paleta categórica + biblioteca de gráficos (Fase 5 do plano de 23/ago)
 
 **Verificado: `tsc`, `next lint` e `next build` limpos (41 rotas, `/style-guide/charts` nova).

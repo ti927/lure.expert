@@ -12,6 +12,13 @@ import { format, parseISO, startOfWeek } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { BarChart } from '@/components/charts/bar-chart'
 import { COR_ENTRADA, COR_SAIDA } from '@/components/charts/chart-theme'
+// As 8 regras de alerta e os limiares dos indicadores mudaram de casa na 5.B:
+// como função pura em `/lib`, viram o bloco `alertas` do painel e ficam
+// legíveis pelo MCP.
+import {
+  gerarAlertas, indicatorStatus, indicatorStatusInverse,
+  type DashboardAlert, type IndicatorStatus,
+} from '@/lib/dashboard/alerts'
 import { BarChart2, TrendingUp, Droplets, ShieldCheck, Activity, Scale, Clock, Wallet, HelpCircle, PieChart, Loader2, AlertTriangle, X } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
@@ -20,13 +27,6 @@ import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
 import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
-
-type DashboardAlert = {
-  id:       string
-  severity: 'critical' | 'warning'
-  message:  string
-  action?:  { label: string; href: string }
-}
 
 function AlertsSection({
   alerts,
@@ -120,23 +120,6 @@ function groupByWeek(days: CashFlowDay[]): WeekData[] {
 // /fluxo e com os blocos do painel configurável.
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-
-type IndicatorStatus = 'good' | 'warn' | 'bad' | 'neutral'
-
-function indicatorStatus(value: number | null, good: number, warn: number): IndicatorStatus {
-  if (value === null) return 'neutral'
-  if (value >= good) return 'good'
-  if (value >= warn) return 'warn'
-  return 'bad'
-}
-
-// Para indicadores onde "menor é melhor" (ex: Endividamento Geral).
-function indicatorStatusInverse(value: number | null, goodMax: number, warnMax: number): IndicatorStatus {
-  if (value === null) return 'neutral'
-  if (value <= goodMax) return 'good'
-  if (value <= warnMax) return 'warn'
-  return 'bad'
-}
 
 const statusColor: Record<IndicatorStatus, string> = {
   good:    'bg-emerald-500',
@@ -307,94 +290,12 @@ export function DashboardClient({
   const endividStatus      = indicatorStatusInverse(indicators.endividamentoGeral, 0.5, 0.7)
   const roeStatus          = indicatorStatus(indicators.roe,                    15, 8)
 
-  const alerts = useMemo<DashboardAlert[]>(() => {
-    if (!kpis.hasData) return []
-    const result: DashboardAlert[] = []
-
-    // Saldo em caixa negativo
-    if (kpis.saldoCaixa < 0) {
-      result.push({
-        id: 'saldo-negativo',
-        severity: 'critical',
-        message: `Saldo em caixa negativo (${brl.format(kpis.saldoCaixa)}).`,
-        action: { label: 'Ver transações', href: '/transacoes' },
-      })
-    }
-
-    // Resultado líquido negativo
-    if (kpis.lucroLiquido.current < 0) {
-      result.push({
-        id: 'lucro-negativo',
-        severity: 'warning',
-        message: `Resultado líquido do mês negativo (${brl.format(kpis.lucroLiquido.current)}).`,
-        action: { label: 'Ver DRE', href: '/dre' },
-      })
-    }
-
-    // Despesas crescendo muito
-    if (kpis.despesas.delta !== null && kpis.despesas.delta > 30) {
-      result.push({
-        id: 'despesas-alta',
-        severity: kpis.despesas.delta > 50 ? 'critical' : 'warning',
-        message: `Despesas cresceram ${kpis.despesas.delta.toFixed(0)}% em relação ao mês anterior.`,
-        action: { label: 'Analisar', href: '/transacoes' },
-      })
-    }
-
-    // Receita caindo muito
-    if (kpis.receita.delta !== null && kpis.receita.delta < -20) {
-      result.push({
-        id: 'receita-queda',
-        severity: kpis.receita.delta < -40 ? 'critical' : 'warning',
-        message: `Receita caiu ${Math.abs(kpis.receita.delta).toFixed(0)}% em relação ao mês anterior.`,
-        action: { label: 'Ver DRE', href: '/dre' },
-      })
-    }
-
-    // Margem EBITDA crítica
-    if (ebitdaStatus === 'bad' && indicators.margemEbitda !== null) {
-      result.push({
-        id: 'ebitda-baixo',
-        severity: indicators.margemEbitda < 0 ? 'critical' : 'warning',
-        message: `Margem EBITDA em ${indicators.margemEbitda.toFixed(1)}% — abaixo do mínimo recomendável de 5%.`,
-        action: { label: 'Ver DRE', href: '/dre' },
-      })
-    }
-
-    // Cobertura do serviço da dívida insuficiente
-    if (dcsrStatus === 'bad' && indicators.coberturaServicoDivida !== null) {
-      result.push({
-        id: 'cobertura-divida',
-        severity: 'critical',
-        message: `Cobertura do serviço da dívida em ${indicators.coberturaServicoDivida.toFixed(2)}x — resultado operacional não cobre os empréstimos do mês.`,
-        action: { label: 'Ver DRE', href: '/dre' },
-      })
-    }
-
-    // Liquidez corrente crítica
-    if (liquidezStatus === 'bad' && indicators.liquidezCorrente !== null) {
-      result.push({
-        id: 'liquidez-corrente',
-        severity: 'critical',
-        message: `Liquidez Corrente em ${indicators.liquidezCorrente.toFixed(2)}x — ativo circulante insuficiente para cobrir o passivo de curto prazo.`,
-        action: { label: 'Ver Balanço', href: '/balanco' },
-      })
-    }
-
-    // Endividamento elevado
-    if (endividStatus === 'bad' && indicators.endividamentoGeral !== null) {
-      result.push({
-        id: 'endividamento',
-        severity: 'warning',
-        message: `Endividamento Geral em ${(indicators.endividamentoGeral * 100).toFixed(1)}% — alavancagem acima do limite recomendável.`,
-        action: { label: 'Ver Balanço', href: '/balanco' },
-      })
-    }
-
-    return result
-      .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1))
-      .slice(0, 6)
-  }, [kpis, indicators, ebitdaStatus, dcsrStatus, liquidezStatus, endividStatus])
+  // As 8 regras vivem em `lib/dashboard/alerts.ts` desde a 5.B — o mesmo código
+  // que o bloco `alertas` do painel executa no servidor.
+  const alerts = useMemo<DashboardAlert[]>(
+    () => gerarAlertas(kpis, indicators),
+    [kpis, indicators],
+  )
 
   const allNull = indicators.margemEbitda           === null
     && indicators.liquidezCorrente        === null

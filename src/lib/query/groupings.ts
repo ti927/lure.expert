@@ -8,6 +8,7 @@
 
 export const GROUPING_IDS = [
   'dia',
+  'semana',
   'mes',
   'trimestre',
   'ano',
@@ -35,6 +36,9 @@ export interface GroupingMeta {
 
 export const GROUPINGS: Record<GroupingId, GroupingMeta> = {
   dia:                { rotulo: 'Dia',                 rotuloVazio: 'Sem data',              temporal: true },
+  // A chave é a segunda-feira da semana (DATE_TRUNC('week') é ISO) — a mesma
+  // convenção do agrupamento semanal que o dashboard sempre fez no cliente.
+  semana:             { rotulo: 'Semana',              rotuloVazio: 'Sem data',              temporal: true },
   mes:                { rotulo: 'Mês',                 rotuloVazio: 'Sem data',              temporal: true },
   trimestre:          { rotulo: 'Trimestre',           rotuloVazio: 'Sem data',              temporal: true },
   ano:                { rotulo: 'Ano',                 rotuloVazio: 'Sem data',              temporal: true },

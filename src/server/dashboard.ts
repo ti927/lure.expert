@@ -7,45 +7,21 @@ import { db } from '@/db'
 import { categories } from '@/db/schema'
 import { eq, and, inArray, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
-import { startOfMonth, endOfMonth, subMonths, subDays, format, parseISO } from 'date-fns'
+import { subDays, format, parseISO } from 'date-fns'
 import type { DrillDownTransaction } from '@/lib/dre-types'
 import { runQuery } from '@/lib/query/engine'
 import { scopeFromSession } from '@/lib/query/scope'
+import {
+  calcularKpisDoMes, resolveMonthRange, TIPOS_SAIDA_CAIXA,
+  type DashboardKPIs, type KPIValue,
+} from '@/lib/dashboard/kpis'
+import { calcularIndicadores, type FinancialIndicators } from '@/lib/dashboard/indicators'
 
-// Resolve uma referência de mês ('YYYY-MM' ou undefined) em todos os marcos
-// usados pelas server actions do dashboard. Quando referenceMonth é inválido
-// ou undefined, cai pro mês corrente.
-function resolveMonthRange(referenceMonth?: string) {
-  let base: Date
-  if (referenceMonth && /^\d{4}-\d{2}$/.test(referenceMonth)) {
-    const y = Number(referenceMonth.slice(0, 4))
-    const m = Number(referenceMonth.slice(5, 7))
-    base = new Date(y, m - 1, 1)
-  } else {
-    base = new Date()
-  }
-  return {
-    curFrom:  format(startOfMonth(base),                'yyyy-MM-dd'),
-    curTo:    format(endOfMonth(base),                  'yyyy-MM-dd'),
-    prevFrom: format(startOfMonth(subMonths(base, 1)),  'yyyy-MM-dd'),
-    prevTo:   format(endOfMonth(subMonths(base, 1)),    'yyyy-MM-dd'),
-    from12m:  format(startOfMonth(subMonths(base, 11)), 'yyyy-MM-dd'),
-  }
-}
-
-export type KPIValue = {
-  current: number
-  previous: number
-  delta: number | null
-}
-
-export type DashboardKPIs = {
-  receita: KPIValue
-  despesas: KPIValue
-  lucroLiquido: KPIValue
-  saldoCaixa: number
-  hasData: boolean
-}
+// KPIs, indicadores e as listas de tipos MUDARAM DE CASA na 5.B para
+// `src/lib/dashboard/` — o bloco de painel precisa deles fora de uma sessão
+// HTTP. Aqui ficaram as cascas e o que é específico da tela (drill-down, que
+// assina URLs pelo Storage).
+export type { DashboardKPIs, KPIValue, FinancialIndicators }
 
 export type CashFlowDay = {
   date: string
@@ -67,207 +43,28 @@ export type TopExpenseCategory = {
   txCount:      number
 }
 
-const expenseTypes = sql.raw(
-  `'deducoes_tributarias','deducoes_operacionais','cpv','sga','resultado_financeiro','ir'`
-)
-// A lista de tipos de saída de caixa virou `TIPOS_SAIDA_CAIXA`, mais abaixo, ao
-// lado da consulta que a usa — o Top 5 passou a montar a lista como array, e o
-// motor a parametriza em vez de interpolá-la crua.
-const bpAndTransferTypes = sql.raw(
-  `'transfer','ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido','emprestimos_amortizacoes','investimentos_retiradas'`
-)
-
-function pct(a: number, b: number): number | null {
-  return b !== 0 ? ((a - b) / Math.abs(b)) * 100 : null
-}
-
+/**
+ * Os 4 KPIs do mês.
+ *
+ * O cálculo MUDOU DE CASA na 5.B para `lib/dashboard/kpis.ts` — o bloco
+ * `alertas` do painel precisa dos mesmos números fora de uma sessão HTTP, e
+ * duas cópias divergiriam na primeira mudança de regra. Aqui ficou a casca que
+ * resolve a organização ativa.
+ */
 export async function getDashboardKPIs(referenceMonth?: string): Promise<DashboardKPIs> {
   const { organizationId } = await getAuthContext()
-
-  const { curFrom, curTo, prevFrom, prevTo } = resolveMonthRange(referenceMonth)
-
-  type MonthRow = { receita: string; despesas: string; lucro: string; tx_count: string }
-  type BalRow   = { saldo: string }
-
-  const monthQuery = (from: string, to: string) => db.execute<MonthRow>(sql`
-    SELECT
-      COALESCE(SUM(CASE WHEN c.type = 'receita_operacional'
-        THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-        ELSE 0 END), 0)::text AS receita,
-      COALESCE(SUM(CASE WHEN c.type IN (${expenseTypes})
-        THEN (CASE WHEN t.direction = 'outflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-        ELSE 0 END), 0)::text AS despesas,
-      COALESCE(SUM(CASE WHEN c.type NOT IN (${bpAndTransferTypes})
-        THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-        ELSE 0 END), 0)::text AS lucro,
-      COUNT(*)::text AS tx_count
-    FROM transactions t
-    JOIN categories c ON t.category_id = c.id
-    WHERE t.organization_id = ${organizationId}::uuid
-      AND t.status NOT IN ('pending', 'duplicate')
-      AND t.date::date >= ${from}::date
-      AND t.date::date <= ${to}::date
-  `)
-
-  const [curRows, prevRows, balRows] = await Promise.all([
-    monthQuery(curFrom, curTo),
-    monthQuery(prevFrom, prevTo),
-    db.execute<BalRow>(sql`
-      SELECT COALESCE(SUM(
-        CASE WHEN direction = 'inflow' THEN amount::numeric ELSE -amount::numeric END
-      ), 0)::text AS saldo
-      FROM transactions
-      WHERE organization_id = ${organizationId}::uuid
-        AND status NOT IN ('pending', 'duplicate')
-        AND COALESCE(effective_date, date)::date <= ${curTo}::date
-    `),
-  ])
-
-  const cur  = curRows[0]  ?? { receita: '0', despesas: '0', lucro: '0', tx_count: '0' }
-  const prev = prevRows[0] ?? { receita: '0', despesas: '0', lucro: '0', tx_count: '0' }
-
-  const rc = Number(cur.receita),  rp = Number(prev.receita)
-  const dc = Number(cur.despesas), dp = Number(prev.despesas)
-  const lc = Number(cur.lucro),    lp = Number(prev.lucro)
-
-  return {
-    receita:      { current: rc, previous: rp, delta: pct(rc, rp) },
-    despesas:     { current: dc, previous: dp, delta: pct(dc, dp) },
-    lucroLiquido: { current: lc, previous: lp, delta: pct(lc, lp) },
-    saldoCaixa:   Number(balRows[0]?.saldo ?? 0),
-    hasData:      Number(cur.tx_count) + Number(prev.tx_count) > 0,
-  }
+  return calcularKpisDoMes(organizationId, referenceMonth)
 }
 
-export type FinancialIndicators = {
-  margemEbitda:           number | null
-  liquidezCorrente:       number | null
-  liquidezSeca:           number | null
-  coberturaServicoDivida: number | null
-  endividamentoGeral:     number | null   // proporção 0..1 (passivo / ativo)
-  cicloFinanceiro:        number | null   // sempre null no MVP — requer AR/AP estruturados
-  roe:                    number | null   // % anualizado
-  meses12mDisponiveis:    number          // 1..12 — quantos meses entraram no lucro acumulado
-}
-
+/**
+ * Os 7 indicadores financeiros.
+ *
+ * Miolo em `lib/dashboard/indicators.ts` desde a 5.B, pelo mesmo motivo dos
+ * KPIs: o bloco `indicador` do painel o consome direto.
+ */
 export async function getFinancialIndicators(referenceMonth?: string): Promise<FinancialIndicators> {
   const { organizationId } = await getAuthContext()
-
-  const { curFrom, curTo, from12m } = resolveMonthRange(referenceMonth)
-
-  const dreTypes = sql.raw(
-    `'receita_operacional','deducoes_tributarias','deducoes_operacionais','cpv','sga'`
-  )
-
-  type DreRow      = { receita_bruta: string; ebitda: string; servico_divida: string }
-  type BpRow       = {
-    ativo_circ:        string
-    ativo_nao_circ:    string
-    passivo_circ:      string
-    passivo_nao_circ:  string
-    pl:                string
-    estoque:           string
-  }
-  type Lucro12mRow = { lucro: string; meses: string }
-
-  const [dreRows, bpRows, lucro12mRows] = await Promise.all([
-    db.execute<DreRow>(sql`
-      SELECT
-        COALESCE(SUM(CASE WHEN c.type = 'receita_operacional'
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS receita_bruta,
-        COALESCE(SUM(CASE WHEN c.type IN (${dreTypes})
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS ebitda,
-        COALESCE(SUM(CASE WHEN c.type = 'emprestimos_amortizacoes' AND t.direction = 'outflow'
-          THEN t.amount::numeric ELSE 0 END), 0)::text AS servico_divida
-      FROM transactions t
-      JOIN categories c ON t.category_id = c.id
-      WHERE t.organization_id = ${organizationId}::uuid
-        AND t.status NOT IN ('pending', 'duplicate')
-        AND t.date::date >= ${curFrom}::date
-        AND t.date::date <= ${curTo}::date
-    `),
-    db.execute<BpRow>(sql`
-      SELECT
-        COALESCE(SUM(CASE WHEN c.type = 'ativo_circulante'
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS ativo_circ,
-        COALESCE(SUM(CASE WHEN c.type = 'ativo_nao_circulante'
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS ativo_nao_circ,
-        COALESCE(SUM(CASE WHEN c.type = 'passivo_circulante'
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS passivo_circ,
-        COALESCE(SUM(CASE WHEN c.type = 'passivo_nao_circulante'
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS passivo_nao_circ,
-        COALESCE(SUM(CASE WHEN c.type = 'patrimonio_liquido'
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS pl,
-        COALESCE(SUM(CASE WHEN c.type = 'ativo_circulante'
-          AND (c.name ILIKE '%estoque%' OR p.name ILIKE '%estoque%')
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS estoque
-      FROM transactions t
-      JOIN categories c       ON t.category_id = c.id
-      LEFT JOIN categories p  ON c.parent_id   = p.id
-      WHERE t.organization_id = ${organizationId}::uuid
-        AND t.status NOT IN ('pending', 'duplicate')
-        AND t.date::date <= ${curTo}::date
-    `),
-    db.execute<Lucro12mRow>(sql`
-      SELECT
-        COALESCE(SUM(CASE WHEN c.type NOT IN (${bpAndTransferTypes})
-          THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
-          ELSE 0 END), 0)::text AS lucro,
-        COUNT(DISTINCT date_trunc('month', t.date::date))::text AS meses
-      FROM transactions t
-      JOIN categories c ON t.category_id = c.id
-      WHERE t.organization_id = ${organizationId}::uuid
-        AND t.status NOT IN ('pending', 'duplicate')
-        AND t.date::date >= ${from12m}::date
-        AND t.date::date <= ${curTo}::date
-    `),
-  ])
-
-  const dre  = dreRows[0]      ?? { receita_bruta: '0', ebitda: '0', servico_divida: '0' }
-  const bp   = bpRows[0]       ?? { ativo_circ: '0', ativo_nao_circ: '0', passivo_circ: '0', passivo_nao_circ: '0', pl: '0', estoque: '0' }
-  const luc  = lucro12mRows[0] ?? { lucro: '0', meses: '0' }
-
-  const receitaBruta    = Number(dre.receita_bruta)
-  const ebitda          = Number(dre.ebitda)
-  const servicoDivida   = Number(dre.servico_divida)
-  const ativoCirc       = Number(bp.ativo_circ)
-  const ativoNaoCirc    = Number(bp.ativo_nao_circ)
-  const passivoCirc     = Number(bp.passivo_circ)
-  const passivoNaoCirc  = Number(bp.passivo_nao_circ)
-  const plDireto        = Number(bp.pl)
-  const estoque         = Number(bp.estoque)
-  const lucro12m        = Number(luc.lucro)
-  const meses12m        = Math.max(1, Math.min(12, Number(luc.meses) || 0))
-
-  const ativoTotal      = ativoCirc + ativoNaoCirc
-  const passivoTotal    = passivoCirc + passivoNaoCirc
-  // PL: prioriza valores lançados em patrimonio_liquido; cai para Ativo − Passivo (identidade contábil) quando não há.
-  const patrimonioLiquido = plDireto !== 0 ? plDireto : (ativoTotal - passivoTotal)
-
-  // ROE anualizado: lucro acumulado dos últimos N meses (N = meses com dados, máx 12),
-  // anualizado proporcionalmente quando há menos de 12 meses.
-  const lucroAnualizado = lucro12m * (12 / meses12m)
-
-  return {
-    margemEbitda:           receitaBruta > 0   ? (ebitda / receitaBruta) * 100      : null,
-    liquidezCorrente:       passivoCirc > 0    ? ativoCirc / passivoCirc            : null,
-    liquidezSeca:           passivoCirc > 0    ? (ativoCirc - estoque) / passivoCirc : null,
-    coberturaServicoDivida: servicoDivida > 0  ? ebitda / servicoDivida             : null,
-    endividamentoGeral:     ativoTotal > 0     ? passivoTotal / ativoTotal          : null,
-    cicloFinanceiro:        null,   // Requer AR/AP estruturados — Fase futura
-    roe:                    patrimonioLiquido > 0 && Number(luc.meses) > 0
-                              ? (lucroAnualizado / patrimonioLiquido) * 100
-                              : null,
-    meses12mDisponiveis:    meses12m,
-  }
+  return calcularIndicadores(organizationId, referenceMonth)
 }
 
 // Top 5 categorias-folha (Filho) com maior SAÍDA de caixa no mês.
@@ -279,11 +76,9 @@ export async function getFinancialIndicators(referenceMonth?: string): Promise<F
 // - Respeita hide_in_cashflow (mesmo critério de /fluxo)
 // Quando uma transação está classificada direto numa Pai-sem-filhos, a própria Pai
 // aparece como categoria-folha (parentId fica null).
-/** Os 8 tipos que o Top 5 trata como "despesa" no sentido coloquial. */
-const TIPOS_SAIDA_CAIXA = [
-  'deducoes_tributarias', 'deducoes_operacionais', 'cpv', 'sga',
-  'resultado_financeiro', 'ir', 'emprestimos_amortizacoes', 'investimentos_retiradas',
-]
+//
+// `TIPOS_SAIDA_CAIXA` mudou de casa para `lib/dashboard/kpis.ts` na 5.B: o bloco
+// de ranking do painel padrão monta o filtro a partir da MESMA lista.
 
 /**
  * Top N categorias de despesa do mês.
@@ -317,7 +112,7 @@ export async function getTopExpenseCategories(
     // e por isso nunca a via.
     filtros: {
       direcao: 'outflow',
-      tiposDeCategoria: TIPOS_SAIDA_CAIXA,
+      tiposDeCategoria: [...TIPOS_SAIDA_CAIXA],
       visibilidade: 'caixa',
       excluirBalanco: true,
     },
