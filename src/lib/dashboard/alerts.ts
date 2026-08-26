@@ -1,7 +1,14 @@
-// As 8 regras de alerta do dashboard — extraídas do `useMemo` de
+// As 7 regras de alerta do dashboard — extraídas do `useMemo` de
 // `dashboard-client.tsx` na 5.B (movidas, não copiadas: o cliente passou a
 // importar daqui). O ganho não é estético: como função pura em `/lib`, as
 // regras viram o bloco `alertas` do painel e ficam legíveis pelo MCP.
+//
+// Eram 8. "Saldo em caixa negativo" saiu em 26/ago junto com o KPI de onde ela
+// lia: `kpis.saldoCaixa` não era saldo, era a soma de todo lançamento importado
+// (ver o cabeçalho de `kpis.ts`). Alerta é o pior lugar para um número que não
+// mede o que promete — o KPI errado só informa mal, o alerta errado INTERROMPE,
+// e um "saldo negativo" que na verdade diz "importei mais saída que entrada"
+// mandaria o cliente procurar um problema que não existe.
 //
 // Client-safe: nada de `@/db` — só recebe números e devolve alertas. Os tipos
 // entram por `import type`, que é apagado na compilação.
@@ -36,7 +43,7 @@ export function indicatorStatusInverse(value: number | null, goodMax: number, wa
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
 
 /**
- * Avalia as 8 regras sobre os números do mês.
+ * Avalia as 7 regras sobre os números do mês.
  *
  * `regras` restringe quais avaliar (o bloco `alertas` escolhe); `maximo` corta
  * a lista depois de ordenar por severidade — o padrão 6 é o da tela de sempre.
@@ -55,16 +62,6 @@ export function gerarAlertas(
   const endividStatus = indicatorStatusInverse(indicators.endividamentoGeral, 0.5, 0.7)
 
   const result: DashboardAlert[] = []
-
-  // Saldo em caixa negativo
-  if (kpis.saldoCaixa < 0) {
-    result.push({
-      id: 'saldo-negativo',
-      severity: 'critical',
-      message: `Saldo em caixa negativo (${brl.format(kpis.saldoCaixa)}).`,
-      action: { label: 'Ver transações', href: '/transacoes' },
-    })
-  }
 
   // Resultado líquido negativo
   if (kpis.lucroLiquido.current < 0) {

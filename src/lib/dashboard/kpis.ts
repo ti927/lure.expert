@@ -1,7 +1,15 @@
-// Os 4 KPIs do mês — o miolo de `getDashboardKPIs`, que MUDOU DE CASA na 5.B
+// Os KPIs do mês — o miolo de `getDashboardKPIs`, que MUDOU DE CASA na 5.B
 // (não foi copiado): fora de `'use server'` para ser exercitável por script e
 // consumível pelo bloco `alertas` do painel, que precisa dos números para
 // avaliar as regras. `server/dashboard.ts` virou casca.
+//
+// Eram QUATRO até 26/ago. O "Saldo em Caixa" saiu porque não era um saldo: ele
+// somava todo lançamento existente até o fim do mês, sem saldo inicial de conta
+// nenhuma. Numa base com seis meses importados o número era a soma desses seis
+// meses — uma medida de movimento apresentada como medida de posição. O app não
+// controla saldo bancário, então parou de afirmar um; o mesmo corte tirou os
+// cartões do `/fluxo` e a regra de alerta "saldo negativo", que disparava sobre
+// esse mesmo número.
 
 import { sql } from 'drizzle-orm'
 import { db } from '@/db'
@@ -55,7 +63,6 @@ export type DashboardKPIs = {
   receita: KPIValue
   despesas: KPIValue
   lucroLiquido: KPIValue
-  saldoCaixa: number
   hasData: boolean
 }
 
@@ -97,7 +104,6 @@ export async function calcularKpisDoMes(
   const { curFrom, curTo, prevFrom, prevTo } = resolveMonthRange(referenceMonth)
 
   type MonthRow = { receita: string; despesas: string; lucro: string; tx_count: string }
-  type BalRow   = { saldo: string }
 
   const monthQuery = (from: string, to: string) => exec.execute<MonthRow>(sql`
     SELECT
@@ -119,18 +125,9 @@ export async function calcularKpisDoMes(
       AND t.date::date <= ${to}::date
   `)
 
-  const [curRows, prevRows, balRows] = await Promise.all([
+  const [curRows, prevRows] = await Promise.all([
     monthQuery(curFrom, curTo),
     monthQuery(prevFrom, prevTo),
-    exec.execute<BalRow>(sql`
-      SELECT COALESCE(SUM(
-        CASE WHEN direction = 'inflow' THEN amount::numeric ELSE -amount::numeric END
-      ), 0)::text AS saldo
-      FROM transactions
-      WHERE organization_id = ${organizationId}::uuid
-        AND status NOT IN ('pending', 'duplicate')
-        AND COALESCE(effective_date, date)::date <= ${curTo}::date
-    `),
   ])
 
   const cur  = curRows[0]  ?? { receita: '0', despesas: '0', lucro: '0', tx_count: '0' }
@@ -144,7 +141,6 @@ export async function calcularKpisDoMes(
     receita:      { current: rc, previous: rp, delta: pct(rc, rp) },
     despesas:     { current: dc, previous: dp, delta: pct(dc, dp) },
     lucroLiquido: { current: lc, previous: lp, delta: pct(lc, lp) },
-    saldoCaixa:   Number(balRows[0]?.saldo ?? 0),
     hasData:      Number(cur.tx_count) + Number(prev.tx_count) > 0,
   }
 }

@@ -8,6 +8,12 @@
 //
 // As listas de tipos vêm de `kpis.ts` — o mesmo lugar de onde o cálculo
 // hardcoded sempre leu. Duas cópias divergiriam em silêncio.
+//
+// Eram 8 blocos até 26/ago, com um quarto KPI de "Saldo em Caixa". Ele saiu
+// porque não media saldo (ver o cabeçalho de `kpis.ts`), e os três que ficaram
+// passaram de 3 para 4 colunas cada — 3 × 4 = 12, a linha fecha exata. Painel
+// JÁ MATERIALIZADO não é reescrito: quem personalizou continua com os blocos
+// que escolheu, e remove o de saldo pelo Organizar se ainda o tiver.
 
 import { blockSpecSchema, type BlockSpec, type BlockSpecInput } from './block-spec'
 import { TIPOS_DESPESA, TIPOS_RESULTADO, TIPOS_SAIDA_CAIXA } from './kpis'
@@ -22,7 +28,7 @@ const umMes = (regime: 'competencia' | 'caixa') =>
 export function blocosDoPainelPadrao(): BlockSpecInput[] {
   return [
     {
-      versao: 1, tipo: 'kpi', titulo: 'Receita do Mês', largura: 3,
+      versao: 1, tipo: 'kpi', titulo: 'Receita do Mês', largura: 4,
       query: {
         fonte: 'realizado', medidas: ['valor_liquido'], periodo: umMes('competencia'),
         filtros: { tiposDeCategoria: ['receita_operacional'] },
@@ -31,7 +37,7 @@ export function blocosDoPainelPadrao(): BlockSpecInput[] {
       comparar: true,
     },
     {
-      versao: 1, tipo: 'kpi', titulo: 'Despesas', largura: 3,
+      versao: 1, tipo: 'kpi', titulo: 'Despesas', largura: 4,
       query: {
         fonte: 'realizado', medidas: ['valor_liquido'], periodo: umMes('competencia'),
         filtros: { tiposDeCategoria: [...TIPOS_DESPESA] },
@@ -44,24 +50,13 @@ export function blocosDoPainelPadrao(): BlockSpecInput[] {
       menorEhMelhor: true,
     },
     {
-      versao: 1, tipo: 'kpi', titulo: 'Lucro Líquido', largura: 3,
+      versao: 1, tipo: 'kpi', titulo: 'Lucro Líquido', largura: 4,
       query: {
         fonte: 'realizado', medidas: ['valor_liquido'], periodo: umMes('competencia'),
         filtros: { tiposDeCategoria: [...TIPOS_RESULTADO] },
       },
       periodo: { modo: 'herda_do_painel', janela: 'mes' },
       comparar: true,
-    },
-    {
-      versao: 1, tipo: 'kpi', titulo: 'Saldo em Caixa', largura: 3,
-      query: {
-        fonte: 'realizado', medidas: ['valor_liquido'], periodo: umMes('caixa'),
-        // O saldo é o caixa como ele é: transferências e contas patrimoniais
-        // entram, nada de ocultação — o mesmo contrato do cálculo de sempre.
-        filtros: { excluirBalanco: false, visibilidade: 'todas' },
-      },
-      periodo: { modo: 'herda_do_painel', janela: 'acumulado' },
-      comparar: false,
     },
     {
       versao: 1, tipo: 'alertas', largura: 12,

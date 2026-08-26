@@ -310,7 +310,7 @@ export default function ComponentsStyleGuidePage() {
               colorizeValue
             />
             <KPICard
-              label="Saldo em Caixa"
+              label="Receita Bruta"
               value={94200}
             />
             <KPICard

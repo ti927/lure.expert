@@ -1,10 +1,7 @@
 import type { Metadata } from 'next'
-import { getFluxoData } from '@/server/fluxo'
 import { getFluxoMensalData } from '@/server/fluxo-mensal'
 import { getCostCenters, getBusinessUnits, getLegalEntities, getLeafCategories, getContactOptions } from '@/server/dimensions'
 import { FluxoClient } from './fluxo-client'
-import { format } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
 
 export const metadata: Metadata = { title: 'Fluxo de Caixa' }
 
@@ -26,11 +23,9 @@ function defaultMensalRange() {
 
 export default async function FluxoPage() {
   const { from, to } = defaultMensalRange()
-  const mesAtual = format(new Date(), 'MMMM yyyy', { locale: ptBR })
 
-  const [data, mensalData, costCenters, businessUnits, legalEntities, leafCategories, contactOptions] =
+  const [mensalData, costCenters, businessUnits, legalEntities, leafCategories, contactOptions] =
     await Promise.all([
-      getFluxoData(),
       getFluxoMensalData({ from, to }),
       getCostCenters(),
       getBusinessUnits(),
@@ -40,16 +35,15 @@ export default async function FluxoPage() {
     ])
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="shrink-0 px-6 pt-6 pb-4">
         <h1 className="text-2xl font-semibold text-foreground">Fluxo de Caixa</h1>
-        <p className="text-sm text-muted-foreground mt-1 capitalize">
-          {mesAtual} · projeção baseada em recorrências detectadas
+        <p className="text-sm text-muted-foreground mt-1">
+          Regime de caixa — cada lançamento entra no mês em que o dinheiro se moveu
         </p>
       </div>
       <FluxoClient
-        data={data}
-        initialMensal={mensalData}
+        initialData={mensalData}
         initialFrom={from}
         initialTo={to}
         costCenters={costCenters.filter(c => c.isActive)}

@@ -88,7 +88,7 @@ import {
   MAX_COPIED_SERIES,
 } from '@/lib/budget-write'
 import { monthLabel } from '@/lib/format'
-import { getFluxoData } from '@/server/fluxo'
+import { detectarRecorrencias } from '@/lib/recurrence-detect'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1295,10 +1295,12 @@ export async function importBudgetCsv(
 }
 
 /**
- * As recorrências que o `/fluxo` detectou, preparadas para virar orçamento.
+ * As recorrências detectadas no extrato, preparadas para virar orçamento.
  *
- * Reusa `getFluxoData` em vez de repetir o SQL de detecção: os números que o
- * usuário vê aqui têm de ser exatamente os que ele vê lá.
+ * Esta é a ÚNICA porta da detecção desde 26/ago: a projeção de 90 dias do
+ * `/fluxo` saiu do ar (o orçamento faz o mesmo trabalho com data, versão e
+ * responsável), e a função foi de `server/fluxo.ts` para `lib/recurrence-detect`.
+ * Aqui a recorrência não prevê nada — ela sugere o que vale a pena orçar.
  */
 export async function getRecurrenceCandidates(
   versionId: string,
@@ -1308,8 +1310,8 @@ export async function getRecurrenceCandidates(
   const loaded = await carregarVersaoEditavel(organizationId, versionId)
   if ('error' in loaded) return { error: loaded.error }
 
-  const [fluxo, aceitas] = await Promise.all([
-    getFluxoData(),
+  const [recorrencias, aceitas] = await Promise.all([
+    detectarRecorrencias(organizationId),
     db.select({ description: budgetSeries.description })
       .from(budgetSeries)
       .where(and(
@@ -1320,7 +1322,7 @@ export async function getRecurrenceCandidates(
 
   return {
     candidates: buildRecurrenceCandidates(
-      fluxo.recorrencias,
+      recorrencias,
       loaded.version.fiscalYear,
       new Set(aceitas.map(a => norm(a.description))),
     ),
@@ -1330,7 +1332,7 @@ export async function getRecurrenceCandidates(
 /**
  * Cria um lançamento para cada recorrência escolhida.
  *
- * A recorrência detectada não tem categoria — o `/fluxo` agrupa por descrição,
+ * A recorrência detectada não tem categoria — a detecção agrupa por descrição,
  * não por plano de contas. Por isso a escolha da categoria vem do cliente e é
  * obrigatória: sem ela o lançamento não apareceria em relatório nenhum.
  *

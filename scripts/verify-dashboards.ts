@@ -23,7 +23,7 @@ import {
 } from '@/lib/dashboard/store'
 import { blocosDoPainelPadraoValidados, PAINEL_PADRAO_SLUG } from '@/lib/dashboard/default-panel'
 import { executarBloco, resolverPeriodos } from '@/lib/dashboard/run-block'
-import { blockSpecSchema, lerBlockSpec } from '@/lib/dashboard/block-spec'
+import { blockSpecSchema, lerBlockSpec, REGRAS_DE_ALERTA } from '@/lib/dashboard/block-spec'
 import { calcularKpisDoMes, TIPOS_DESPESA } from '@/lib/dashboard/kpis'
 import { calcularIndicadores } from '@/lib/dashboard/indicators'
 import { gerarAlertas } from '@/lib/dashboard/alerts'
@@ -115,11 +115,18 @@ async function main() {
   console.log('\n── 1. painel padrão (virtual) ──')
   {
     const blocos = blocosDoPainelPadraoValidados()
-    t(blocos.length === 8, `o padrão tem 8 blocos (${blocos.length})`)
+    t(blocos.length === 7, `o padrão tem 7 blocos (${blocos.length})`)
     const tipos = blocos.map(b => b.tipo)
-    t(tipos.filter(x => x === 'kpi').length === 4, 'sendo 4 KPIs')
+    t(tipos.filter(x => x === 'kpi').length === 3, 'sendo 3 KPIs')
     t(tipos.includes('alertas') && tipos.includes('serie') && tipos.includes('ranking') && tipos.includes('indicador'),
       'mais alertas, série, ranking e indicadores')
+    // O 4º KPI ("Saldo em Caixa") saiu em 26/ago. Não basta contar 3: o que
+    // prova o corte é NENHUM bloco do padrão falar em saldo.
+    t(!blocos.some(b => (b.titulo ?? '').toLowerCase().includes('saldo')),
+      'e nenhum deles é de saldo — o número que não media saldo saiu do padrão')
+    // Os três KPIs restantes fecham a linha de 12 colunas exatamente.
+    t(blocos.filter(b => b.tipo === 'kpi').reduce((s, b) => s + b.largura, 0) === 12,
+      'e as larguras dos 3 KPIs somam 12 colunas')
     // Não há painel gravado nenhum ainda: a listagem é vazia, e é isso que faz
     // a tela cair no virtual.
     t((await listarPaineis(DONO, ORG)).length === 0, 'nenhum painel gravado — a tela usa o virtual')
@@ -148,20 +155,35 @@ async function main() {
     t(kpiLucro.tipo === 'kpi' && kpiLucro.valor === 11000,
       `KPI Lucro = 15.000 − 4.000 = 11.000 (${kpiLucro.tipo === 'kpi' ? kpiLucro.valor : '?'})`)
 
-    const kpiSaldo = await executarBloco(scope, blocos[3], ctx)
-    // Acumulado até o fim de março: 6.000 − 2.000 (fev) + 15.000 − 4.000 (mar)
-    t(kpiSaldo.tipo === 'kpi' && kpiSaldo.valor === 15000,
-      `KPI Saldo acumulado = 15.000 (${kpiSaldo.tipo === 'kpi' ? kpiSaldo.valor : '?'})`)
-    t(kpiSaldo.tipo === 'kpi' && kpiSaldo.deltaPct === null,
-      'e saldo acumulado NÃO tem período anterior — delta nulo, não zero')
+    // A janela `acumulado` continua PUBLICADA no schema e alcançável pelo
+    // expert, embora nenhum bloco do padrão a use desde 26/ago. Um bloco
+    // montado à mão a exercita ponta a ponta — sem isto, a capacidade seguiria
+    // no vocabulário do MCP sem ninguém provar que ela responde.
+    const kpiAcumulado = await executarBloco(scope, blockSpecSchema.parse({
+      versao: 1, tipo: 'kpi', titulo: 'Acumulado', largura: 4,
+      query: {
+        fonte: 'realizado', medidas: ['valor_liquido'],
+        periodo: { tipo: 'relativo', meses: 1, regime: 'caixa' },
+        filtros: { excluirBalanco: false, visibilidade: 'todas' },
+      },
+      periodo: { modo: 'herda_do_painel', janela: 'acumulado' },
+      comparar: false,
+    }), ctx)
+    // Do início dos tempos até o fim de março: 6.000 − 2.000 (fev) + 15.000 − 4.000 (mar)
+    t(kpiAcumulado.tipo === 'kpi' && kpiAcumulado.valor === 15000,
+      `KPI com janela acumulado = 15.000 (${kpiAcumulado.tipo === 'kpi' ? kpiAcumulado.valor : '?'})`)
+    t(kpiAcumulado.tipo === 'kpi' && kpiAcumulado.deltaPct === null,
+      'e acumulado NÃO tem período anterior — delta nulo, não zero')
 
-    // O clássico, para conciliar: os mesmos 4 números pela função de sempre.
+    // O clássico, para conciliar: os mesmos 3 números pela função de sempre.
     const classico = await calcularKpisDoMes(ORG, MES)
     t(classico.receita.current === 15000 && classico.despesas.current === 4000
-      && classico.lucroLiquido.current === 11000 && classico.saldoCaixa === 15000,
-      'e o cálculo clássico devolve os MESMOS 4 números')
+      && classico.lucroLiquido.current === 11000,
+      'e o cálculo clássico devolve os MESMOS 3 números')
+    t(!('saldoCaixa' in classico),
+      'e não devolve mais saldoCaixa — o campo saiu, não ficou zerado')
 
-    const serie = await executarBloco(scope, blocos[5], ctx)
+    const serie = await executarBloco(scope, blocos[4], ctx)
     t(serie.tipo === 'serie' && serie.resultado.linhas.length > 0,
       `bloco série (90 dias por semana) devolve ${serie.tipo === 'serie' ? serie.resultado.linhas.length : 0} semanas`)
     if (serie.tipo === 'serie') {
@@ -172,17 +194,17 @@ async function main() {
         'toda chave de semana é uma SEGUNDA-FEIRA (DATE_TRUNC ISO)')
     }
 
-    const ranking = await executarBloco(scope, blocos[6], ctx)
+    const ranking = await executarBloco(scope, blocos[5], ctx)
     t(ranking.tipo === 'ranking' && ranking.resultado.linhas.length === 1
       && ranking.resultado.linhas[0].medidas.saidas === 4000,
       'bloco ranking traz a única categoria de despesa, com 4.000')
 
-    const indic = await executarBloco(scope, blocos[7], ctx)
+    const indic = await executarBloco(scope, blocos[6], ctx)
     const indClassico = await calcularIndicadores(ORG, MES)
     t(indic.tipo === 'indicador' && indic.indicadores.margemEbitda === indClassico.margemEbitda,
       'bloco indicador bate com calcularIndicadores')
 
-    const alertas = await executarBloco(scope, blocos[4], ctx)
+    const alertas = await executarBloco(scope, blocos[3], ctx)
     t(alertas.tipo === 'alertas', 'bloco alertas executa')
     if (alertas.tipo === 'alertas') {
       // As despesas DOBRARAM (2.000 em fev → 4.000 em mar), e a regra dispara
@@ -197,7 +219,7 @@ async function main() {
   }
 
   // ═══ 3. Alertas: as regras nos DOIS sentidos ══════════════════════════════
-  console.log('\n── 3. as 8 regras de alerta ──')
+  console.log('\n── 3. as 7 regras de alerta ──')
   {
     const bons = await calcularKpisDoMes(ORG, MES)
     const ind = await calcularIndicadores(ORG, MES)
@@ -208,16 +230,21 @@ async function main() {
     const estaveis = { ...bons, despesas: { current: 4000, previous: 3900, delta: 2.5 } }
     t(gerarAlertas(estaveis, ind).length === 0, 'com despesas estáveis, zero alertas')
 
-    const ruins = { ...bons, saldoCaixa: -500, lucroLiquido: { current: -100, previous: 10, delta: -1100 } }
+    const ruins = { ...bons, lucroLiquido: { current: -100, previous: 10, delta: -1100 } }
     const disparados = gerarAlertas(ruins, ind).map(a => a.id)
-    t(disparados.includes('saldo-negativo'), 'saldo negativo dispara')
     t(disparados.includes('lucro-negativo'), 'lucro negativo dispara')
+    // A regra 'saldo-negativo' saiu do vocabulário em 26/ago junto com o KPI que
+    // ela lia. Nenhum caminho pode ressuscitá-la — nem por dado, nem por pedido.
+    t(!REGRAS_DE_ALERTA.includes('saldo-negativo' as never),
+      "'saldo-negativo' não existe mais no vocabulário de regras")
+    t(gerarAlertas(ruins, ind, { regras: ['saldo-negativo'] as never }).length === 0,
+      'e pedir por ela explicitamente não devolve alerta nenhum')
 
     const semDados = { ...ruins, hasData: false }
     t(gerarAlertas(semDados, ind).length === 0, 'sem dados NÃO dispara nada (o guarda de sempre)')
 
-    const soUm = gerarAlertas(ruins, ind, { regras: ['saldo-negativo'] })
-    t(soUm.length === 1 && soUm[0].id === 'saldo-negativo', 'o filtro de regras do bloco restringe')
+    const soUm = gerarAlertas(ruins, ind, { regras: ['lucro-negativo'] })
+    t(soUm.length === 1 && soUm[0].id === 'lucro-negativo', 'o filtro de regras do bloco restringe')
     t(gerarAlertas(ruins, ind).length > 1, 'e sem filtro vem mais de um')
     t(gerarAlertas(ruins, ind, { maximo: 1 }).length === 1, 'e o máximo corta')
     t(gerarAlertas(ruins, ind)[0].severity === 'critical', 'crítico vem primeiro')
@@ -522,10 +549,15 @@ async function main() {
     if ('erro' in m) throw new Error(m.erro)
 
     const lido = await lerPainel(DONO, ORG, m.id)
-    t(!('erro' in lido) && lido.painel.blocos.length === 8, 'com os 8 blocos gravados')
+    // Contra `blocosDoPainelPadrao()`, não contra um número escrito à mão: o
+    // padrão já mudou de tamanho uma vez (8 → 7, quando o KPI de saldo saiu), e
+    // um literal aqui vira falha de teste sem defeito de código.
+    const quantosNoPadrao = blocosDoPainelPadraoValidados().length
+    t(!('erro' in lido) && lido.painel.blocos.length === quantosNoPadrao,
+      `com os ${quantosNoPadrao} blocos do padrão gravados`)
     t(!('erro' in lido) && lido.painel.slug === PAINEL_PADRAO_SLUG && lido.painel.padrao, 'como painel padrão')
     t(!('erro' in lido) && lido.painel.blocos.every(b => b.spec !== null && b.erroDeSpec === null),
-      'e TODAS as 8 specs voltam válidas da leitura')
+      'e TODAS as specs voltam válidas da leitura')
 
     t(erroDe(await materializarPainelPadrao({ userId: DONO, organizationId: ORG, papel: 'owner' })) !== null,
       'materializar duas vezes é recusado')
@@ -633,27 +665,24 @@ async function main() {
 
       for (const m of mesesReais) {
         const classico = await calcularKpisDoMes(o.id, m)
-        const [bReceita, bDespesa, bLucro, bSaldo] = await Promise.all([
+        const [bReceita, bDespesa, bLucro] = await Promise.all([
           executarBloco(escopo, blocos[0], { mes: m }),
           executarBloco(escopo, blocos[1], { mes: m }),
           executarBloco(escopo, blocos[2], { mes: m }),
-          executarBloco(escopo, blocos[3], { mes: m }),
         ])
         const doBloco = {
           receita: bReceita.tipo === 'kpi' ? bReceita.valor : NaN,
           despesas: bDespesa.tipo === 'kpi' ? bDespesa.valor : NaN,
           lucro: bLucro.tipo === 'kpi' ? bLucro.valor : NaN,
-          saldo: bSaldo.tipo === 'kpi' ? bSaldo.valor : NaN,
         }
         const doClassico = {
           receita: classico.receita.current,
           despesas: classico.despesas.current,
           lucro: classico.lucroLiquido.current,
-          saldo: classico.saldoCaixa,
         }
-        comparados += 4
-        if (classico.hasData) comDado += 4
-        for (const k of ['receita', 'despesas', 'lucro', 'saldo'] as const) {
+        comparados += 3
+        if (classico.hasData) comDado += 3
+        for (const k of ['receita', 'despesas', 'lucro'] as const) {
           // Centavo: os dois lados somam `numeric` do Postgres, mas o bloco
           // passa pelo motor (transaction_lines) e o clássico lê transactions.
           if (Math.abs(doBloco[k] - doClassico[k]) > 0.005) {
@@ -664,7 +693,7 @@ async function main() {
       }
     }
     t(divergentes === 0,
-      `${reais.length} organizações × ${mesesReais.length} meses × 4 KPIs = ${comparados} comparações (${comDado} com dado), ${divergentes} divergência(s)`)
+      `${reais.length} organizações × ${mesesReais.length} meses × 3 KPIs = ${comparados} comparações (${comDado} com dado), ${divergentes} divergência(s)`)
     t(comDado > 0, `e ${comDado} delas tinham dado de verdade — a conciliação não passou no vazio`)
   }
 

@@ -40,7 +40,8 @@ const base = {
  * - `ultimos_meses` → `tamanho` meses terminando no fim de M
  * - `ultimos_dias`  → `tamanho` dias terminando no fim de M (o "90 dias" do
  *                     gráfico de fluxo do dashboard)
- * - `acumulado`     → do início dos tempos até o fim de M (o "Saldo em Caixa")
+ * - `acumulado`     → do início dos tempos até o fim de M. Sem período anterior:
+ *                     o delta é nulo, não zero
  */
 export const periodoDoBlocoSchema = z.discriminatedUnion('modo', [
   z.object({
@@ -145,9 +146,15 @@ const indicador = z.object({
   periodo: periodoDoBlocoSchema,
 })
 
-/** As 8 regras que hoje vivem no `useMemo` de `dashboard-client.tsx`. */
+/**
+ * As 7 regras avaliadas por `gerarAlertas`.
+ *
+ * Eram 8: `saldo-negativo` saiu em 26/ago com o KPI de saldo que ela lia. Como
+ * este enum é validado TAMBÉM na leitura, os blocos já gravados com a lista
+ * antiga passariam a quebrar — a migration `0032` os limpa no mesmo commit.
+ */
 export const REGRAS_DE_ALERTA = [
-  'saldo-negativo', 'lucro-negativo', 'despesas-alta', 'receita-queda',
+  'lucro-negativo', 'despesas-alta', 'receita-queda',
   'ebitda-baixo', 'cobertura-divida', 'liquidez-corrente', 'endividamento',
 ] as const
 

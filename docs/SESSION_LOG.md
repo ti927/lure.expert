@@ -12,6 +12,116 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Corte do saldo e da projeção por recorrência (26/ago)
+
+**Pedido do Julio:** *"na página /fluxo existem indicadores de saldo, coisa que não controlamos no
+nosso sistema, e também gráficos baseados em recorrência encontrada; quero retirar esses
+indicadores e gráficos; vamos concentrar tudo no dashboard e agora com orçamento não faz sentido
+essa projeção baseada em recorrência."*
+
+**Verificado: 117/117 painéis, 13/13 migration com ROLLBACK, 188/188 escrita MCP, 39/39 leitura,
+23/23 motor. `tsc`, `next lint` e `next build` limpos (41 rotas).**
+
+#### Duas razões, não uma
+
+O pedido junta dois cortes que parecem estéticos e não são.
+
+**O saldo não era saldo.** `getFluxoData` somava `CASE WHEN direction='inflow' THEN amount ELSE
+-amount END` sobre `transactions` **sem nenhum corte de data** e sem saldo inicial de conta alguma.
+Numa base com seis meses importados, o "Saldo Atual" era a soma desses seis meses — uma medida de
+**movimento** apresentada como medida de **posição**. O KPI equivalente do dashboard
+(`kpis.saldoCaixa`) tinha o mesmo defeito, apenas limitado ao fim do mês de referência. E os dois
+**não batiam entre si**: o do `/fluxo` excluía naturezas com `hide_in_cashflow`, o do dashboard não.
+Duas telas do mesmo app afirmando dois saldos diferentes, nenhum dos quais era o dinheiro em conta.
+
+**A projeção resolvia um problema que já tem dono.** Adivinhar o futuro pela média dos intervalos
+passados fazia sentido enquanto não existia orçamento. Existe desde a Fase 9, com data de
+competência, data de caixa, versão e responsável. Dois futuros na mesma tela, derivados de regras
+diferentes, é pior que um — e o derivado de regra é o que ninguém consegue corrigir.
+
+#### O que sobreviveu, e por quê
+
+A detecção de recorrências tem **um segundo dono desde a 9.5**: em `/orcamento`, "aceitar
+recorrências detectadas" a usa para sugerir lançamentos a orçar. Ali ela não prevê nada — preenche
+um formulário, e quem decide valor, categoria e meses é a pessoa. É o oposto de substituir o
+orçamento: é atalho para escrevê-lo.
+
+Então a função **mudou de casa** para `src/lib/recurrence-detect.ts`, perdendo tudo que só servia à
+projeção (a query de saldo, a query de histórico diário, os baldes semanais, o `projMap` de 90 dias
+e os três saldos projetados) e conservando o SQL de detecção mais o avanço da próxima data para o
+futuro. Recebe `organizationId` em vez de descobri-lo pela sessão, e por isso é exercitável por
+script.
+
+`src/server/fluxo.ts` **deixou de existir**. Com o último export sem chamador, manter um arquivo
+`'use server'` seria deixar um endpoint HTTP aberto sem propósito — a mesma razão que apagou quatro
+funções de `server/dashboard.ts` na 5.C.
+
+#### O alcance que o pedido não mencionava, e o teste encontrou
+
+A regra de alerta `saldo-negativo` lia `kpis.saldoCaixa`. **Alerta é o pior lugar possível para um
+número que não mede o que promete**: o KPI errado informa mal, o alerta errado **interrompe** — um
+"saldo em caixa negativo" que na verdade diz "importei mais saída que entrada" manda o cliente caçar
+um problema que não existe. Saiu junto, e as regras passaram de 8 para 7.
+
+Isso obrigou a apertar `REGRAS_DE_ALERTA` em `block-spec.ts` — e aí apareceu a consequência real.
+Aquele enum é validado **na escrita E na leitura** (decisão da 1.4, a que faz uma spec corrompida
+quebrar só o próprio bloco). Consultado o banco antes de decidir: **3 painéis materializados, 17
+blocos, e os blocos `alertas` guardam as 8 regras por extenso**, porque o Zod materializa o
+`.default([...])` na gravação. Apertar o enum sem tocar no gravado transformaria o bloco de alertas
+dos painéis do Julio em bloco quebrado.
+
+Daí a **migration 0032**, que não mexe em estrutura nenhuma — só no `jsonb`. Duas sentenças, e a
+ordem importa: a 1ª apaga a chave `regras` de quem tinha só essa regra (lista vazia falharia no
+`.min(1)`; sem a chave, o `.default` das 7 vale na leitura), a 2ª remove o elemento de quem tem
+outras, preservando a ordem original. Nenhum bloco de hoje cai no 1º caso — a sentença existe porque
+a spec **permite** escolher regras, e uma escrita futura pelo MCP poderia ter escolhido só aquela.
+
+#### O painel padrão, e o que deliberadamente não muda
+
+O padrão caiu de 8 para 7 blocos, e os três KPIs restantes passaram de 3 para 4 colunas (3 × 4 = 12,
+a linha fecha exata). **Painel já materializado não é reescrito**: quem personalizou continua com os
+blocos que escolheu. Medido no banco: os dois painéis "Visão geral" materializados já tinham 7
+blocos e nenhum com "saldo" no título — o Julio já havia removido o cartão à mão pelo Organizar. A
+mudança no padrão alcança o que ele já tinha feito.
+
+A janela `acumulado` **continua existindo** no schema, embora nenhum bloco do padrão a use: ela é
+capacidade genérica do sistema de blocos e segue alcançável pelo expert via MCP. Por isso o teste
+que a provava não foi apagado com o bloco — foi reescrito sobre uma spec montada à mão, que a
+exercita ponta a ponta (valor correto e `deltaPct` **nulo**, não zero).
+
+#### Arquivos
+
+| Arquivo | O quê |
+|---|---|
+| `src/lib/recurrence-detect.ts` | **novo** — `detectarRecorrencias`, movida de `server/fluxo.ts` |
+| `src/server/fluxo.ts` | **apagado** |
+| `src/server/budget.ts` | passa a chamar `detectarRecorrencias(organizationId)` |
+| `src/lib/budget-import.ts` | o `import type` deixa de apontar para um arquivo `'use server'` |
+| `src/app/(authenticated)/fluxo/page.tsx` | perde `getFluxoData`; wrapper de viewport-fill; subtítulo passa a explicar o regime de caixa em vez de anunciar a projeção |
+| `src/app/(authenticated)/fluxo/fluxo-client.tsx` | 728 → 584 linhas; o invólucro sumiu e `FluxoCaixaCategoria` **virou** o `FluxoClient` exportado |
+| `src/lib/dashboard/kpis.ts` | `saldoCaixa` fora do tipo e a query de saldo removida (3 → 2 consultas por carga) |
+| `src/lib/dashboard/alerts.ts` | 8 → 7 regras |
+| `src/lib/dashboard/default-panel.ts` | 8 → 7 blocos; KPIs de largura 3 → 4 |
+| `src/lib/dashboard/block-spec.ts` | `REGRAS_DE_ALERTA` 8 → 7; comentário de `acumulado` deixa de citar o saldo |
+| `db/migrations/rls/0032_alerta_saldo_negativo.sql` | **novo** |
+| `scripts/verify-migration-0032.ts` | **novo** — 13 asserções com ROLLBACK |
+| `scripts/verify-dashboards.ts` | asserções atualizadas |
+| `src/app/style-guide/components/page.tsx` | o KPICard de exemplo deixa de se chamar "Saldo em Caixa" |
+
+#### Um defeito de teste que a sessão corrigiu de tabela
+
+A seção 10 da suíte afirmava `blocos.length === 8` com o número escrito à mão, e falhou. O padrão já
+mudou de tamanho uma vez agora; um literal ali vira falha de teste sem defeito de código. Passou a
+comparar contra `blocosDoPainelPadraoValidados().length`. A asserção de que o padrão tem 7 blocos
+**continua literal de propósito** — lá o número É a afirmação.
+
+E as asserções novas do corte afirmam nos dois sentidos, como a casa exige: não basta contar 3 KPIs,
+o teste afirma que **nenhum bloco do padrão fala em saldo**, que `calcularKpisDoMes` **não devolve
+mais o campo** (em vez de devolvê-lo zerado), que `'saldo-negativo'` **saiu do vocabulário**, e que
+**pedir por ela explicitamente não devolve alerta nenhum**.
+
+---
+
 ### ✅ Hardening — 3ª bateria: os achados 9, 10 e 11 (26/ago)
 
 **Origem: Julio autorizou explicitamente a bateria irreversível — as funções `aplicar_*`

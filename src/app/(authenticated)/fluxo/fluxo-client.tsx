@@ -1,26 +1,38 @@
 'use client'
 
+// A tela do fluxo de caixa: uma tabela só.
+//
+// Em 26/ago ela perdeu três seções — os 4 cartões de saldo, o gráfico de
+// histórico+projeção de 90 dias e a lista de recorrências detectadas. O motivo
+// não foi excesso de tela:
+//
+// - Os cartões de SALDO não mediam saldo. Somavam todo lançamento existente,
+//   sem saldo inicial e sem corte de data: numa base com seis meses importados,
+//   o "Saldo Atual" era a soma desses seis meses, não o dinheiro em conta. O app
+//   não controla saldo bancário, então não podia afirmar um.
+// - A PROJEÇÃO adivinhava o futuro pela média dos intervalos passados. Isso fazia
+//   sentido enquanto não havia orçamento; desde a Fase 9 há, com data de
+//   competência, data de caixa, versão e responsável. Dois futuros na mesma tela,
+//   derivados de regras diferentes, é pior que um.
+// - As RECORRÊNCIAS continuam sendo detectadas (`lib/recurrence-detect.ts`), só
+//   que agora aparecem onde servem: em `/orcamento`, sugerindo o que orçar.
+//
+// O que sobrou é a única leitura desta tela que o dashboard não faz: a geração
+// de caixa aberta por natureza, mês a mês, separando OPEX de CAPEX.
+
 import { useState, useTransition, useMemo, useEffect, Fragment } from 'react'
 import {
-  X, Loader2, TrendingUp, BarChart3,
+  X, Loader2, BarChart3,
   ChevronRight, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { KPICard } from '@/components/financial/kpi-card'
 import { Num as NumCell } from '@/components/financial/num-cell'
 import { EmptyState } from '@/components/states/empty-state'
 import { DrillDownDialog } from '@/components/transacoes-shared/drill-down-dialog'
 import { DimFilter } from '@/components/transacoes-shared/dim-filter'
 import { cn } from '@/lib/utils'
 import { monthLabel } from '@/lib/format'
-import { BarChart } from '@/components/charts/bar-chart'
-import {
-  COR_ENTRADA, COR_SAIDA, COR_ENTRADA_PROJETADA, COR_SAIDA_PROJETADA,
-} from '@/components/charts/chart-theme'
-import { format, parseISO } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
-import type { FluxoData } from '@/server/fluxo'
 import { getFluxoMensalData } from '@/server/fluxo-mensal'
 import type { FluxoMensalData, FluxoMensalCategoryRow } from '@/server/fluxo-mensal'
 import { getDreDrillDown } from '@/server/dre'
@@ -63,10 +75,6 @@ const COL_W       = 96
 const TOTAL_COL_W = 106
 const LABEL_W     = 280
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-
 // ─── Num (célula de valor) ────────────────────────────────────────────────────
 // O componente compartilhado vive em @/components/financial/num-cell. Aqui só
 // fixamos o tom do zero, que nesta tela é um pouco mais forte que o da DRE.
@@ -75,9 +83,9 @@ function Num(props: Omit<React.ComponentProps<typeof NumCell>, 'zeroClassName'>)
   return <NumCell {...props} zeroClassName="text-muted-foreground/30" />
 }
 
-// ─── FluxoCaixaCategoria ──────────────────────────────────────────────────────
+// ─── FluxoClient ──────────────────────────────────────────────────────────────
 
-interface CaixaCategoriaProps {
+interface FluxoClientProps {
   initialData:   FluxoMensalData
   initialFrom:   string
   initialTo:     string
@@ -88,10 +96,10 @@ interface CaixaCategoriaProps {
   contactOptions: SimpleDimensionItem[]
 }
 
-function FluxoCaixaCategoria({
+export function FluxoClient({
   initialData, initialFrom, initialTo,
   costCenters, businessUnits, legalEntities, leafCategories, contactOptions,
-}: CaixaCategoriaProps) {
+}: FluxoClientProps) {
   const [data,       setData]       = useState<FluxoMensalData>(initialData)
   const [isPending,  startTransition]      = useTransition()
   const [isDrillLoading, startDrillTransition] = useTransition()
@@ -281,9 +289,12 @@ function FluxoCaixaCategoria({
   const hasDimFilters = selCc.length > 0 || selBu.length > 0 || selLe.length > 0
   const { months } = data
 
+  // Viewport-fill do DATA_TABLE_PATTERN: agora que a tabela está sozinha na
+  // página, ela ocupa a altura toda e a rolagem fica DENTRO dela — antes era um
+  // cartão de 520px no meio de outras quatro seções.
   return (
-    <Card>
-      <CardHeader className="pb-3">
+    <Card className="flex-1 min-h-0 flex flex-col mx-6 mb-6">
+      <CardHeader className="pb-3 shrink-0">
         <div className="flex items-center justify-between mb-3">
           <CardTitle className="text-base font-semibold">Geração de Caixa por Categoria</CardTitle>
           <div className="flex items-center gap-2">
@@ -363,7 +374,7 @@ function FluxoCaixaCategoria({
         </div>
       </CardHeader>
 
-      <CardContent className="p-0">
+      <CardContent className="p-0 flex-1 min-h-0 overflow-hidden">
         {data.rows.length === 0 ? (
           <div className="flex items-center justify-center py-12">
             <EmptyState
@@ -373,7 +384,7 @@ function FluxoCaixaCategoria({
             />
           </div>
         ) : (
-          <div className={cn('overflow-auto max-h-[520px]', isPending && 'opacity-50 pointer-events-none')}>
+          <div className={cn('h-full overflow-auto', isPending && 'opacity-50 pointer-events-none')}>
             <table
               className="border-collapse"
               style={{ minWidth: LABEL_W + months.length * COL_W + TOTAL_COL_W, width: '100%' }}
@@ -569,149 +580,5 @@ function FluxoCaixaCategoria({
         />
       )}
     </Card>
-  )
-}
-
-// ─── FluxoClient ──────────────────────────────────────────────────────────────
-// O tooltip do gráfico mudou de casa na 5.A: é o padrão de
-// `@/components/charts`, com o rótulo vindo da declaração da série.
-
-interface FluxoClientProps {
-  data:           FluxoData
-  initialMensal:  FluxoMensalData
-  initialFrom:    string
-  initialTo:      string
-  costCenters:    CostCenter[]
-  businessUnits:  BusinessUnit[]
-  legalEntities:  LegalEntity[]
-  leafCategories: LeafCategory[]
-  contactOptions: SimpleDimensionItem[]
-}
-
-export function FluxoClient({
-  data, initialMensal, initialFrom, initialTo,
-  costCenters, businessUnits, legalEntities, leafCategories, contactOptions,
-}: FluxoClientProps) {
-  const hasHistorico  = data.semanas.some(s => s.inflowReal > 0 || s.outflowReal > 0)
-  const hasProjecao   = data.recorrencias.length > 0
-
-  const chartData = useMemo(() => data.semanas, [data.semanas])
-
-  return (
-    <div className="space-y-6">
-      {/* Nova seção: Geração de Caixa por Categoria */}
-      <FluxoCaixaCategoria
-        initialData={initialMensal}
-        initialFrom={initialFrom}
-        initialTo={initialTo}
-        costCenters={costCenters}
-        businessUnits={businessUnits}
-        legalEntities={legalEntities}
-        leafCategories={leafCategories}
-        contactOptions={contactOptions}
-      />
-
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KPICard label="Saldo Atual"          value={data.saldoAtual}        colorizeValue />
-        <KPICard label="Saldo Projetado 30d"  value={data.saldoProjetado30d} colorizeValue />
-        <KPICard label="Saldo Projetado 60d"  value={data.saldoProjetado60d} colorizeValue />
-        <KPICard label="Saldo Projetado 90d"  value={data.saldoProjetado90d} colorizeValue />
-      </div>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold">
-            Histórico (60d) e projeção (90d)
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {!hasHistorico && !hasProjecao ? (
-            <EmptyState
-              icon={<TrendingUp className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
-              title="Sem dados de fluxo"
-              description="Conecte seu banco ou importe um extrato para visualizar o fluxo de caixa."
-            />
-          ) : (
-            <>
-              <BarChart
-                data={chartData}
-                x="label"
-                ocultarZerosNoTooltip
-                series={[
-                  { key: 'inflowReal',       label: 'Entradas',         cor: COR_ENTRADA,           stackId: 'in' },
-                  { key: 'inflowProjetado',  label: 'Entradas (proj.)', cor: COR_ENTRADA_PROJETADA, stackId: 'in' },
-                  { key: 'outflowReal',      label: 'Saídas',           cor: COR_SAIDA,             stackId: 'out' },
-                  { key: 'outflowProjetado', label: 'Saídas (proj.)',   cor: COR_SAIDA_PROJETADA,   stackId: 'out' },
-                ]}
-              />
-              <p className="text-xs text-muted-foreground/70 mt-2 text-center">
-                Cores escuras = histórico real · cores claras = projeção baseada em recorrências
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold">Recorrências detectadas</CardTitle>
-          {hasProjecao && (
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Transações que se repetem nos últimos 6 meses — base da projeção
-            </p>
-          )}
-        </CardHeader>
-        <CardContent>
-          {!hasProjecao ? (
-            <p className="text-sm text-muted-foreground py-2">
-              Nenhuma recorrência detectada nos últimos 6 meses. Importe mais transações para habilitar a projeção.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left text-xs text-muted-foreground font-medium pb-2 pr-4">Descrição</th>
-                    <th className="text-left text-xs text-muted-foreground font-medium pb-2 pr-4">Tipo</th>
-                    <th className="text-right text-xs text-muted-foreground font-medium pb-2 pr-4">Valor médio</th>
-                    <th className="text-right text-xs text-muted-foreground font-medium pb-2 pr-4">Próxima data</th>
-                    <th className="text-right text-xs text-muted-foreground font-medium pb-2">Intervalo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {data.recorrencias.map((rec, i) => (
-                    <tr key={i} className="hover:bg-muted/30">
-                      <td className="py-2.5 pr-4 max-w-[220px]">
-                        <span className="truncate block text-foreground text-sm">{rec.descricao}</span>
-                        <span className="text-xs text-muted-foreground">{rec.ocorrencias}× nos últimos 6 meses</span>
-                      </td>
-                      <td className="py-2.5 pr-4">
-                        <span className={cn(
-                          'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                          rec.direction === 'inflow'
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                            : 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-500',
-                        )}>
-                          {rec.direction === 'inflow' ? 'Entrada' : 'Saída'}
-                        </span>
-                      </td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums font-medium">
-                        {brl.format(rec.valorMedio)}
-                      </td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums text-muted-foreground">
-                        {format(parseISO(rec.proximaData), 'dd/MM/yyyy', { locale: ptBR })}
-                      </td>
-                      <td className="py-2.5 text-right text-muted-foreground">
-                        ~{rec.intervaloMedioDias}d
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
   )
 }

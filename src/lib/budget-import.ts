@@ -14,9 +14,7 @@ import { parseCsv, CsvParseError } from './csv-parser'
 import { BUDGET_CSV } from './csv-templates'
 import { parseAmount } from './format'
 import { round2 } from './budget-recurrence'
-// Import só de tipo: é apagado na compilação, então não puxa o módulo de
-// servidor para cá. A fonte da verdade continua sendo a detecção do /fluxo.
-import type { RecorrenciaDetectada } from '@/server/fluxo'
+import type { RecorrenciaDetectada } from './recurrence-detect'
 
 // ─── Normalização ─────────────────────────────────────────────────────────────
 
@@ -313,8 +311,8 @@ export interface RecurrenceCandidate {
  * A janela de detecção é dos últimos 180 dias e a próxima ocorrência é sempre
  * futura, então uma recorrência pode simplesmente não pertencer ao exercício
  * orçado. Nesse caso ela aparece na lista BLOQUEADA com o motivo, em vez de
- * sumir — sumir faria o usuário procurar por que a lista está menor do que a
- * do `/fluxo`.
+ * sumir — sumir deixaria o usuário procurando o que a detecção achou e a lista
+ * não mostra.
  */
 export function buildRecurrenceCandidates(
   recorrencias: RecorrenciaDetectada[],
