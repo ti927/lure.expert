@@ -1466,8 +1466,17 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
   recorrências, hoje em `lib/recurrence-detect.ts`, servindo só ao `/orcamento`); (c) o Definition of
   Done da Fase 5 com o item de projeção riscado. Decisão 23 em `SCHEMA_DECISIONS.md`.
 
+- **v2.4** — **Dois defeitos de comportamento corrigidos fora de fase, ambos achados pelo uso.**
+  (a) **O selo "ocultar na DRE / no Fluxo" da Natureza Pai era inerte** — só Natureza Filho recebe
+  lançamento, e as cinco leituras consultavam o selo da categoria do lançamento, então marcar um pai
+  não escondia nada. Agora ocultar um pai oculta o ramo. Conciliado: 5 das 6 organizações com número
+  idêntico ao de antes. (b) **O expert não sabia que o filtro `visibilidade` existia** — `spec.ts`
+  não tinha nenhuma `.describe()`, e `z.toJSONSchema` publica só o que vem dela; por isso o claude.ai
+  dizia que não dava para montar um gráfico OPEX × CAPEX. Nenhum dos dois muda fase ou entrega do
+  mapa; entram aqui porque mudam **o que o produto mostra**. Decisão 24 em `SCHEMA_DECISIONS.md`.
+
 ---
 
 *Documento mantido por: Lure TI*
 *Última atualização: 2026-08-26*
-*Versão: 2.3*
+*Versão: 2.4*
