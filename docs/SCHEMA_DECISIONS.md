@@ -1422,3 +1422,67 @@ asserção, remover uma `.describe()` seria uma regressão invisível.
 levantamento correto, e só descobri o objetivo depois. Perguntar *para que serve* teria chegado ao
 mesmo lugar por um caminho mais curto — embora o defeito do selo do pai, que o caminho longo achou,
 fosse real e valesse a viagem.
+
+---
+
+## Decisão 25 — `comparacao` é uma segunda leitura, não uma segunda fonte (27/ago)
+
+**Pedido do Julio:** um gráfico de orçado × realizado no painel, "nem que seja só das naturezas pai".
+Ele veio de uma conversa em que o claude.ai respondeu que não dava — e não dava mesmo.
+
+**Por que não dava:** `fonte` é escalar e um bloco carrega uma consulta. Nenhuma combinação das 31
+ferramentas produzia duas fontes no mesmo gráfico. O máximo era dois blocos lado a lado, transferindo
+a subtração para o olho de quem lê.
+
+### O desenho, e por que não é um `fonte: []`
+
+Plural em `fonte` pareceria simétrico e seria errado: as fontes não são intercambiáveis (o orçado não
+tem conta, a NF-e não tem natureza), e somá-las num mesmo eixo produziria número sem significado.
+`comparacao` diz outra coisa — **este resultado, contra aquele** —, o que é assimétrico de propósito:
+há um lado principal e um lado de referência, e a variação tem sinal por causa disso.
+
+```jsonc
+"comparacao": { "tipo": "orcado" | "periodo_anterior" | "mesmo_periodo_ano_anterior",
+                "versaoOrcamento": "uuid" }   // exigido quando tipo = orcado
+```
+
+Uma primitiva, três perguntas. O motor roda a segunda leitura com **os mesmos agrupamentos, filtros e
+medidas**, mudando só a fonte (orçado) ou a janela — e essa simetria não é economia de código: é o que
+torna a comparação legítima. `getBudgetVsActual` (9.2) já registrava a regra como "filtros simétricos
+nos dois lados"; aplicar filtro de um lado só é exatamente o que faz a variação mentir.
+
+### União externa, pela mesma razão da 9.7
+
+Chave que existe só de um lado entra com zero do outro. **O desvio mais grave que existe — orçado e
+não realizado — seria o único invisível** se a união fosse interna. A ordem do lado principal é
+preservada e o que só existe na comparação vai para o fim, porque não há critério honesto para
+intercalar.
+
+### Três detalhes que o teste fixou
+
+- **`pct` é NULO quando o comparado é zero**, não Infinity. "Cresceu infinito%" é pior que "não dá
+  para calcular", e um modelo repassa o Infinity ao usuário.
+- **O percentual é sobre o COMPARADO**, não sobre o realizado — é o que "20% acima do orçado"
+  significa.
+- **`menosUmAno` apara 29/fev para 28/fev.** `Date.UTC(a-1, 1, 29)` normalizaria para 1º/mar, jogando
+  o dia no mês seguinte e mudando a janela comparada.
+
+### A recusa que nomeia o que falta
+
+Comparar com o orçado agrupando por `conta` é recusado ANTES da segunda leitura. Sem essa guarda o
+erro viria de dentro dizendo *"a fonte orcado não pode ser agrupada por conta"* — verdadeiro e
+confuso, porque quem pediu escolheu `fonte: "realizado"` e nunca mencionou orçado. Mesmo tratamento
+para `filtros.contas`.
+
+### O que NÃO entrou, declarado
+
+- **Ordenar por variação** (o "relatório de estouro"). A união acontece em JS, depois do `LIMIT` do
+  SQL — ordenar por variação exigiria trazer tudo e cortar depois, o que muda o significado de
+  `limite`. Fase própria.
+- **Segundo eixo de agrupamento com comparação.** Seriam N séries × 2 no mesmo gráfico, ilegível. O
+  caminho de comparação usa um eixo só, e isso está no comportamento, não numa recusa.
+
+### O contrato antigo continua intacto
+
+Sem `comparacao` na spec, a linha **não ganha campo novo** — é asserção do teste, não intenção. E o
+realizado de cada linha é idêntico ao da consulta sem comparação: comparar acrescenta, não altera.

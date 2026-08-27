@@ -115,6 +115,140 @@ export async function runQuery(scope: QueryScope, input: QueryInput): Promise<Qu
   }
   const spec = parsed.data
 
+  const principal = await executarUma(scope, spec)
+  if (!spec.comparacao) return principal
+
+  const outra = specDaComparacao(spec)
+  const comparada = await executarUma(scope, outra)
+
+  return {
+    ...juntar(principal, comparada, spec.medidas),
+    comparacao: {
+      tipo:    spec.comparacao.tipo,
+      fonte:   outra.fonte,
+      periodo: comparada.periodo,
+    },
+  }
+}
+
+/**
+ * A spec da segunda leitura: os MESMOS agrupamentos, filtros e medidas, mudando
+ * só a fonte (orçado) ou a janela (anterior / ano anterior).
+ *
+ * Manter tudo o mais idêntico não é economia — é o que faz a comparação ser
+ * legítima. `getBudgetVsActual` (9.2) já tinha essa regra escrita como "filtros
+ * simétricos nos dois lados": aplicar um filtro de um lado só é exatamente o que
+ * faz a variação mentir.
+ */
+function specDaComparacao(spec: QuerySpec): QuerySpec {
+  const c = spec.comparacao!
+  if (c.tipo === 'orcado') {
+    // O orçado não conhece conta (lançamento orçado não tem banco). Sem esta
+    // guarda o erro viria da segunda leitura dizendo 'a fonte "orcado" não pode
+    // ser agrupada por conta' — verdadeiro e confuso, porque quem pediu pediu
+    // fonte "realizado" e não escolheu orçado nenhum.
+    const orc = SOURCES.orcado!
+    const faltando = spec.agruparPor.filter(g => !GRUPO_TEMPORAL[g] && !orc.groupings[g])
+    if (faltando.length > 0) {
+      throw new QueryValidationError('comparacao',
+        `Não dá para comparar com o orçado agrupando por ${faltando.join(', ')}: o orçamento não ` +
+        'tem essa informação. Agrupe por natureza, natureza pai, tipo, dimensão, direção ou tempo.',
+        [...Object.keys(orc.groupings), ...Object.keys(GRUPO_TEMPORAL)])
+    }
+    if (spec.filtros.contas?.length) {
+      throw new QueryValidationError('comparacao',
+        'Não dá para comparar com o orçado filtrando por conta: o orçamento não tem conta.')
+    }
+    return {
+      ...spec,
+      fonte:      'orcado',
+      comparacao: undefined,
+      filtros:    { ...spec.filtros, versaoOrcamento: c.versaoOrcamento },
+    }
+  }
+
+  const p = resolverPeriodo(spec)
+  if ('em' in p) {
+    throw new QueryValidationError('comparacao',
+      'Período de foto não tem janela anterior para comparar.')
+  }
+  const janela = c.tipo === 'mesmo_periodo_ano_anterior'
+    ? { de: menosUmAno(p.de), ate: menosUmAno(p.ate) }
+    : janelaAnterior(p)
+
+  return {
+    ...spec,
+    comparacao: undefined,
+    periodo: { tipo: 'intervalo', de: janela.de, ate: janela.ate, regime: spec.periodo.regime },
+  }
+}
+
+const DIA = 86_400_000
+const iso = (t: number) => new Date(t).toISOString().slice(0, 10)
+
+/** A janela imediatamente anterior, do mesmo número de dias. */
+function janelaAnterior(p: { de: string; ate: string }) {
+  const de = Date.parse(`${p.de}T00:00:00Z`)
+  const ate = Date.parse(`${p.ate}T00:00:00Z`)
+  const dias = Math.round((ate - de) / DIA) + 1
+  return { de: iso(de - dias * DIA), ate: iso(de - DIA) }
+}
+
+/**
+ * Mesma data, um ano antes. 29/fev vira 28/fev — `Date.UTC` normalizaria para
+ * 1º/mar, o que jogaria o dia para o mês seguinte e mudaria a janela.
+ */
+function menosUmAno(d: string): string {
+  const [a, m, dia] = d.split('-').map(Number)
+  const ultimo = new Date(Date.UTC(a - 1, m, 0)).getUTCDate()
+  return `${a - 1}-${String(m).padStart(2, '0')}-${String(Math.min(dia, ultimo)).padStart(2, '0')}`
+}
+
+/**
+ * Une as duas leituras pelas chaves de agrupamento.
+ *
+ * União EXTERNA: chave que só existe de um lado entra com zero do outro. Sem
+ * isso, "orçado e não realizado" — o desvio mais grave que existe — seria o
+ * único invisível no gráfico.
+ *
+ * A ordem do lado principal é preservada; o que só existe na comparação vai
+ * para o fim, porque não há critério honesto para intercalar.
+ */
+function juntar(principal: QueryResult, comparada: QueryResult, medidas: string[]): QueryResult {
+  const chaveDe = (l: QueryRow) => l.chaves.map(k => k.id ?? ' ').join('|')
+  const zeros = () => Object.fromEntries(medidas.map(m => [m, 0]))
+
+  const doOutro = new Map(comparada.linhas.map(l => [chaveDe(l), l]))
+  const vistas = new Set<string>()
+
+  const comVariacao = (chaves: QueryRow['chaves'], a: Record<string, number>, b: Record<string, number>): QueryRow => ({
+    chaves,
+    medidas: a,
+    comparacao: b,
+    variacao: Object.fromEntries(medidas.map(m => {
+      const abs = (a[m] ?? 0) - (b[m] ?? 0)
+      return [m, {
+        abs: Math.round(abs * 100) / 100,
+        pct: b[m] ? Math.round((abs / Math.abs(b[m])) * 10000) / 100 : null,
+      }]
+    })),
+  })
+
+  const linhas: QueryRow[] = principal.linhas.map(l => {
+    const k = chaveDe(l)
+    vistas.add(k)
+    return comVariacao(l.chaves, l.medidas, doOutro.get(k)?.medidas ?? zeros())
+  })
+
+  for (const l of comparada.linhas) {
+    if (vistas.has(chaveDe(l))) continue
+    linhas.push(comVariacao(l.chaves, zeros(), l.medidas))
+  }
+
+  return { ...principal, linhas, truncado: principal.truncado || comparada.truncado }
+}
+
+async function executarUma(scope: QueryScope, spec: QuerySpec): Promise<QueryResult> {
   const src = SOURCES[spec.fonte]
   if (!src) {
     throw new QueryValidationError('fonte', `Fonte "${spec.fonte}" ainda não está disponível.`,

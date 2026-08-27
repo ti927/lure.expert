@@ -120,6 +120,45 @@ export const filtrosSchema = z.object({
 // mesmo resultado que passar `{}`.
 }).default({ excluirBalanco: true, visibilidade: 'todas' })
 
+/**
+ * Contra o que comparar.
+ *
+ * Uma primitiva para três perguntas que antes não tinham resposta: "gastei mais
+ * que o orçado?", "como foi contra o mês passado?" e "e contra o ano passado?".
+ * A `fonte` é escalar de propósito — uma consulta lê um lugar só —, então a
+ * comparação é uma SEGUNDA leitura, com os mesmos agrupamentos, filtros e
+ * medidas, unida à primeira pelas chaves de agrupamento.
+ *
+ * A união é EXTERNA, como em `getBudgetVsActual` (9.2): natureza orçada e não
+ * realizada aparece com realizado zero, e vice-versa. Some-la faria o desvio
+ * mais grave — o que foi orçado e ninguém gastou — ser o único invisível.
+ */
+export const comparacaoSchema = z.object({
+  tipo: z.enum(['orcado', 'periodo_anterior', 'mesmo_periodo_ano_anterior'])
+    .describe(
+      '"orcado" compara contra a versão de orçamento indicada; "periodo_anterior" contra a janela ' +
+      'imediatamente anterior de mesmo tamanho; "mesmo_periodo_ano_anterior" contra a mesma janela ' +
+      'um ano antes.'),
+  versaoOrcamento: uuid.optional()
+    .describe('Obrigatório quando tipo = "orcado". Use listar_versoes_de_orcamento para obter o id.'),
+}).superRefine((v, ctx) => {
+  if (v.tipo === 'orcado' && !v.versaoOrcamento) {
+    ctx.addIssue({
+      code: 'custom', path: ['versaoOrcamento'],
+      message: 'Comparar com o orçado exige versaoOrcamento — versões concorrentes do mesmo ' +
+               'exercício seriam somadas, o rascunho junto do aprovado.',
+    })
+  }
+  if (v.tipo !== 'orcado' && v.versaoOrcamento) {
+    ctx.addIssue({
+      code: 'custom', path: ['versaoOrcamento'],
+      message: `versaoOrcamento só faz sentido com tipo "orcado"; recebi "${v.tipo}".`,
+    })
+  }
+})
+
+export type Comparacao = z.infer<typeof comparacaoSchema>
+
 export const ordenacaoSchema = z.object({
   por:     z.string(),
   direcao: z.enum(['asc', 'desc']).default('desc'),
@@ -135,6 +174,12 @@ export const querySpecSchema = z.object({
       'contas próprias caem no balde CAPEX.'),
   periodo:    periodoSchema,
   filtros:    filtrosSchema,
+  comparacao: comparacaoSchema.optional()
+    .describe(
+      'Traz um segundo valor por linha, mais a variação absoluta e percentual — é como se monta ' +
+      'orçado × realizado, mês contra mês anterior ou contra o mesmo mês do ano passado. Ausente, ' +
+      'a consulta se comporta como sempre. Combina com o bloco "serie" para o gráfico comparativo ' +
+      'e com "kpi" para o cartão com a variação.'),
   ordenarPor: z.array(ordenacaoSchema).max(2).default([]),
   limite:     z.number().int().min(1).max(LIMITE_MAX).default(50),
 })
@@ -155,6 +200,14 @@ export interface QueryKey {
 export interface QueryRow {
   chaves:  QueryKey[]
   medidas: Record<string, number>
+  /** Só com `comparacao` na spec: o mesmo conjunto de medidas, do outro lado. */
+  comparacao?: Record<string, number>
+  /**
+   * Só com `comparacao`: por medida, a diferença e o percentual sobre o
+   * comparado. `pct` é **nulo** quando o comparado é zero — dividir por zero
+   * daria Infinity, e "cresceu infinito%" é pior que "não dá para calcular".
+   */
+  variacao?: Record<string, { abs: number; pct: number | null }>
 }
 
 export interface QueryResult {
@@ -166,4 +219,10 @@ export interface QueryResult {
   truncado:   boolean
   /** Período efetivamente consultado, já resolvido (útil no relativo). */
   periodo:    { de: string; ate: string } | { em: string }
+  /** Presente quando a spec pediu comparação: o que foi comparado, e de onde. */
+  comparacao?: {
+    tipo:    Comparacao['tipo']
+    fonte:   QuerySource
+    periodo: { de: string; ate: string } | { em: string }
+  }
 }

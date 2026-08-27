@@ -44,8 +44,36 @@ function rotuloDoEixo(chave: string, rotulo: string): string {
  * eixo e o segundo abre uma série por valor distinto — que é como "receita por
  * mês, por unidade de negócio" fica legível.
  */
+const ROTULO_COMPARACAO: Record<string, string> = {
+  orcado:                      'Orçado',
+  periodo_anterior:            'Período anterior',
+  mesmo_periodo_ano_anterior:  'Ano anterior',
+}
+
 function paraGrafico(r: QueryResult) {
   const [medida] = r.medidas
+
+  // Com comparação, o gráfico é de DUAS séries por medida — é o orçado ×
+  // realizado. O segundo agrupamento não cabe aqui: seriam N séries vezes duas,
+  // e a leitura se perde; por isso a comparação usa o caminho de um eixo só.
+  if (r.comparacao) {
+    const rotuloComp = ROTULO_COMPARACAO[r.comparacao.tipo] ?? 'Comparado'
+    const data = r.linhas.map(l => {
+      const x = l.chaves[0] ? rotuloDoEixo(l.chaves[0].id ?? '', l.chaves[0].rotulo) : ''
+      const linha: Record<string, string | number> = { x }
+      for (const m of r.medidas) {
+        linha[m] = l.medidas[m]
+        linha[`${m}__comp`] = l.comparacao?.[m] ?? 0
+      }
+      return linha
+    })
+    const series = r.medidas.flatMap((m, i) => [
+      { key: m, label: `Realizado${r.medidas.length > 1 ? ` · ${rotuloDeMedida(m)}` : ''}`, cor: corCategorica(i * 2) },
+      { key: `${m}__comp`, label: `${rotuloComp}${r.medidas.length > 1 ? ` · ${rotuloDeMedida(m)}` : ''}`, cor: corCategorica(i * 2 + 1) },
+    ])
+    return { data, series }
+  }
+
   if (r.agruparPor.length <= 1) {
     const data = r.linhas.map(l => ({
       x: l.chaves[0] ? rotuloDoEixo(l.chaves[0].id ?? '', l.chaves[0].rotulo) : '',

@@ -189,12 +189,25 @@ export async function executarBloco(
       const { atual, anterior } = resolverPeriodos(spec.periodo, spec.query.periodo, ctx.mes)
       const fator = spec.inverterSinal ? -1 : 1
 
-      const valor = fator * await valorUnico(scope, spec.query, atual, medida)
+      let valor: number
       let valorAnterior: number | null = null
       let deltaPct: number | null = null
-      if (spec.comparar && anterior) {
-        valorAnterior = fator * await valorUnico(scope, spec.query, anterior, medida)
+
+      if (spec.query.comparacao) {
+        // A comparação da CONSULTA vence a do bloco: quem pediu "contra o
+        // orçado" quer ver o orçado, não o mês passado. Uma leitura só devolve
+        // os dois números.
+        const r = await runQuery(scope, { ...spec.query, periodo: atual, agruparPor: [], limite: 1 })
+        const l = r.linhas[0]
+        valor = fator * (l?.medidas[medida] ?? 0)
+        valorAnterior = fator * (l?.comparacao?.[medida] ?? 0)
         deltaPct = pct(valor, valorAnterior)
+      } else {
+        valor = fator * await valorUnico(scope, spec.query, atual, medida)
+        if (spec.comparar && anterior) {
+          valorAnterior = fator * await valorUnico(scope, spec.query, anterior, medida)
+          deltaPct = pct(valor, valorAnterior)
+        }
       }
 
       // 'relativo' só sobrevive no modo próprio; o motor o resolve, mas o

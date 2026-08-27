@@ -12,6 +12,77 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Comparação na consulta — orçado × realizado passa a ser possível pelo MCP (27/ago)
+
+**Origem:** Julio pediu ao claude.ai um gráfico comparativo de orçado × realizado; o expert respondeu
+que não dava. Ele então encomendou uma análise de capacidade analítica ao modelo, que voltou com 10
+recomendações — e a nº 1, prioridade máxima, era exatamente isto.
+
+**Verificado: 39/39 motor (era 27), 117/117 painéis, 188/188 escrita MCP, 39/39 leitura, 22/22
+visibilidade. `tsc`, lint e build limpos.**
+
+#### Não dava mesmo
+
+`fonte` é escalar e um bloco carrega uma consulta. Nenhuma combinação das 31 ferramentas produzia duas
+fontes no mesmo gráfico; o máximo eram dois blocos lado a lado, com a subtração ficando para o olho de
+quem lê.
+
+**O que Julio deixou claro, e que eu tinha entendido errado no meio do caminho:** ele não queria que
+eu montasse o gráfico. Queria que **fosse possível montar pelo MCP**. O que foi construído é o
+vocabulário; quem monta é o expert, em conversa.
+
+#### O desenho
+
+```jsonc
+"comparacao": { "tipo": "orcado" | "periodo_anterior" | "mesmo_periodo_ano_anterior",
+                "versaoOrcamento": "uuid" }
+```
+
+Uma primitiva para três perguntas. O motor roda uma **segunda leitura** com os mesmos agrupamentos,
+filtros e medidas — mudando só a fonte (orçado) ou a janela — e une as duas pelas chaves de
+agrupamento. A simetria é a regra dos *filtros simétricos nos dois lados* da 9.2: aplicar filtro de um
+lado só é o que faz a variação mentir.
+
+Não virou `fonte: []` de propósito: plural pareceria simétrico e seria errado — as fontes não são
+intercambiáveis, e somá-las no mesmo eixo daria número sem significado. `comparacao` é assimétrica por
+definição, que é o que dá sinal à variação.
+
+**União externa**, como na 9.7: chave que só existe de um lado entra com zero do outro. Interna, o
+desvio mais grave — orçado e não realizado — seria o único invisível.
+
+#### Detalhes que o teste fixou
+
+| | |
+|---|---|
+| `pct` com comparado zero | **NULO**, não Infinity — "cresceu infinito%" é o que o modelo repassaria |
+| base do percentual | sobre o **comparado**, que é o que "20% acima do orçado" significa |
+| `menosUmAno` em 29/fev | apara para 28/fev; `Date.UTC` normalizaria para 1º/mar e mudaria a janela |
+
+#### A recusa que nomeia o que falta
+
+Comparar com orçado agrupando por `conta` para **antes** da segunda leitura. Sem a guarda, o erro
+viria de dentro dizendo "a fonte orcado não pode ser agrupada por conta" — verdadeiro e confuso, já
+que quem pediu escolheu `fonte: "realizado"`. Mesmo tratamento para `filtros.contas`.
+
+#### Camada de blocos
+
+`serie` desenha duas séries (realizado + comparado, com rótulo pelo tipo); `kpi` usa a comparação da
+consulta no lugar do `comparar` por período — quem pediu "contra o orçado" quer ver o orçado. Como o
+schema do bloco embute o da consulta, o MCP ganhou tudo no mesmo commit, com `.describe()`.
+
+#### Fora de escopo, declarado
+
+- **Ordenar por variação** (o relatório de estouro): a união é em JS, depois do `LIMIT` do SQL —
+  ordenar por variação exigiria trazer tudo e cortar depois, mudando o significado de `limite`.
+- **Comparação com 2 eixos de agrupamento:** seriam N séries × 2, ilegível.
+
+#### O contrato antigo, como asserção
+
+Sem `comparacao` na spec a linha **não ganha campo novo**, e o realizado de cada linha é idêntico ao
+da consulta sem comparação. As duas coisas são testadas, não intencionadas.
+
+---
+
 ### ✅ O selo de visibilidade passa a herdar do pai (26/ago)
 
 **Pedido do Julio, que era uma pergunta e virou um defeito:** *"faça um levantamento se eu posso

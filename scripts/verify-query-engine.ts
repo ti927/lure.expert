@@ -376,6 +376,104 @@ async function main() {
   t(exp.periodo && 'de' in exp.periodo && exp.regime === 'caixa',
     `explicarQuery resolve "últimos 12 meses" em ${JSON.stringify(exp.periodo)}`)
 
+  // ── 12. Comparação: orçado × realizado, período anterior, ano anterior ────
+  //
+  // O gráfico que o Julio pediu e que o produto não desenhava: `fonte` é
+  // escalar, então a comparação é uma segunda leitura unida pelas chaves.
+  {
+    const [v] = await db.execute<{ id: string; org: string; de: string; ate: string }>(sql`
+      SELECT bv.id::text AS id, bv.organization_id::text AS org,
+             MIN(be.competence_date)::text AS de, MAX(be.competence_date)::text AS ate
+      FROM budget_versions bv JOIN budget_entries be ON be.version_id = bv.id
+      GROUP BY bv.id ORDER BY COUNT(be.id) DESC LIMIT 1`)
+
+    if (!v) {
+      console.log('AVISO | nenhuma versão de orçamento com lançamentos — comparação não exercitada')
+    } else {
+      const escopo = scopeFromJob(v.org)
+      const base = {
+        fonte: 'realizado' as const, medidas: ['saidas' as const],
+        agruparPor: ['categoria_pai' as const],
+        periodo: { tipo: 'intervalo' as const, de: v.de, ate: v.ate, regime: 'caixa' as const },
+        filtros: { excluirBalanco: true, visibilidade: 'caixa' as const },
+        limite: 100,
+      }
+
+      const semComp = await runQuery(escopo, base)
+      const comComp = await runQuery(escopo, { ...base, comparacao: { tipo: 'orcado', versaoOrcamento: v.id } })
+
+      t(semComp.linhas.every(l => l.comparacao === undefined),
+        'sem `comparacao` na spec, a linha NÃO ganha campo novo — contrato preservado')
+      t(comComp.comparacao?.tipo === 'orcado' && comComp.comparacao.fonte === 'orcado',
+        'com comparação, o resultado declara contra o que comparou')
+      t(comComp.linhas.every(l => l.comparacao !== undefined && l.variacao !== undefined),
+        'e toda linha traz o comparado e a variação')
+
+      // O realizado tem de ser IDÊNTICO ao da consulta sem comparação: a
+      // comparação acrescenta, não altera.
+      const antes = new Map(semComp.linhas.map(l => [l.chaves[0].id, l.medidas.saidas]))
+      const iguais = comComp.linhas.filter(l => antes.has(l.chaves[0].id))
+        .every(l => Math.abs(l.medidas.saidas - antes.get(l.chaves[0].id)!) < 0.005)
+      t(iguais, 'e o realizado de cada linha é o MESMO de antes — comparar não muda o número')
+
+      // União externa: o conjunto de chaves é o de realizado ∪ orçado.
+      const orc = await runQuery(escopo, {
+        ...base, fonte: 'orcado',
+        filtros: { ...base.filtros, versaoOrcamento: v.id },
+      })
+      const uniao = new Set([...semComp.linhas, ...orc.linhas].map(l => l.chaves[0].id))
+      t(comComp.linhas.length === uniao.size,
+        `a união é realizado ∪ orçado: ${semComp.linhas.length} ∪ ${orc.linhas.length} = ${uniao.size} (${comComp.linhas.length})`)
+
+      // A aritmética da variação, conferida numa linha com os dois lados.
+      const comAmbos = comComp.linhas.find(l => l.medidas.saidas > 0 && (l.comparacao?.saidas ?? 0) > 0)
+      if (comAmbos) {
+        const esperadoAbs = Math.round((comAmbos.medidas.saidas - comAmbos.comparacao!.saidas) * 100) / 100
+        t(comAmbos.variacao!.saidas.abs === esperadoAbs,
+          `variação absoluta = realizado − comparado (${comAmbos.variacao!.saidas.abs})`)
+        const esperadoPct = Math.round((esperadoAbs / Math.abs(comAmbos.comparacao!.saidas)) * 10000) / 100
+        t(comAmbos.variacao!.saidas.pct === esperadoPct,
+          `e o percentual é sobre o COMPARADO, não sobre o realizado (${comAmbos.variacao!.saidas.pct}%)`)
+      } else {
+        console.log('AVISO | nenhuma linha com realizado e orçado ao mesmo tempo')
+      }
+
+      // Comparado zero → pct NULO, não Infinity. O outro sentido da divisão.
+      const soRealizado = comComp.linhas.find(l => (l.comparacao?.saidas ?? 0) === 0 && l.medidas.saidas > 0)
+      if (soRealizado) {
+        t(soRealizado.variacao!.saidas.pct === null,
+          'linha sem contrapartida no orçado tem pct NULO, não Infinity')
+      }
+
+      // Janelas: período anterior e ano anterior.
+      const anterior = await runQuery(escopo, { ...base, comparacao: { tipo: 'periodo_anterior' } })
+      const p = anterior.comparacao!.periodo as { de: string; ate: string }
+      const dias = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000) + 1
+      t(p.ate < v.de && dias(p.de, p.ate) === dias(v.de, v.ate),
+        `período anterior termina antes do início e tem o MESMO tamanho (${p.de}..${p.ate})`)
+
+      const anoAnterior = await runQuery(escopo, { ...base, comparacao: { tipo: 'mesmo_periodo_ano_anterior' } })
+      const pa = anoAnterior.comparacao!.periodo as { de: string; ate: string }
+      t(pa.de === `${Number(v.de.slice(0, 4)) - 1}${v.de.slice(4)}`,
+        `mesmo período do ano anterior recua exatamente um ano (${pa.de})`)
+
+      // As recusas, nomeando o que falta.
+      const recusa = async (spec: unknown, oQue: string) => {
+        try { await runQuery(escopo, spec as never); return `NÃO recusou ${oQue}` }
+        catch (e) { return (e as Error).message }
+      }
+      const semVersao = await recusa({ ...base, comparacao: { tipo: 'orcado' } }, 'orçado sem versão')
+      t(semVersao.includes('versaoOrcamento'), `orçado sem versão é recusado (${semVersao.slice(0, 60)})`)
+
+      const porConta = await recusa(
+        { ...base, agruparPor: ['conta'], comparacao: { tipo: 'orcado', versaoOrcamento: v.id } },
+        'agrupar por conta')
+      t(porConta.includes('conta') && porConta.includes('orçamento'),
+        `comparar com orçado agrupando por conta é recusado dizendo por quê (${porConta.slice(0, 70)})`)
+    }
+  }
+
+
   // ── 11. O que o MODELO enxerga do schema ─────────────────────────────────
   //
   // A JSDoc do `spec.ts` não chega ao modelo: `z.toJSONSchema` publica só o que
