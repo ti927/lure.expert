@@ -297,6 +297,11 @@ contato pela NF-e), mais as **três** pendências de produto registradas — o p
 do BP, o `DROP` das três tabelas do chat e, agora, **se o saldo bancário deve passar a existir de
 verdade** (ver abaixo).
 
+**Frente nova, e é a mais quente:** a tabela *Capacidade analítica* mais abaixo, com as 9
+recomendações que sobraram do relatório que Julio encomendou. As duas mais baratas — **período
+incompleto** (R5) e **higiene de schema** (R8) — cabem numa sessão e matam falsos positivos que
+aparecem todo começo de mês.
+
 **Pendência de produto nova, aberta pela Decisão 23:** o app tirou o saldo porque não o controla.
 Passar a controlá-lo é possível e não foi decidido — o Pluggy já traz a posição das contas em
 `data_sources.metadata.accounts`, e ancorar nela daria um saldo **de verdade** para as contas
@@ -722,6 +727,35 @@ juntas ou não saem. Ao dropar, remover as três de
 nominalmente e já quebrou assim na migration 0015.
 
 ---
+
+### Capacidade analítica — o relatório de 26/ago e o que sobrou dele
+
+Julio encomendou ao claude.ai, na posição de analista/controller, uma análise das 31 ferramentas do
+MCP. Voltou com 10 recomendações. **A nº 1 (comparação) foi entregue em 27/ago** — o resto está
+aberto, e as afirmações abaixo foram **conferidas contra o banco**, não aceitas de saída:
+
+| # | O quê | Estado |
+|---|---|---|
+| R1 | `comparacao` na consulta (orçado / anterior / ano anterior) | ✅ 27/ago, Decisão 25 |
+| R5 | **Mês parcial contra mês inteiro** — a janela `mes` compara [01–31] contra [01–31], mas o mês corrente só tem dado até hoje. Falso positivo estrutural todo começo de mês (o alerta "receita caiu 43%") | 🔲 **confirmado**, e é o mais barato |
+| R8 | `tiposDeCategoria` é `array<string>` livre, **sem enum e sem `.describe()`** — o filtro com que se monta qualquer painel é invisível no schema. Mais: sinalizar janela maior que a base | 🔲 **confirmado**, barato |
+| R3 | `detalhar_lancamentos` — não existe leitura de lançamento individual; toda investigação para no primeiro "por quê". Já constava como pendência desde a 3.2 | 🔲 **confirmado** |
+| R7 | Bloco `indicador` mostra 6 traços em vez de omitir o que não tem insumo. Medido: a base tem 26 naturezas de BP e **zero documentos de balanço** — não é defeito de cálculo, é falta de dado | 🔲 confirmado |
+| R2 | Medidas derivadas (catálogo fechado: % do total, margem, execução orçamentária) | 🔲 depende de R1, que já existe |
+| R6 | Limiares de alerta configuráveis + perfil pessoa física (EBITDA não significa nada numa base pessoal) | 🔲 |
+| R4 | `secao_dfc` (operacional/investimento/financiamento) no lugar de `opex_capex` | 🔲 **decisão de modelagem**, não sessão de código |
+| R9, R10 | Projeção de fechamento e diagnóstico de qualidade da base | 🔲 |
+
+**Três coisas do relatório NÃO procedem, e ficam registradas para não voltarem:**
+
+1. *"Não é possível montar orçado × realizado"* — era verdade **só no MCP**. `/dre` tem a coluna com
+   Var% desde a 9.7 e `/orcamento` tem a aba inteira desde a 9.2. O analista só enxergou pelo MCP.
+2. *"`opex_capex` do pai e dos filhos discordam"* — não discordam: a coluna **só tem significado na
+   Natureza Pai**, e o filho herda por JOIN (está na migration 0020). O valor no filho é ruído de
+   default. O ponto de fundo (dois estados onde a DFC pede três) continua de pé.
+3. *"O exemplo numérico de `visibilidade` aponta para o lado errado"* — **procede, e o erro era meu.**
+   Citei `valor_liquido` (−50.572 → −88.528), que fica mais negativo ao filtrar e lê como aumento.
+   Com `saidas` o efeito é o intuitivo: 428.139 → 88.528. 🔲 corrigir o texto.
 
 ### Frentes anteriores, ainda abertas
 

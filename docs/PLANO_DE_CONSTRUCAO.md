@@ -1475,8 +1475,16 @@ Aos 6 meses você tem um produto vendável com base instalada inicial. Daí em d
   dizia que não dava para montar um gráfico OPEX × CAPEX. Nenhum dos dois muda fase ou entrega do
   mapa; entram aqui porque mudam **o que o produto mostra**. Decisão 24 em `SCHEMA_DECISIONS.md`.
 
+- **v2.5** — **O motor passa a comparar.** `comparacao` na consulta (orçado, período anterior, mesmo
+  período do ano anterior) fecha a lacuna que impedia o gráfico de orçado × realizado no painel — o
+  produto tinha a comparação nas TELAS (`/dre` desde a 9.7, `/orcamento` desde a 9.2) e não no MCP,
+  então o expert respondia que não dava. Entrega o vocabulário, não o gráfico: quem monta é o
+  cliente, conversando com o expert. Decisão 25 em `SCHEMA_DECISIONS.md`. Fica registrada no
+  `CLAUDE.md` a tabela *Capacidade analítica* com as 9 recomendações restantes do relatório que
+  originou a sessão, cada uma conferida contra o banco — inclusive as três que **não** procedem.
+
 ---
 
 *Documento mantido por: Lure TI*
-*Última atualização: 2026-08-26*
-*Versão: 2.4*
+*Última atualização: 2026-08-27*
+*Versão: 2.5*
