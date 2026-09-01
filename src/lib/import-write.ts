@@ -46,6 +46,10 @@ import {
 } from '@/lib/import-contract'
 import { findCategoryByText, type LeafCategory } from '@/lib/categorizer'
 import { BP_TYPES } from '@/lib/bp-types'
+import {
+  garantirContaManual, mapaDeContasManuais,
+  type ContaManual, type ResumoDeContaDoArquivo,
+} from '@/lib/accounts'
 
 /**
  * Teto por chamada.
@@ -90,7 +94,9 @@ export const linhaImportadaSchema = z.object({
       'natureza e vai para a fila de classificação.'),
   conta: z.string().trim().max(200).optional()
     .describe('Nome da conta ou cartão. Só preencha na linha quando o arquivo tiver MAIS DE UMA ' +
-      'conta; quando é uma só, informe em `conta` no nível do arquivo.'),
+      'conta; quando é uma só, informe em `conta` no nível do arquivo. **Aqui a conta precisa JÁ ' +
+      'EXISTIR** — confira com listar_contas. Ao contrário do campo do ARQUIVO, este não cria: ' +
+      'nome que não casa entra sem vínculo com o cadastro, e não conta na tela Contas.'),
   contaTipo: z.enum(TIPOS_DE_CONTA).optional()
     .describe(`Tipo da conta desta linha: ${TIPOS_DE_CONTA.map(t => `${t} (${ROTULO_DE_CONTA[t]})`).join(', ')}.`),
   contaNumero: z.string().trim().max(60).optional()
@@ -211,6 +217,8 @@ export interface PlanoDeImportacao {
   tipoDeRelatorio: 'movimentos' | 'balanco'
   /** Falso para balanço: snapshot se substitui, não se acumula. */
   deduplicando: boolean
+  /** Uma entrada por conta citada — a do cabeçalho e as das linhas. */
+  contasDoArquivo: ResumoDeContaDoArquivo[]
   amostra: { data: string; descricao: string; valor: number; sentido: string; natureza: string | null }[]
   /** O que será gravado, já normalizado pelo contrato. */
   aInserir: {
@@ -218,6 +226,8 @@ export interface PlanoDeImportacao {
     chave: string | null
     categoryId: string | null
     valor: LancamentoParaGravar
+    /** A conta CADASTRADA que casou. `null` = a linha entra sem vínculo. */
+    conta: ContaManual | null
   }[]
 }
 
@@ -291,6 +301,13 @@ export async function planejarImportacao(
     .filter((v): v is string => !!v)
   const naturezas = await resolverNaturezas(organizationId, termos, cabecalho.tipoDeRelatorio)
 
+  // O cadastro de contas, para vincular cada linha à conta que ela declara. A
+  // resolução NÃO entra na chave de dedup (calculada acima, sobre `valor`): se
+  // entrasse, o mesmo arquivo geraria chaves diferentes antes e depois de a
+  // conta ser criada, e a segunda importação duplicaria a contabilidade.
+  const cadastro = await mapaDeContasManuais(organizationId)
+  const porConta = new Map<string, ResumoDeContaDoArquivo>()
+
   const aInserir: PlanoDeImportacao['aInserir'] = []
   const naoResolvidas = new Set<string>()
   let entradas = 0, saidas = 0, comNatureza = 0
@@ -312,7 +329,22 @@ export async function planejarImportacao(
     if (!de || n.valor.date < de) de = n.valor.date
     if (!ate || n.valor.date > ate) ate = n.valor.date
 
-    aInserir.push({ indice: n.indice, chave, categoryId, valor: n.valor })
+    const accountId = n.valor.accountId
+    const conta = accountId ? cadastro.get(accountId) ?? null : null
+    if (accountId) {
+      const declarada = linhas[n.indice]?.conta?.trim()
+      const resumo = porConta.get(accountId)
+      if (resumo) resumo.linhas++
+      else porConta.set(accountId, {
+        nomeDeclarado: n.valor.accountName ?? accountId,
+        accountId,
+        conta,
+        linhas: 1,
+        doCabecalho: !declarada,
+      })
+    }
+
+    aInserir.push({ indice: n.indice, chave, categoryId, valor: n.valor, conta })
   })
 
   return {
@@ -326,6 +358,7 @@ export async function planejarImportacao(
     naturezasNaoResolvidas: Array.from(naoResolvidas).slice(0, 20),
     tipoDeRelatorio: cabecalho.tipoDeRelatorio,
     deduplicando,
+    contasDoArquivo: Array.from(porConta.values()),
     amostra: aInserir.slice(0, 8).map(({ categoryId, valor }) => {
       const n = valor.naturezaBruta ? naturezas.get(valor.naturezaBruta) : undefined
       return {
@@ -369,19 +402,43 @@ export async function aplicarImportacao(
 ): Promise<ResultadoImportacao> {
   const ehBalanco = cabecalho.tipoDeRelatorio === 'balanco'
 
-  // Uma fonte por origem: é ela que dá o rótulo da conta em `/transacoes`.
-  const nomeFonte = `MCP — ${origem}`.slice(0, 200)
-  let [fonte] = await db.select().from(dataSources).where(and(
-    eq(dataSources.organizationId, organizationId),
-    eq(dataSources.provider, 'mcp'),
-    eq(dataSources.name, nomeFonte),
-  )).limit(1)
+  // ── A fonte de RESERVA ───────────────────────────────────────────────────
+  // A fonte de cada linha é a conta que ELA declara, quando cadastrada
+  // (`plano.aInserir[i].conta`) — é o que faz `/contas` contar certo. Esta
+  // responde pelas outras.
+  //
+  // A conta do CABEÇALHO cria, e é o único ponto desta porta que cria: a
+  // descrição publicada ao modelo promete isso desde a 4.5.C, e o código nunca
+  // fez — a conta ia para `documents.metadata` e os lançamentos ficavam
+  // pendurados numa fonte `MCP — origem`, invisível em `/contas`.
+  let contaDoCabecalho: ContaManual | null = null
+  if (cabecalho.conta) {
+    const criada = await garantirContaManual(
+      organizationId, cabecalho.conta, cabecalho.tipoDeConta, cabecalho.numeroDaConta,
+    )
+    if (!('error' in criada)) contaDoCabecalho = criada
+  }
 
-  if (!fonte) {
-    ;[fonte] = await db.insert(dataSources).values({
-      organizationId, type: ehBalanco ? 'balance_sheet' : 'statement',
-      provider: 'mcp', name: nomeFonte,
-    }).returning()
+  let reservaId: string | null = contaDoCabecalho?.dataSourceId ?? null
+
+  async function fonteDeReserva(): Promise<string> {
+    if (reservaId) return reservaId
+    // Uma fonte por origem: é ela que dá o rótulo da conta em `/transacoes`.
+    const nomeFonte = `MCP — ${origem}`.slice(0, 200)
+    let [fonte] = await db.select().from(dataSources).where(and(
+      eq(dataSources.organizationId, organizationId),
+      eq(dataSources.provider, 'mcp'),
+      eq(dataSources.name, nomeFonte),
+    )).limit(1)
+
+    if (!fonte) {
+      ;[fonte] = await db.insert(dataSources).values({
+        organizationId, type: ehBalanco ? 'balance_sheet' : 'statement',
+        provider: 'mcp', name: nomeFonte,
+      }).returning()
+    }
+    reservaId = fonte.id
+    return reservaId
   }
 
   // O registro em `documents` existe para o lançamento ter origem: sem ele o
@@ -409,20 +466,25 @@ export async function aplicarImportacao(
     metadata: {
       source_type: ehBalanco ? 'balance_sheet' : 'statement',
       origem, via: 'mcp', linhasRecebidas: linhas.length,
-      ...(cabecalho.conta ? { account: {
-        nome: cabecalho.conta, tipo: cabecalho.tipoDeConta, numero: cabecalho.numeroDaConta,
+      // A grafia CANÔNICA do cadastro, não o eco do modelo: "a conta existente
+      // vence no nome", a mesma regra de `garantirContaManual`.
+      ...(contaDoCabecalho ? { account: {
+        nome: contaDoCabecalho.nome, tipo: contaDoCabecalho.tipo, numero: contaDoCabecalho.numero,
       } } : {}),
     },
   }).returning({ id: documents.id })
 
   const BATCH = 100
   const inseridos: { id: string; categoryId: string | null }[] = []
+  const reserva = plano.aInserir.some(l => !l.conta) ? await fonteDeReserva() : ''
 
   for (let i = 0; i < plano.aInserir.length; i += BATCH) {
     const bloco = plano.aInserir.slice(i, i + BATCH)
-    const values = bloco.map(({ indice, chave, categoryId, valor }) => ({
+    const values = bloco.map(({ indice, chave, categoryId, valor, conta }) => ({
       organizationId,
-      dataSourceId: fonte.id,
+      // A conta da LINHA manda — sem cadastro que case, cai na reserva. O
+      // arquivo nunca cria conta; criar é ato explícito da pessoa.
+      dataSourceId: conta?.dataSourceId ?? reserva,
       documentId: doc.id,
       externalId: chave,
       date: valor.date,
@@ -440,7 +502,10 @@ export async function aplicarImportacao(
       accountType: valor.accountType,
       accountNumber: valor.accountNumber,
       rawData: { ...linhas[indice] },
-      metadata: { sourceType: ehBalanco ? 'balance_sheet' : 'statement', via: 'mcp', origem },
+      metadata: {
+        sourceType: ehBalanco ? 'balance_sheet' : 'statement', via: 'mcp', origem,
+        ...(!conta && valor.accountName ? { contaNaoCadastrada: valor.accountName } : {}),
+      },
       categoryId,
       categorizationMethod: categoryId ? 'csv_match' : null,
       categorizationConfidence: categoryId ? '1.0' : null,

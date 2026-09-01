@@ -44,6 +44,12 @@ type LinhaCrua = {
 }
 
 async function main() {
+  // O corte de tempo da asserção de isolamento. Sem ele a asserção afirma
+  // "ninguém no banco tem chave arq:", que é outra coisa e ficou falsa em
+  // 26/ago, quando a bateria irreversível do MCP gravou 5 lançamentos reais em
+  // "Financeiro Pessoal". O que este teste tem de provar é que ELE não escreveu
+  // fora da própria organização.
+  const INICIO = new Date()
   await db.delete(organizations).where(eq(organizations.name, NOME_ORG))
 
   const [org] = await db.insert(organizations).values({
@@ -487,8 +493,9 @@ async function main() {
   {
     const [{ n }] = await db.execute<{ n: number }>(sql`
       SELECT COUNT(*)::int AS n FROM transactions
-       WHERE external_id LIKE 'arq:%' AND organization_id <> ${ORG}::uuid`)
-    t(Number(n) === 0, `nenhuma chave "arq:" escrita fora da organização de teste (são ${n})`)
+       WHERE external_id LIKE 'arq:%' AND organization_id <> ${ORG}::uuid
+         AND created_at >= ${INICIO.toISOString()}::timestamptz`)
+    t(Number(n) === 0, `nenhuma chave "arq:" escrita fora da organização de teste NESTA execução (são ${n})`)
   }
 
   await db.delete(organizations).where(eq(organizations.id, ORG))

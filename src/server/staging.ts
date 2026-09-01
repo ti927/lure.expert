@@ -20,8 +20,23 @@ import {
   type CsvCategoryMapping,
 } from '@/lib/categorizer'
 import { BP_TYPES } from '@/lib/bp-types'
-import { planejarStaging, lerContaDoDocumento } from '@/lib/staging-import'
-import { garantirContaManual, listarContasManuais, rotuloDaConta } from '@/lib/accounts'
+import {
+  planejarStaging,
+  lerContaDoDocumento,
+  type PlanoDeStaging,
+  type ContaDaLinha,
+  type EdicaoDeConta,
+} from '@/lib/staging-import'
+import {
+  garantirContaManual,
+  listarContasManuais,
+  mapaDeContasManuais,
+  rotuloDaConta,
+  PROVIDER_MANUAL,
+  type ContaManual,
+  type ResumoDeContaDoArquivo,
+} from '@/lib/accounts'
+import { contaCanonica, lerTipoDeConta } from '@/lib/import-contract'
 
 // `balance_sheet` faltava aqui desde a Fase 6 — o mapa nasceu antes de o BP
 // existir como origem, e um balanço aparecia rotulado como "Upload manual".
@@ -99,6 +114,8 @@ export async function getDocumentStagingRows(documentId: string) {
         tipoDeRelatorio: plano.cabecalho.tipoDeRelatorio,
         dataDeReferencia: plano.cabecalho.dataDeReferencia,
         folhasBp,
+        contasDoArquivo: plano.contasDoArquivo,
+        semConta: plano.semConta,
         erro: null as string | null,
       }
     : {
@@ -107,10 +124,72 @@ export async function getDocumentStagingRows(documentId: string) {
         tipoDeRelatorio: (doc.reportType === 'balance_sheet' ? 'balanco' : 'movimentos') as 'balanco' | 'movimentos',
         dataDeReferencia: doc.referenceDate ?? null,
         folhasBp,
+        contasDoArquivo: [] as ResumoDeContaDoArquivo[],
+        semConta: 0,
         erro: plano && 'error' in plano ? plano.error : null,
       }
 
-  return { document: doc, rows, importedCount, resumo, conta: lerContaDoDocumento(doc) }
+  const contaPorLinha = plano && !('error' in plano)
+    ? contaDoPlano(plano)
+    : await contaJaGravada(organizationId, documentId)
+
+  return { document: doc, rows, importedCount, resumo, conta: lerContaDoDocumento(doc), contaPorLinha }
+}
+
+function contaDoPlano(plano: PlanoDeStaging): Record<string, ContaDaLinha> {
+  const mapa: Record<string, ContaDaLinha> = {}
+  for (const n of plano.normalizadas) {
+    if (n.conta) {
+      mapa[n.staging.id] = { accountId: n.conta.accountId, rotulo: rotuloDaConta(n.conta), cadastrada: true }
+    } else if (n.contaDeclarada) {
+      mapa[n.staging.id] = { accountId: n.contaDeclarada.accountId, rotulo: n.contaDeclarada.nome, cadastrada: false }
+    }
+  }
+  return mapa
+}
+
+/**
+ * Depois de importado, a coluna mostra o que está no RAZÃO — não o que o plano
+ * faria hoje. Um recibo que re-simula mentiria se o cadastro tivesse mudado
+ * desde a importação.
+ *
+ * `metadata.stagingId` é gravado no insert, e é o que liga as duas pontas.
+ */
+async function contaJaGravada(
+  organizationId: string,
+  documentId: string,
+): Promise<Record<string, ContaDaLinha>> {
+  const linhas = await db.execute<{
+    staging_id: string | null
+    account_id: string | null
+    account_name: string | null
+    account_type: string | null
+    account_number: string | null
+    provider: string | null
+  }>(sql`
+    SELECT t.metadata->>'stagingId' AS staging_id,
+           t.account_id, t.account_name, t.account_type, t.account_number,
+           ds.provider
+      FROM transactions t
+      JOIN data_sources ds ON ds.id = t.data_source_id
+     WHERE t.document_id = ${documentId}::uuid
+       AND t.organization_id = ${organizationId}::uuid`)
+
+  const mapa: Record<string, ContaDaLinha> = {}
+  for (const l of linhas) {
+    if (!l.staging_id || !l.account_id) continue
+    mapa[l.staging_id] = {
+      accountId: l.account_id,
+      rotulo: rotuloDaConta({
+        nome: l.account_name ?? l.account_id,
+        tipo: lerTipoDeConta(l.account_type),
+        numero: l.account_number,
+      }),
+      // Vinculada de verdade é a linha cuja fonte é a conta manual.
+      cadastrada: l.provider === PROVIDER_MANUAL,
+    }
+  }
+  return mapa
 }
 
 // ─── Conta do arquivo ────────────────────────────────────────────────────────
@@ -123,22 +202,22 @@ export async function getDocumentStagingRows(documentId: string) {
  * é o slug do nome, então "Itaú PJ" e "itau pj" colapsam, mas "Itaú PJ" e "Itaú
  * Pessoa Jurídica" viram duas. Oferecer as existentes é a defesa barata.
  */
-export async function getAccountOptions(): Promise<{ nome: string; rotulo: string }[]> {
+export async function getAccountOptions(): Promise<{ accountId: string; nome: string; rotulo: string }[]> {
   const { organizationId } = await getAuthContext()
   const manuais = await listarContasManuais(organizationId)
-  return manuais.map(c => ({ nome: c.nome, rotulo: rotuloDaConta(c) }))
+  return manuais.map(c => ({ accountId: c.accountId, nome: c.nome, rotulo: rotuloDaConta(c) }))
 }
 
 /**
- * Declara a conta do arquivo inteiro.
+ * Declara a conta PADRÃO do arquivo — a das linhas que não declaram a sua.
  *
- * A conta é do DOCUMENTO, não da linha: um extrato é de uma conta só, e tipo e
- * número nunca variam entre linhas do mesmo arquivo. Quatro campos editáveis por
- * linha em 7.762 linhas seria trabalho inventado.
- *
- * Gravar aqui **cria a conta**, porque não existe cadastro de conta em lugar
- * nenhum: `garantirContaManual` insere uma `data_sources` com `provider='manual'`
- * e é ela que faz a conta aparecer em `/contas` e no filtro de `/transacoes`.
+ * A coluna `Conta` da planilha vence este bloco, linha a linha (é o que
+ * `docs/FORMATO_DE_IMPORTACAO.md` promete para o extrato consolidado, e o que
+ * `normalizarLancamento` faz). O que continua sendo só daqui é **criar conta**:
+ * `garantirContaManual` insere uma `data_sources` com `provider='manual'`, e é
+ * ela que faz a conta aparecer em `/contas` e no filtro de `/transacoes`. Conta
+ * citada numa linha e ausente do cadastro **não é criada** — a linha entra sem
+ * vínculo, e a tela avisa antes do clique.
  */
 export async function setDocumentAccount(
   documentId: string,
@@ -171,6 +250,72 @@ export async function setDocumentAccount(
   revalidatePath(`/upload/${documentId}/review`)
   revalidatePath('/contas')
   return { success: true, conta: { nome: criada.nome, tipo: criada.tipo, numero: criada.numero } }
+}
+
+/**
+ * A conta de linhas específicas, escolhida na tela.
+ *
+ * **Não cria conta** (é a diferença para `setDocumentAccount`): `definir` recusa
+ * nome que não existe no cadastro, dizendo onde criá-lo. É a única escrita que
+ * poderia violar essa regra, então a barreira mora aqui.
+ *
+ * Grava em `raw_data.__conta`, ao lado de `__contrato` — ver `ContaEditadaNaLinha`.
+ */
+export async function setStagingRowsAccount(
+  documentId: string,
+  rowIds: string[],
+  edicao: EdicaoDeConta,
+): Promise<{ error: string } | { updated: number; conta: ContaManual | null }> {
+  if (rowIds.length === 0) return { updated: 0, conta: null }
+
+  const { organizationId } = await getAuthContext()
+
+  // A tela já esconde o controle depois de importado, mas esta é a única ação
+  // que muda um VÍNCULO — e o vínculo já foi gravado em `transactions`.
+  const [{ count } = { count: 0 }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(transactions)
+    .where(and(eq(transactions.documentId, documentId), eq(transactions.organizationId, organizationId)))
+  if (Number(count) > 0) {
+    return { error: 'Este arquivo já foi importado — a conta das linhas não muda mais aqui. Ajuste em Transações.' }
+  }
+
+  let conta: ContaManual | null = null
+  if (edicao.modo === 'definir') {
+    const alvo = contaCanonica(edicao.nome).accountId
+    const cadastro = await mapaDeContasManuais(organizationId)
+    conta = (alvo && cadastro.get(alvo)) || null
+    if (!conta) {
+      return {
+        error: `A conta "${edicao.nome.trim()}" não existe. Crie-a em Contas, ou no bloco "Conta deste arquivo" acima.`,
+      }
+    }
+  }
+
+  const where = and(
+    eq(transactionsStaging.organizationId, organizationId),
+    eq(transactionsStaging.documentId, documentId),
+    inArray(transactionsStaging.id, rowIds),
+  )
+
+  const payload = conta
+    ? { nome: conta.nome, tipo: conta.tipo, numero: conta.numero }
+    : { nome: null }
+
+  const result = await db
+    .update(transactionsStaging)
+    .set({
+      rawData: edicao.modo === 'do-arquivo'
+        ? sql`coalesce(${transactionsStaging.rawData}, '{}'::jsonb) #- '{__conta}'`
+        : sql`jsonb_set(coalesce(${transactionsStaging.rawData}, '{}'::jsonb), '{__conta}', ${JSON.stringify(payload)}::jsonb, true)`,
+    })
+    .where(where)
+    .returning({ id: transactionsStaging.id })
+
+  // Obrigatório, e não por estética: a conta entra na chave de dedup, então o
+  // aviso de duplicadas da tela sai errado sem recalcular o plano.
+  revalidatePath(`/upload/${documentId}/review`)
+  return { updated: result.length, conta }
 }
 
 // ─── Update single staging row (inline edit) ─────────────────────────────────
@@ -311,24 +456,26 @@ export async function approveAndInsert(documentId: string) {
 
   const sourceType = ((doc.metadata as Record<string, unknown>)?.source_type as string) ?? 'other'
 
-  // ── A fonte: a conta do arquivo, quando declarada ────────────────────────
-  // Quando o arquivo tem conta, ela É a fonte — uma `data_sources` com
-  // `provider='manual'`. Isso é o que faz a conta existir: não há cadastro de
-  // conta em lugar nenhum do app, e o filtro de `/transacoes` monta a lista por
-  // `GROUP BY t.account_id` com `JOIN data_sources` para o rótulo. Sem a fonte
-  // própria, o rótulo sairia como a palavra "Banco", literal.
-  // Sem conta declarada, cai no comportamento de sempre: uma fonte genérica por
-  // origem.
+  // ── A fonte de RESERVA, preguiçosa ───────────────────────────────────────
+  // A fonte de cada linha é a conta que ELA declara, quando essa conta existe no
+  // cadastro (`plano.aInserir[i].conta`). Isto responde pelas outras: a conta do
+  // arquivo, quando declarada — e é o único ponto desta porta que CRIA conta —,
+  // ou a fonte genérica por origem, como sempre.
+  //
+  // Preguiçosa porque agora existe o caso em que nenhuma linha precisa dela:
+  // arquivo cujas linhas todas resolvem não deve mais criar a `data_sources`
+  // "Upload — …" que nasceria sem uso.
   const contaDoArquivo = lerContaDoDocumento(doc)
-  let dataSourceId: string
 
-  if (contaDoArquivo) {
-    const conta = await garantirContaManual(
-      organizationId, contaDoArquivo.nome, contaDoArquivo.tipo, contaDoArquivo.numero,
-    )
-    if ('error' in conta) return { error: conta.error }
-    dataSourceId = conta.dataSourceId
-  } else {
+  async function fonteDeReserva(): Promise<{ error: string } | { id: string }> {
+    if (contaDoArquivo) {
+      const conta = await garantirContaManual(
+        organizationId, contaDoArquivo.nome, contaDoArquivo.tipo, contaDoArquivo.numero,
+      )
+      if ('error' in conta) return { error: conta.error }
+      return { id: conta.dataSourceId }
+    }
+
     let [dataSource] = await db
       .select()
       .from(dataSources)
@@ -352,7 +499,7 @@ export async function approveAndInsert(documentId: string) {
     }
 
     if (!dataSource) throw new Error('Não foi possível criar a fonte de dados. Tente novamente.')
-    dataSourceId = dataSource.id
+    return { id: dataSource.id }
   }
 
   // ── As linhas, NA ORDEM DO ARQUIVO ───────────────────────────────────────
@@ -399,6 +546,14 @@ export async function approveAndInsert(documentId: string) {
     documentDomain === 'bp' ? bpTypeSet.has(c.type) : !bpTypeSet.has(c.type),
   )
 
+  // A reserva só é resolvida (e só cria conta ou fonte) se alguma linha precisar.
+  let reserva: string | null = null
+  if (plano.aInserir.some(n => !n.conta)) {
+    const r = await fonteDeReserva()
+    if ('error' in r) return { error: r.error }
+    reserva = r.id
+  }
+
   // Insert in batches of 100 and collect IDs for categorization.
   // csvMatchedIds NÃO entra no batch-inserted event (já classificado, não
   // precisa passar pelo categorizer LLM).
@@ -408,7 +563,7 @@ export async function approveAndInsert(documentId: string) {
 
   for (let i = 0; i < plano.aInserir.length; i += BATCH) {
     const batch = plano.aInserir.slice(i, i + BATCH)
-    const values = batch.map(({ staging: r, valor, chave }) => {
+    const values = batch.map(({ staging: r, valor, chave, conta, contaDeclarada }) => {
       const raw = (r.rawData ?? {}) as Record<string, unknown>
       const hints = raw.__categoryHints && typeof raw.__categoryHints === 'object'
         ? (raw.__categoryHints as Record<string, string>)
@@ -418,6 +573,11 @@ export async function approveAndInsert(documentId: string) {
         : null
 
       const metadata: Record<string, unknown> = { stagingId: r.id, sourceType }
+      // O arquivo citou uma conta que o cadastro não tem. As colunas `account_*`
+      // são gravadas do mesmo jeito (a chave de dedup depende delas), mas o
+      // vínculo de fonte não existe — registrar o nome é o que tornaria um
+      // backfill futuro possível sem reprocessar o arquivo.
+      if (!conta && contaDeclarada) metadata.contaNaoCadastrada = contaDeclarada.nome
       if (hints && Object.keys(hints).length > 0) metadata.categoryHints = hints
       if (mapping && (mapping.categoriaFilho || mapping.categoriaPai || mapping.tipoNatureza)) metadata.categoryMapping = mapping
 
@@ -438,7 +598,10 @@ export async function approveAndInsert(documentId: string) {
 
       return {
         organizationId,
-        dataSourceId,
+        // A conta da LINHA manda: é o que faz `/contas` contar certo e o filtro
+        // de `/transacoes` rotular cada conta com o próprio nome. Sem cadastro
+        // que case, cai na reserva — e a linha fica sem vínculo, não sem conta.
+        dataSourceId: conta?.dataSourceId ?? reserva!,
         externalId: chave,
         date: valor.date,
         effectiveDate: valor.effectiveDate,
@@ -497,7 +660,9 @@ export async function approveAndInsert(documentId: string) {
 
   revalidatePath(`/upload/${documentId}/review`)
   revalidatePath('/transacoes')
-  if (contaDoArquivo) revalidatePath('/contas')
+  // Também quando a conta veio das LINHAS — senão a contagem de `/contas`
+  // continuaria em zero e o defeito só teria trocado de camada.
+  if (contaDoArquivo || plano.contasDoArquivo.some(c => c.conta)) revalidatePath('/contas')
 
   return {
     inserted,

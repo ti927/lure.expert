@@ -146,7 +146,7 @@ export const COLUNAS_MOVIMENTOS: ColunaCanonica[] = [
     ajuda: 'Em branco = BRL. O produto é BRL only.' },
   { canonico: 'Conta', campo: 'conta', obrigatoria: false, leitor: 'v1',
     aliases: ['conta bancaria', 'banco', 'cartao', 'origem do recurso'],
-    ajuda: 'Nome da conta ou cartão. Em geral vale para o arquivo inteiro — preencha no cabeçalho da revisão.' },
+    ajuda: 'Nome da conta ou cartão. Em branco = a conta do cabeçalho da revisão. Preenchida, vence o cabeçalho — e precisa casar com uma conta já cadastrada; nome desconhecido não cria conta.' },
   { canonico: 'Tipo de conta', campo: 'tipoDeConta', obrigatoria: false, leitor: 'v1',
     aliases: ['tipo da conta'],
     ajuda: `Um de: ${Object.values(ROTULO_DE_CONTA).join(', ')}.` },
@@ -200,10 +200,15 @@ const dataIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-D
 /**
  * O contrato tem dois níveis, e este é o de cima.
  *
- * A conta é do ARQUIVO, não da linha: um extrato é de uma conta só, e
- * `tipoDeConta`/`numeroDaConta` nunca variam entre linhas do mesmo documento.
- * Quatro campos editáveis por linha em 7.762 linhas seria trabalho inventado —
- * é um campo no cabeçalho da revisão.
+ * A conta daqui é o PADRÃO do arquivo — a das linhas que não declaram a sua.
+ * Um extrato é de uma conta só, e preencher a coluna em 7.762 linhas seria
+ * trabalho inventado; por isso o cabeçalho existe. Mas a coluna da linha
+ * **vence** este nível (ver `normalizarLancamento`), e é o que atende ao extrato
+ * consolidado e ao caixa dividido em duas contas.
+ *
+ * Quem resolve o nome contra o cadastro é a PORTA, não o contrato: aqui a conta
+ * vira as quatro colunas de `transactions` e nada mais. É o que mantém a chave
+ * de dedup estável — ela não pode depender de a conta existir ou não.
  *
  * `dataDeReferencia` é obrigatória no balanço porque é ela que vira a coluna de
  * `/balanco`; e é ela que a linha de BP herda como `date`, já que um balanço não

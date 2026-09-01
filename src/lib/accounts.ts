@@ -47,6 +47,13 @@ import { contaCanonica, lerTipoDeConta, ROTULO_DE_CONTA, type TipoDeConta } from
 
 type Exec = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete' | 'execute'>
 
+/**
+ * Só leitura. Estreito de propósito: o `Exec` de `staging-import.ts` é
+ * `Pick<db,'select'>` e não seria atribuível ao `Exec` largo acima, então a
+ * importação não conseguiria repassar o executor que já recebe.
+ */
+type ExecLeitura = Pick<typeof db, 'select'>
+
 export const PROVIDER_MANUAL = 'manual'
 
 export interface ContaManual {
@@ -207,19 +214,77 @@ export async function listarContasManuais(
     ))
     .orderBy(dataSources.name)
 
-  return rows.map(r => {
-    const meta = (r.metadata ?? {}) as Record<string, unknown>
-    const conta = (Array.isArray(meta.accounts) ? meta.accounts[0] : null) as
-      { subtype?: string; number?: string } | null
-    return {
-      dataSourceId: r.id,
-      accountId: String(meta.accountId ?? ''),
-      nome: r.name,
-      tipo: lerTipoDeConta(conta?.subtype),
-      numero: conta?.number?.trim() || null,
-      lancamentos: Number(r.lancamentos ?? 0),
-    }
-  })
+  return rows.map(r => ({ ...contaDeLinha(r.id, r.name, r.metadata), lancamentos: Number(r.lancamentos ?? 0) }))
+}
+
+/** A linha de `data_sources` vira a identidade da conta. Uma leitura do metadata, não duas. */
+function contaDeLinha(id: string, name: string, metadata: unknown): ContaManual {
+  const meta = (metadata ?? {}) as Record<string, unknown>
+  const conta = (Array.isArray(meta.accounts) ? meta.accounts[0] : null) as
+    { subtype?: string; number?: string } | null
+  return {
+    dataSourceId: id,
+    accountId: String(meta.accountId ?? ''),
+    nome: name,
+    tipo: lerTipoDeConta(conta?.subtype),
+    numero: conta?.number?.trim() || null,
+  }
+}
+
+/**
+ * As contas manuais da organização indexadas pela IDENTIDADE (`arq:<slug>`).
+ *
+ * A chave é a mesma que `garantirContaManual` usa para achar a conta existente
+ * (`metadata->>'accountId'`), derivada por `contaCanonica`. É o que faz
+ * "Caixa Av. D", "Caixa Av D" e "  caixa   av. d " resolverem para a MESMA conta
+ * — a regra de identidade fica escrita uma vez só, e as duas portas de arquivo
+ * (a tela e o MCP) casam nome com cadastro do mesmo jeito.
+ *
+ * Uso: `mapa.get(contaCanonica(nome).accountId ?? '')`.
+ *
+ * **NÃO reusar `listarContasManuais` no lugar desta.** Aquela carrega a
+ * subconsulta de contagem por conta, que numa importação roda à toa — e é
+ * exatamente a construção que a Decisão 18 morde (ver o comentário dela). Aqui
+ * não há subconsulta correlacionada: imunidade por construção.
+ */
+export async function mapaDeContasManuais(
+  organizationId: string,
+  exec: ExecLeitura = db,
+): Promise<Map<string, ContaManual>> {
+  const rows = await exec
+    .select({ id: dataSources.id, name: dataSources.name, metadata: dataSources.metadata })
+    .from(dataSources)
+    .where(and(
+      eq(dataSources.organizationId, organizationId),
+      eq(dataSources.provider, PROVIDER_MANUAL),
+    ))
+
+  const mapa = new Map<string, ContaManual>()
+  for (const r of rows) {
+    const c = contaDeLinha(r.id, r.name, r.metadata)
+    if (c.accountId) mapa.set(c.accountId, c)
+  }
+  return mapa
+}
+
+/**
+ * Uma conta citada por um arquivo de importação — no cabeçalho ou nas linhas.
+ *
+ * Mora aqui e não em `staging-import.ts` porque as duas portas a devolvem: a
+ * tela de revisão a usa para avisar antes do clique, e `prever_importacao` para
+ * dizer ao modelo o que não vai vincular.
+ */
+export interface ResumoDeContaDoArquivo {
+  /** A grafia como o arquivo escreveu — a primeira vista dela. */
+  nomeDeclarado: string
+  /** `arq:<slug>`. Duas grafias do mesmo nome compartilham. */
+  accountId: string
+  /** A conta cadastrada que casou. `null` NÃO cria nada: a linha entra sem vínculo. */
+  conta: ContaManual | null
+  /** Quantas linhas normalizadas citam esta conta. */
+  linhas: number
+  /** Veio do cabeçalho do documento, não da coluna das linhas. */
+  doCabecalho: boolean
 }
 
 export interface ContaUsada {

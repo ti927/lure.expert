@@ -10,9 +10,12 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import {
   updateStagingRow, batchUpdateStaging, approveAndInsert,
-  setAllPendingDirection, setAllPendingEffectiveDate,
+  setAllPendingDirection, setAllPendingEffectiveDate, setStagingRowsAccount,
 } from '@/server/staging'
 import { AccountHeader, type ContaDoArquivo } from './account-header'
+import { CellCombobox, BatchCombobox } from '@/components/transacoes-shared/cell-combobox'
+import type { ContaDaLinha, EdicaoDeConta } from '@/lib/staging-import'
+import type { ResumoDeContaDoArquivo } from '@/lib/accounts'
 import type { TransactionStaging } from '@/db/schema/transactions-staging'
 import type { Document } from '@/db/schema/documents'
 
@@ -41,6 +44,8 @@ interface Row {
   direction: string | null
   description: string | null
   status: RowStatus
+  /** A conta desta linha — do arquivo, do cabeçalho ou escolhida aqui. */
+  conta: ContaDaLinha | null
 }
 
 interface EditCell {
@@ -58,22 +63,25 @@ interface ResumoImportacao {
   tipoDeRelatorio: 'movimentos' | 'balanco'
   dataDeReferencia: string | null
   folhasBp: number
+  contasDoArquivo: ResumoDeContaDoArquivo[]
+  semConta: number
   erro: string | null
 }
 
 interface Props {
   documentId: string
-  contasExistentes: { nome: string; rotulo: string }[]
+  contasExistentes: { accountId: string; nome: string; rotulo: string }[]
   initialData: {
     document: Document
     rows: TransactionStaging[]
     importedCount: number
     resumo: ResumoImportacao
     conta: ContaDoArquivo | null
+    contaPorLinha: Record<string, ContaDaLinha>
   }
 }
 
-function toRow(r: TransactionStaging): Row {
+function toRow(r: TransactionStaging, contas: Record<string, ContaDaLinha>): Row {
   return {
     id: r.id,
     rowIndex: r.rowIndex,
@@ -83,6 +91,7 @@ function toRow(r: TransactionStaging): Row {
     direction: r.direction,
     description: r.description,
     status: (r.status ?? 'pending') as RowStatus,
+    conta: contas[r.id] ?? null,
   }
 }
 
@@ -112,7 +121,7 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
   const isBp = resumo.tipoDeRelatorio === 'balanco'
   const isProcessing = doc.extractionStatus !== 'completed' && doc.extractionStatus !== 'failed'
 
-  const [rows, setRows] = useState<Row[]>(() => initialData.rows.map(toRow))
+  const [rows, setRows] = useState<Row[]>(() => initialData.rows.map(r => toRow(r, initialData.contaPorLinha)))
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editCell, setEditCell] = useState<EditCell | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -121,11 +130,13 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
   const [pollingTimedOut, setPollingTimedOut] = useState(false)
   const [dirFilter, setDirFilter] = useState<DirFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  // 'all' | '__sem__' (sem conta) | um accountId
+  const [contaFilter, setContaFilter] = useState<string>('all')
   const [, startTransition] = useTransition()
 
   useEffect(() => {
-    setRows(initialData.rows.map(toRow))
-  }, [initialData.rows])
+    setRows(initialData.rows.map(r => toRow(r, initialData.contaPorLinha)))
+  }, [initialData.rows, initialData.contaPorLinha])
 
   useEffect(() => {
     if (!isProcessing) return
@@ -151,11 +162,27 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
   const totalOutflow = rows.filter(r => r.status !== 'rejected' && r.direction === 'outflow' && r.amount).reduce((s, r) => s + Number(r.amount), 0)
   const netBalance   = totalInflow - totalOutflow
 
+  // As contas que APARECEM nesta tabela, para o filtro do cabeçalho. Vêm das
+  // linhas (e não do resumo do servidor) para acompanharem a edição otimista.
+  const contasNaTabela = useMemo(() => {
+    const m = new Map<string, ContaDaLinha>()
+    for (const r of rows) if (r.conta) m.set(r.conta.accountId, r.conta)
+    return Array.from(m.values())
+  }, [rows])
+
+  const naoCadastradas = resumo.contasDoArquivo.filter(c => !c.conta)
+
   const filteredRows = useMemo(() => rows.filter(r => {
     if (dirFilter    !== 'all' && r.direction !== dirFilter)  return false
     if (statusFilter !== 'all' && r.status    !== statusFilter) return false
+    if (contaFilter === '__sem__' && r.conta) return false
+    if (contaFilter !== 'all' && contaFilter !== '__sem__' && r.conta?.accountId !== contaFilter) return false
     return true
-  }), [rows, dirFilter, statusFilter])
+  }), [rows, dirFilter, statusFilter, contaFilter])
+
+  // Contada, não fixa: seleção, as 4 colunas que somem no balanço e a de conta
+  // entram e saem. O 9 fixo de antes já estava errado.
+  const colunas = (isImported ? 0 : 1) + 3 + (isBp ? 0 : 4)
 
   const totalPages     = Math.ceil(filteredRows.length / PAGE_SIZE)
   const pageRows       = filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
@@ -252,6 +279,52 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
       toast.error('Erro ao preencher a data de caixa.')
       router.refresh()
     }
+  }
+
+  /**
+   * A conta de uma ou de várias linhas.
+   *
+   * O `router.refresh()` no fim não é cosmético: a conta entra na chave de
+   * deduplicação, então mudar a conta de uma linha muda quantas linhas o
+   * arquivo tem de novo — e é esse número que o aviso azul mostra.
+   */
+  async function aplicarConta(rowIds: string[], edicao: EdicaoDeConta) {
+    if (rowIds.length === 0) return
+
+    if (edicao.modo !== 'do-arquivo') {
+      const alvo = edicao.modo === 'definir'
+        ? contasExistentes.find(c => c.nome === edicao.nome)
+        : undefined
+      const otimista: ContaDaLinha | null = alvo
+        ? { accountId: alvo.accountId, rotulo: alvo.rotulo, cadastrada: true }
+        : null
+      const ids = new Set(rowIds)
+      setRows(prev => prev.map(r => ids.has(r.id) ? { ...r, conta: otimista } : r))
+    }
+
+    const result = await setStagingRowsAccount(documentId, rowIds, edicao)
+    if ('error' in result) {
+      toast.error(result.error)
+      router.refresh()
+      return
+    }
+    const n = result.updated
+    const plural = n === 1 ? 'linha' : 'linhas'
+    toast.success(
+      edicao.modo === 'definir' ? `${n} ${plural} em ${result.conta?.nome}.`
+      : edicao.modo === 'sem-conta' ? `${n} ${plural} sem conta.`
+      : `${n} ${plural} de volta ao que o arquivo declarou.`,
+    )
+    router.refresh()
+  }
+
+  function contaEmLote(valor: string) {
+    const ids = Array.from(selected)
+    if (ids.length === 0 || !valor) return
+    setSelected(new Set())
+    if (valor === '__null__') { aplicarConta(ids, { modo: 'sem-conta' }); return }
+    const alvo = contasExistentes.find(c => c.accountId === valor)
+    if (alvo) aplicarConta(ids, { modo: 'definir', nome: alvo.nome })
   }
 
   async function handleImport() {
@@ -436,9 +509,9 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
         <span className="text-amber-600 font-medium">{pendingCount} pendentes</span>
         <span className="text-emerald-600 font-medium">{approvedCount} aprovadas</span>
         {rejectedCount > 0 && <span className="text-rose-600 font-medium">{rejectedCount} rejeitadas</span>}
-        {(dirFilter !== 'all' || statusFilter !== 'all') && (
+        {(dirFilter !== 'all' || statusFilter !== 'all' || contaFilter !== 'all') && (
           <button
-            onClick={() => { setDirFilter('all'); setStatusFilter('all') }}
+            onClick={() => { setDirFilter('all'); setStatusFilter('all'); setContaFilter('all') }}
             className="inline-flex items-center gap-1 text-primary hover:text-primary/80"
           >
             <X className="h-3 w-3" />Limpar filtros
@@ -452,8 +525,36 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
         conta={initialData.conta}
         contasExistentes={contasExistentes}
         totalLinhas={rows.length}
+        semConta={resumo.semConta}
+        contasDoArquivo={resumo.contasDoArquivo}
         readOnly={isImported}
       />
+
+      {/* ── Zona 2.22: Contas citadas e não cadastradas ─────────────────────── */}
+      {/* O arquivo NÃO cria conta: criar é ato explícito, aqui em cima ou em
+          /contas. Sem este aviso, a linha entraria sem vínculo em silêncio e a
+          conta apareceria em Transações sem existir em Contas. */}
+      {!isImported && !isBp && naoCadastradas.length > 0 && (
+        <div className="shrink-0 mx-6 mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-700" />
+          <div className="text-amber-900">
+            <span className="font-medium">
+              {naoCadastradas.length === 1
+                ? '1 conta citada no arquivo não existe no cadastro'
+                : `${naoCadastradas.length} contas citadas no arquivo não existem no cadastro`}
+            </span>
+            {' — '}
+            {naoCadastradas.map(c => `${c.nomeDeclarado} (${c.linhas} linha${c.linhas === 1 ? '' : 's'})`).join(' · ')}.
+            <div className="mt-0.5 text-xs">
+              Essas linhas entram <span className="font-medium">sem vínculo com a conta</span>: aparecem em
+              Transações com o nome que o arquivo deu, mas não contam em{' '}
+              <Link href="/contas" className="font-medium underline underline-offset-2">Contas</Link>.
+              Crie-as lá, ou escolha uma conta existente na coluna Conta. Contas conectadas por Open
+              Finance não podem ser citadas por nome.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Zona 2.25: Balanço sem plano patrimonial ────────────────────────── */}
       {/* Medido em 24/ago: `seed_categories_for_org` não cria uma única natureza
@@ -561,6 +662,23 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
           <Button size="sm" variant="outline" onClick={() => handleBatch('flip')}>
             <ArrowUpDown size={13} className="mr-1" />Inverter direção
           </Button>
+          {!isBp && contasExistentes.length > 0 && (
+            <div className="w-52">
+              <BatchCombobox
+                value=""
+                options={contasExistentes.map(c => ({ id: c.accountId, label: c.rotulo }))}
+                placeholder="Definir conta…"
+                onValueChange={contaEmLote}
+              />
+            </div>
+          )}
+          {!isBp && (
+            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => {
+              const ids = Array.from(selected); setSelected(new Set()); aplicarConta(ids, { modo: 'do-arquivo' })
+            }}>
+              Restaurar do arquivo
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} className="ml-auto text-muted-foreground">Cancelar</Button>
         </div>
       )}
@@ -611,6 +729,31 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
                   </th>
                 )}
                 <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">{isBp ? 'Conta' : 'Descrição'}</th>
+                {/* Conta — a do arquivo, linha a linha. Some no balanço, onde a
+                    coluna "Conta" acima já é a natureza patrimonial e onde a
+                    conta é do ARQUIVO: um seletor por linha não faria nada. */}
+                {!isBp && (
+                  <th className="px-3 py-2 w-44">
+                    <div className="flex items-center gap-1">
+                      <select
+                        value={contaFilter}
+                        onChange={e => { setContaFilter(e.target.value); setCurrentPage(1) }}
+                        className="max-w-[9rem] truncate text-xs font-medium text-muted-foreground bg-transparent border-none outline-none cursor-pointer appearance-none hover:text-foreground transition-colors"
+                      >
+                        <option value="all">Conta</option>
+                        <option value="__sem__">Sem conta</option>
+                        {contasNaTabela.map(c => (
+                          <option key={c.accountId} value={c.accountId}>{c.rotulo}</option>
+                        ))}
+                      </select>
+                      {contaFilter !== 'all' && (
+                        <button onClick={() => { setContaFilter('all'); setCurrentPage(1) }} className="text-muted-foreground hover:text-foreground">
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                )}
                 {/* Status — filtro no header */}
                 <th className="px-3 py-2 w-32">
                   <div className="flex items-center gap-1">
@@ -636,7 +779,7 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
             <tbody>
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={colunas} className="px-6 py-12 text-center text-sm text-muted-foreground">
                     Nenhuma linha corresponde ao filtro selecionado.
                   </td>
                 </tr>
@@ -778,6 +921,32 @@ export default function ReviewClient({ documentId, initialData, contasExistentes
                       </button>
                     )}
                   </td>
+
+                  {/* Conta — o rótulo do CADASTRO quando casou; o nome que o
+                      arquivo deu, em âmbar, quando não. O segundo caso é o que
+                      não pode passar em branco: a linha entra sem vínculo. */}
+                  {!isBp && (
+                    <td className="px-3 py-1.5">
+                      <div className="flex items-center gap-1">
+                        {row.conta && !row.conta.cadastrada && (
+                          <AlertTriangle size={12} className="shrink-0 text-amber-600" />
+                        )}
+                        <CellCombobox
+                          value={row.conta?.cadastrada ? row.conta.accountId : null}
+                          options={contasExistentes.map(c => ({ id: c.accountId, name: c.rotulo }))}
+                          placeholder={row.conta && !row.conta.cadastrada
+                            ? `${row.conta.rotulo} · não cadastrada`
+                            : '—'}
+                          disabled={isImported}
+                          onValueChange={v => {
+                            if (v === null) { aplicarConta([row.id], { modo: 'sem-conta' }); return }
+                            const alvo = contasExistentes.find(c => c.accountId === v)
+                            if (alvo) aplicarConta([row.id], { modo: 'definir', nome: alvo.nome })
+                          }}
+                        />
+                      </div>
+                    </td>
+                  )}
 
                   {/* Status */}
                   <td className="px-3 py-2.5">

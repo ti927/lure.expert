@@ -44,7 +44,7 @@ import {
 import {
   cabecalhoDoArquivoSchema, TIPOS_DE_RELATORIO, TIPOS_DE_CONTA, ROTULO_DE_CONTA,
 } from '@/lib/import-contract'
-import { listarContasUsadas } from '@/lib/accounts'
+import { listarContasUsadas, mapaDeContasManuais } from '@/lib/accounts'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -288,17 +288,27 @@ const listarContas: Ferramenta = {
     'As contas e cartões que aparecem nos lançamentos: id, nome, tipo, número, quantos lançamentos ' +
     'e o período. É o que traduz um `contaId` cru (que `listar_regras` e `consultar` devolvem) em ' +
     'algo legível, e o que permite preencher `filtros.contas` sem adivinhar. ' +
+    '`contasSemUso` traz as contas cadastradas que ainda não têm lançamento — é nelas que se pode ' +
+    'importar citando o nome, e sem esta lista uma conta recém-criada seria invisível. ' +
     '`nomeAmbiguo: true` marca contas que dividem o mesmo nome com outra — nesse caso use o número ' +
     'ou o período para desempatar, e NUNCA suponha qual é qual pelo nome.',
   entrada: alvo,
   escopo: 'leitura',
   async executar(args, ctx) {
     const scope = await escopoDe(ctx, String(args.organizationId))
-    const contas = await listarContasUsadas(scope.organizationId)
+    const [contas, cadastro] = await Promise.all([
+      listarContasUsadas(scope.organizationId),
+      mapaDeContasManuais(scope.organizationId),
+    ])
+    const usadas = new Set(contas.map(c => c.accountId))
+    const semUso = Array.from(cadastro.values())
+      .filter(c => !usadas.has(c.accountId))
+      .map(c => ({ accountId: c.accountId, nome: c.nome, tipo: c.tipo, numero: c.numero }))
     const ambiguas = contas.filter(c => c.nomeAmbiguo).length
     return {
       contas,
       total: contas.length,
+      ...(semUso.length > 0 ? { contasSemUso: semUso } : {}),
       ...(ambiguas > 0 ? {
         aviso: `${ambiguas} conta(s) dividem o nome com outra. Desempate pelo número ou pelo ` +
           'período antes de usar o id em qualquer filtro.',
@@ -1351,8 +1361,9 @@ const entradaPreverImportacao = alvo.extend({
   conta: z.string().trim().max(200).optional().describe(
     'Nome da conta/cartão do arquivo INTEIRO — um extrato é de uma conta só. Ex.: "Itaú PJ", ' +
     '"Caixa", "Cartão BTG". Preencher aqui CRIA a conta se ela ainda não existir, e ela passa a ' +
-    'aparecer em Contas e no filtro de Transações. Só use `conta` por linha se o arquivo misturar ' +
-    'mais de uma conta.',
+    'aparecer em Contas e no filtro de Transações. É o ÚNICO campo desta ferramenta que cria conta: ' +
+    'a `conta` de cada LINHA precisa já existir (confira com listar_contas). Vale para as linhas ' +
+    'que não declaram conta própria; use `conta` por linha se o arquivo misturar mais de uma.',
   ),
   tipoDeConta: z.enum(TIPOS_DE_CONTA).optional().describe(
     `Tipo da conta do arquivo: ${TIPOS_DE_CONTA.map(t => `${t} (${ROTULO_DE_CONTA[t]})`).join(', ')}.`,
@@ -1470,6 +1481,19 @@ const preverImportacao: Ferramenta = {
     if (plano.comNatureza < plano.novas) {
       avisos.push(`${plano.novas - plano.comNatureza} lançamento(s) entram sem natureza e serão ` +
         'classificados automaticamente depois.')
+    }
+    // A conta citada numa LINHA não cria conta. Sem este aviso, o lançamento
+    // entraria sem vínculo em silêncio: apareceria em Transações com o nome que
+    // o arquivo deu, e não contaria na tela Contas.
+    const semCadastro = plano.contasDoArquivo.filter(c => !c.conta)
+    if (semCadastro.length > 0) {
+      avisos.push(
+        `Estas contas aparecem nas linhas e NÃO existem no cadastro: ` +
+        `${semCadastro.map(c => `${c.nomeDeclarado} (${c.linhas} linha(s))`).join(', ')}. ` +
+        'Os lançamentos entram sem vínculo — não contam na tela Contas. Para criar uma delas, ' +
+        'informe-a em `conta` no nível do ARQUIVO (esse campo cria), ou peça ao usuário para ' +
+        'criá-la em Contas. Contas conectadas por Open Finance não podem ser citadas por nome.',
+      )
     }
 
     return {

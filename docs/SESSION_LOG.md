@@ -12,6 +12,65 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ A conta declarada por linha vira vínculo de verdade (1/set)
+
+**Origem:** Julio criou duas contas manuais em `/contas` ("Caixa Av. D" e "Caixa Espécie"), baixou a
+planilha modelo, preencheu a coluna `Conta` **com valor diferente por linha** e importou. A tela de
+revisão não mostrou nada disso e o bloco do cabeçalho pedia uma conta para o arquivo inteiro:
+*"não faz sentido, se eu já indiquei a conta no csv, ele deveria reconhecer não?"*
+
+**Verificado: 51/51 no script novo, 70/70 staging-import, 188/188 escrita MCP, 39/39 leitura MCP,
+13 ok em import-contract. `tsc`, lint e build limpos.**
+
+#### Ele estava certo, e metade já funcionava
+
+O contrato publicado (`FORMATO_DE_IMPORTACAO.md`) já prometia que a coluna vence o cabeçalho, e
+`normalizarLancamento` já fazia isso — as quatro colunas `transactions.account_*` sairiam certas e
+diferentes por linha. Três coisas faziam parecer o contrário:
+
+1. **O vínculo era único por arquivo.** `data_source_id` resolvido uma vez em
+   `approveAndInsert:322-356` e gravado igual em todas as linhas — e `/contas` conta lançamentos por
+   ele. As duas contas ficariam com "0 lançamentos" para sempre. Efeito colateral achado no
+   levantamento: com conta no cabeçalho, o filtro de `/transacoes` rotula TODAS as contas do arquivo
+   com o nome daquela.
+2. **A coluna Conta não existia** na tabela de revisão (só em BP, onde significa outra coisa).
+3. **O texto mentia**, e é o mais instrutivo: o bloco dizia *"vale para as 4 linhas deste arquivo"* e
+   o docstring do componente afirmava *"é de ARQUIVO e não de linha"* — a intenção de 24/ago, que a
+   implementação já tinha superado. **O código estava mais certo que a documentação interna dele.**
+
+#### O que mudou
+
+| Arquivo | O quê |
+|---|---|
+| `lib/accounts.ts` | `mapaDeContasManuais` (identidade `arq:<slug>` → conta, sem subconsulta correlacionada de propósito), `ResumoDeContaDoArquivo`, `contaDeLinha` extraída |
+| `lib/staging-import.ts` | `preparoDaLinha` com a precedência `__conta > __contrato > cabeçalho`, resolução por linha, `contasDoArquivo` e `semConta` no plano |
+| `server/staging.ts` | fonte **por linha**; reserva preguiçosa; `setStagingRowsAccount`; `contaPorLinha` (do razão quando já importado); `revalidatePath('/contas')` quando a conta veio das linhas |
+| `review-client.tsx` | coluna Conta com `CellCombobox`, filtro no header, lote (`BatchCombobox` + "Restaurar do arquivo"), aviso âmbar das não cadastradas |
+| `account-header.tsx` | três redações conforme `semConta`, resumo das contas do arquivo, e a regra de quem cria conta |
+| `lib/import-write.ts` | mesma resolução no MCP; **o cabeçalho passa a de fato criar** a conta, como a descrição promete desde a 4.5.C e o código nunca fez |
+| `lib/mcp/tools.ts` | aviso das contas não cadastradas em `prever_importacao`, `.describe()` nos dois lados, `contasSemUso` em `listar_contas` |
+
+#### As duas decisões que valem registro (detalhe na Decisão 26)
+
+**O arquivo nunca cria conta; a tela cria.** Escolha do Julio. Nome de linha que não casa → a linha
+entra **sem vínculo**, com aviso antes do clique. Um typo em 500 linhas criaria 500 contas fantasma,
+e apagar conta com lançamento é recusado de propósito.
+
+**"Sem conta" é sem VÍNCULO, não sem as colunas.** Zerar `account_*` faria o mesmo arquivo gerar
+chaves de dedup diferentes antes e depois de a conta ser criada — duplicaria a contabilidade em
+silêncio. Corolário preso por teste: a **resolução** contra o cadastro nunca entra na chave.
+
+#### O que a verificação encontrou
+
+`verify-staging-import` **falhou na asserção de isolamento** — "nenhuma chave `arq:` fora da
+organização de teste (são 5)". Investigado antes de tocar em qualquer coisa: os 5 são de
+**26/ago 14:29**, da bateria irreversível do MCP que o Julio autorizou, em "Financeiro Pessoal".
+Nada a ver com esta sessão. **O erro era da asserção**, que afirmava "o banco inteiro está limpo" em
+vez de "esta execução não escreveu fora da própria organização" — e vinha falhando havia seis dias.
+Passou a ter corte por `created_at >= INICIO`, nos dois scripts.
+
+---
+
 ### ✅ Comparação na consulta — orçado × realizado passa a ser possível pelo MCP (27/ago)
 
 **Origem:** Julio pediu ao claude.ai um gráfico comparativo de orçado × realizado; o expert respondeu

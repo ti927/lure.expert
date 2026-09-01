@@ -1,17 +1,20 @@
 'use client'
 
 /**
- * A conta deste arquivo.
+ * A conta PADRÃO deste arquivo — a das linhas que não declaram a sua.
  *
- * É de ARQUIVO e não de linha: um extrato é de uma conta só, e tipo e número
- * nunca variam entre linhas do mesmo documento. Quatro campos editáveis por
- * linha em 7.762 linhas seria trabalho inventado.
+ * A coluna `Conta` da planilha vence este bloco, **linha a linha**: é o que
+ * `docs/FORMATO_DE_IMPORTACAO.md` promete para o extrato consolidado, e o que
+ * `normalizarLancamento` faz. A coluna Conta da tabela abaixo mostra e edita
+ * cada uma.
  *
- * Preencher aqui **cria a conta**. Não existe cadastro de conta no app — o que
- * existe é cadastro de CONEXÃO (`data_sources` com `provider='pluggy'`), e as
- * contas de uma conexão são um array JSON que só o sync do Pluggy escreve. Por
- * isso conta caixa, ou conta corrente que o Open Finance não alcança, não tinha
- * como existir. Aqui ela nasce como `data_sources` com `provider='manual'`.
+ * O que continua sendo só daqui é **criar conta**. Não existe cadastro de conta
+ * no app — o que existe é cadastro de CONEXÃO (`data_sources` com
+ * `provider='pluggy'`), e as contas de uma conexão são um array JSON que só o
+ * sync do Pluggy escreve. Por isso conta caixa, ou conta corrente que o Open
+ * Finance não alcança, não tinha como existir. Aqui ela nasce como
+ * `data_sources` com `provider='manual'` — e uma conta citada numa LINHA e
+ * ausente do cadastro **não é criada**: a linha entra sem vínculo.
  */
 
 import { useState, useTransition } from 'react'
@@ -22,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { setDocumentAccount } from '@/server/staging'
 import { TIPOS_DE_CONTA, ROTULO_DE_CONTA, type TipoDeConta } from '@/lib/import-contract'
+import type { ResumoDeContaDoArquivo } from '@/lib/accounts'
 
 export interface ContaDoArquivo {
   nome: string
@@ -34,10 +38,22 @@ interface Props {
   conta: ContaDoArquivo | null
   contasExistentes: { nome: string; rotulo: string }[]
   totalLinhas: number
+  /** Linhas que não declaram conta própria — as que este bloco cobre. */
+  semConta: number
+  contasDoArquivo: ResumoDeContaDoArquivo[]
   readOnly: boolean
 }
 
-export function AccountHeader({ documentId, conta, contasExistentes, totalLinhas, readOnly }: Props) {
+/** Quantas linhas este bloco de fato governa, dito sem rodeio. */
+function alcance(semConta: number, totalLinhas: number): string {
+  if (semConta === 0) return 'nenhuma linha usa esta conta — todas declaram a sua'
+  if (semConta >= totalLinhas) return `vale para ${totalLinhas === 1 ? 'a linha' : `as ${totalLinhas} linhas`} deste arquivo`
+  return `vale para ${semConta === 1 ? 'a linha' : `as ${semConta} linhas`} que não declaram conta própria`
+}
+
+export function AccountHeader({
+  documentId, conta, contasExistentes, totalLinhas, semConta, contasDoArquivo, readOnly,
+}: Props) {
   const router = useRouter()
   const [editando, setEditando] = useState(false)
   const [nome, setNome] = useState(conta?.nome ?? '')
@@ -68,31 +84,54 @@ export function AccountHeader({ documentId, conta, contasExistentes, totalLinhas
       : null
 
     return (
-      <div className="shrink-0 mx-6 mb-3 flex items-center gap-2.5 rounded-lg border bg-muted/20 px-3 py-2 text-sm">
-        <Landmark size={14} className="shrink-0 text-muted-foreground" />
-        {rotulo ? (
-          <>
-            <span className="font-medium text-foreground">{rotulo}</span>
-            <span className="text-xs text-muted-foreground">
-              vale para {totalLinhas === 1 ? 'a linha' : `as ${totalLinhas} linhas`} deste arquivo
+      <div className="shrink-0 mx-6 mb-3 rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+        <div className="flex items-center gap-2.5">
+          <Landmark size={14} className="shrink-0 text-muted-foreground" />
+          {rotulo ? (
+            <>
+              <span className="font-medium text-foreground">{rotulo}</span>
+              <span className="text-xs text-muted-foreground">{alcance(semConta, totalLinhas)}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">
+              {semConta === 0 && contasDoArquivo.length > 0 ? (
+                <>Sem conta padrão — <span className="text-xs">todas as linhas declaram a sua.</span></>
+              ) : (
+                <>
+                  Sem conta —{' '}
+                  <span className="text-xs">
+                    os lançamentos entram sem banco/cartão, e a regra de categorização nasce global.
+                  </span>
+                </>
+              )}
             </span>
-          </>
-        ) : (
-          <span className="text-muted-foreground">
-            Sem conta —{' '}
-            <span className="text-xs">
-              os lançamentos entram sem banco/cartão, e a regra de categorização nasce global.
-            </span>
-          </span>
-        )}
-        {!readOnly && (
-          <Button
-            size="sm" variant="ghost"
-            className="ml-auto h-7 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setEditando(true)}
-          >
-            <Pencil size={12} className="mr-1" />{conta ? 'Alterar' : 'Informar conta'}
-          </Button>
+          )}
+          {!readOnly && (
+            <Button
+              size="sm" variant="ghost"
+              className="ml-auto h-7 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setEditando(true)}
+            >
+              <Pencil size={12} className="mr-1" />{conta ? 'Alterar' : 'Informar conta'}
+            </Button>
+          )}
+        </div>
+        {/* O que o ARQUIVO diz, que é o que o usuário preencheu e não via. */}
+        {contasDoArquivo.length > 0 && (
+          <p className="mt-1 pl-6 text-xs text-muted-foreground">
+            O arquivo cita {contasDoArquivo.length === 1 ? 'uma conta' : `${contasDoArquivo.length} contas`}:{' '}
+            {contasDoArquivo.map((c, i) => (
+              <span key={c.accountId}>
+                {i > 0 && ' · '}
+                <span
+                  className={c.conta ? 'font-medium text-foreground' : 'font-medium text-amber-700'}
+                  title={`${c.linhas} linha${c.linhas === 1 ? '' : 's'}${c.conta ? '' : ' — não cadastrada'}`}
+                >
+                  {c.nomeDeclarado}
+                </span>
+              </span>
+            ))}
+          </p>
         )}
       </div>
     )
@@ -156,9 +195,15 @@ export function AccountHeader({ documentId, conta, contasExistentes, totalLinhas
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Vale para {totalLinhas === 1 ? 'a linha' : `as ${totalLinhas} linhas`} deste arquivo. A conta
-        passa a aparecer em Contas e no filtro de Transações. Se ela já existe, escolha da lista em
-        vez de digitar de novo — grafias diferentes viram contas diferentes.
+        {alcance(semConta, totalLinhas).replace(/^vale/, 'Vale').replace(/^nenhuma/, 'Nenhuma')} — a
+        coluna Conta da planilha vence este bloco, linha a linha. A conta passa a aparecer em Contas e
+        no filtro de Transações. Se ela já existe, escolha da lista em vez de digitar de novo —
+        grafias diferentes viram contas diferentes.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        <span className="font-medium">Criar conta acontece aqui e em Contas, e em nenhum outro
+        lugar:</span> conta citada numa linha e não cadastrada não é criada — a linha entra sem
+        vínculo.
       </p>
     </div>
   )

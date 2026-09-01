@@ -36,6 +36,11 @@ import {
   type LancamentoParaGravar,
 } from '@/lib/import-contract'
 import { chavear, deduplica } from '@/lib/import-dedup'
+import {
+  mapaDeContasManuais,
+  type ContaManual,
+  type ResumoDeContaDoArquivo,
+} from '@/lib/accounts'
 
 type Exec = Pick<typeof db, 'select'>
 
@@ -94,7 +99,53 @@ export function cabecalhoDoDocumento(
  * Postgres como string com PONTO decimal ("467.62"), e um parser de moeda
  * brasileiro leria isso como milhar.
  */
-function brutoDaLinha(r: TransactionStaging, ctx: CabecalhoDoArquivo): Record<string, unknown> {
+/**
+ * A conta escolhida NA TELA para uma linha, guardada em `raw_data.__conta`.
+ *
+ * Fica **ao lado** de `__contrato` e não por cima: `raw_data` é o espelho fiel do
+ * que o arquivo disse (é copiado inteiro para `transactions.raw_data`, e é o que
+ * torna a camada 0 auditável). Sobrescrever `__contrato` apagaria a diferença
+ * entre "o arquivo disse Caixa" e "alguém corrigiu para Caixa".
+ *
+ * `nome: null` é o "sem conta" explícito — a única forma de uma linha recusar a
+ * conta do cabeçalho.
+ */
+export interface ContaEditadaNaLinha {
+  nome: string | null
+  tipo?: string | null
+  numero?: string | null
+}
+
+export function lerContaEditada(rawData: unknown): ContaEditadaNaLinha | null {
+  const raw = (rawData ?? {}) as Record<string, unknown>
+  const c = raw.__conta
+  if (!c || typeof c !== 'object') return null
+  const o = c as Record<string, unknown>
+  if (!('nome' in o)) return null
+  return {
+    nome: typeof o.nome === 'string' && o.nome.trim() ? o.nome.trim() : null,
+    tipo: typeof o.tipo === 'string' ? o.tipo : null,
+    numero: typeof o.numero === 'string' && o.numero.trim() ? o.numero.trim() : null,
+  }
+}
+
+/**
+ * Uma linha de staging vira a entrada bruta que o contrato sabe normalizar, com
+ * o contexto de arquivo que vale **para ela**.
+ *
+ * O contexto é por linha porque a precedência tem três degraus:
+ *
+ *     __conta (a escolha humana)  >  __contrato (o que o arquivo disse)  >  cabeçalho
+ *
+ * Os dois últimos já funcionavam dentro de `normalizarLancamento`
+ * (`texto('conta') ?? ctx.conta`). O primeiro precisa do contexto capado: em
+ * `texto()`, string vazia vira `null` e cai no cabeçalho, então "sem conta" não
+ * é representável pelo bruto — tem de ser um `ctx` sem conta.
+ */
+function preparoDaLinha(
+  r: TransactionStaging,
+  ctx: CabecalhoDoArquivo,
+): { bruto: Record<string, unknown>; ctx: CabecalhoDoArquivo; contaDaLinha: boolean } {
   const valor = r.amount === null ? null : Number(r.amount)
 
   // As colunas canônicas que não têm campo próprio na staging (conta, tipo e
@@ -108,11 +159,13 @@ function brutoDaLinha(r: TransactionStaging, ctx: CabecalhoDoArquivo): Record<st
 
   if (ctx.tipoDeRelatorio === 'balanco') {
     // A linha de balanço é conta + saldo. Sem data, sem sentido, sem descrição:
-    // a data vem do arquivo e o lado vem da natureza.
-    return { valor, natureza: contrato.natureza ?? r.description }
+    // a data vem do arquivo e o lado vem da natureza. A conta também: o ramo de
+    // balanço de `normalizarLancamento` lê só `ctx`, e por isso a coluna Conta
+    // por linha não existe nem no plano nem na tela para BP.
+    return { bruto: { valor, natureza: contrato.natureza ?? r.description }, ctx, contaDaLinha: false }
   }
 
-  return {
+  const bruto: Record<string, unknown> = {
     ...contrato,
     competencia: r.date,
     caixa: r.effectiveDate,
@@ -120,6 +173,27 @@ function brutoDaLinha(r: TransactionStaging, ctx: CabecalhoDoArquivo): Record<st
     valor,
     sentido: r.direction,
   }
+
+  const edicao = lerContaEditada(r.rawData)
+  if (!edicao) {
+    return { bruto, ctx, contaDaLinha: Boolean(contrato.conta?.trim()) }
+  }
+
+  // Com edição, o cabeçalho não responde mais por esta linha — nem para
+  // completar tipo/número, que passariam a descrever outra conta.
+  const ctxSemConta: CabecalhoDoArquivo = { ...ctx, conta: null, tipoDeConta: null, numeroDaConta: null }
+
+  if (!edicao.nome) {
+    delete bruto.conta
+    delete bruto.tipoDeConta
+    delete bruto.numeroDaConta
+    return { bruto, ctx: ctxSemConta, contaDaLinha: false }
+  }
+
+  bruto.conta = edicao.nome
+  bruto.tipoDeConta = edicao.tipo ?? ''
+  bruto.numeroDaConta = edicao.numero ?? ''
+  return { bruto, ctx: ctxSemConta, contaDaLinha: true }
 }
 
 export interface LinhaNormalizada {
@@ -128,7 +202,35 @@ export interface LinhaNormalizada {
   /** `null` quando o tipo de relatório não deduplica (balanço). */
   chave: string | null
   duplicada: boolean
+  /**
+   * A conta CADASTRADA a que a linha se vincula — é ela que dá o
+   * `data_source_id`. `null` significa que nenhuma casou, e **nada é criado**:
+   * a linha entra sem vínculo, mantendo as colunas `account_*`.
+   */
+  conta: ContaManual | null
+  /** O que a linha (ou o cabeçalho) declarou, mesmo quando não casou com o cadastro. */
+  contaDeclarada: { nome: string; accountId: string } | null
 }
+
+/** O que a tela mostra na coluna Conta de cada linha. */
+export interface ContaDaLinha {
+  accountId: string
+  rotulo: string
+  /** `false` = o arquivo citou, o cadastro não tem. A linha entra sem vínculo. */
+  cadastrada: boolean
+}
+
+/**
+ * A edição de conta feita na tela de revisão.
+ *
+ * `definir` só aceita conta que JÁ existe: o arquivo (e a edição sobre ele)
+ * nunca cria conta — criar é ato explícito, em `/contas` ou no bloco do
+ * cabeçalho.
+ */
+export type EdicaoDeConta =
+  | { modo: 'definir'; nome: string }
+  | { modo: 'sem-conta' }
+  | { modo: 'do-arquivo' }
 
 export interface LinhaRecusada {
   rowIndex: number
@@ -146,6 +248,10 @@ export interface PlanoDeStaging {
   duplicadas: number
   /** Falso para balanço — snapshot se substitui, não se acumula. */
   deduplicando: boolean
+  /** Uma entrada por conta distinta citada, na ordem em que apareceram. */
+  contasDoArquivo: ResumoDeContaDoArquivo[]
+  /** Linhas normalizadas que não citam conta nenhuma — nem própria, nem do cabeçalho. */
+  semConta: number
 }
 
 /**
@@ -170,13 +276,51 @@ export async function planejarStaging(
   const normalizadas: LinhaNormalizada[] = []
   const recusadas: LinhaRecusada[] = []
 
+  // O cadastro inteiro numa query só, antes do laço. A resolução é por
+  // IDENTIDADE (`arq:<slug>`), não por texto — ver `mapaDeContasManuais`.
+  const cadastro = await mapaDeContasManuais(organizationId, exec)
+  const porConta = new Map<string, ResumoDeContaDoArquivo>()
+  let semConta = 0
+
   for (const r of linhasEmOrdem) {
-    const n = normalizarLancamento(brutoDaLinha(r, cabecalho), cabecalho)
-    if (n.ok) {
-      normalizadas.push({ staging: r, valor: n.valor, chave: null, duplicada: false })
-    } else {
+    const p = preparoDaLinha(r, cabecalho)
+    const n = normalizarLancamento(p.bruto, p.ctx)
+    if (!n.ok) {
       recusadas.push({ rowIndex: r.rowIndex, descricao: r.description ?? '', motivo: n.motivo })
+      continue
     }
+
+    // **A resolução não toca `n.valor`.** As quatro colunas `account_*` são
+    // gravadas do jeito que o arquivo declarou, casando com o cadastro ou não —
+    // e é isso que mantém a chave de dedup estável: se ela dependesse de a conta
+    // estar cadastrada, o mesmo arquivo geraria chaves diferentes antes e depois
+    // de alguém criar a conta, e a segunda importação duplicaria a
+    // contabilidade em silêncio.
+    const accountId = n.valor.accountId
+    let conta: ContaManual | null = null
+    let contaDeclarada: { nome: string; accountId: string } | null = null
+
+    if (accountId) {
+      conta = cadastro.get(accountId) ?? null
+      contaDeclarada = { nome: n.valor.accountName ?? accountId, accountId }
+      const resumo = porConta.get(accountId)
+      if (resumo) {
+        resumo.linhas++
+        if (p.contaDaLinha) resumo.doCabecalho = false
+      } else {
+        porConta.set(accountId, {
+          nomeDeclarado: contaDeclarada.nome,
+          accountId,
+          conta,
+          linhas: 1,
+          doCabecalho: !p.contaDaLinha,
+        })
+      }
+    } else {
+      semConta++
+    }
+
+    normalizadas.push({ staging: r, valor: n.valor, chave: null, duplicada: false, conta, contaDeclarada })
   }
 
   const deduplicando = deduplica(cabecalho.tipoDeRelatorio)
@@ -217,5 +361,7 @@ export async function planejarStaging(
     aInserir,
     duplicadas: normalizadas.length - aInserir.length,
     deduplicando,
+    contasDoArquivo: Array.from(porConta.values()),
+    semConta,
   }
 }

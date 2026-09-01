@@ -85,10 +85,26 @@ Esta é a distinção que resolve a maior parte da confusão.
 | **Arquivo** | tipo de relatório · **data de referência** (obrigatória no balanço) · conta · tipo e número da conta · moeda | no formulário de `/upload`, e no cabeçalho da tela de conferência |
 | **Linha** | as colunas da planilha | na planilha |
 
-**A conta é do arquivo.** Um extrato é de uma conta só, e o tipo e o número nunca mudam entre
-as linhas dele. Preencher isso linha a linha em 7.762 linhas seria trabalho inventado. As
-colunas de conta existem na planilha para o caso raro do extrato consolidado — quando vêm
-preenchidas, vencem o cabeçalho.
+**A conta do cabeçalho é o PADRÃO — a das linhas que não declaram a sua.** Um extrato é de uma
+conta só, e preencher a coluna em 7.762 linhas seria trabalho inventado; por isso o cabeçalho
+existe. Mas as colunas de conta da planilha **vencem o cabeçalho, linha a linha** — é o caso do
+extrato consolidado e o do caixa dividido em duas contas. A tela de conferência mostra a conta de
+cada linha, e deixa trocá-la ali (uma, ou várias selecionadas).
+
+**Conta citada numa linha precisa JÁ EXISTIR.** O arquivo nunca cria conta: se o nome não casar
+com nenhuma conta cadastrada, a linha entra **sem vínculo** — ela aparece em Transações com o nome
+que o arquivo deu, mas não conta em `/contas`. A tela avisa quais são, e quantas linhas, **antes**
+do clique. Criar conta acontece em dois lugares só: em `/contas`, ou no bloco de conta do
+cabeçalho da conferência. Grafia não separa contas — "Caixa Av. D", "Caixa Av D" e "caixa av d"
+são a mesma; nomes realmente diferentes ("Itaú PJ" × "Itaú Pessoa Jurídica"), não.
+
+**Conta conectada por Open Finance não é alcançável por nome.** A identidade dela é o id do
+provedor, não o nome — escrever "Sicredi" na coluna não vincula à conexão do Sicredi.
+
+> ⚠️ **A conta faz parte da chave de deduplicação.** Trocar a conta de uma linha (na planilha ou na
+> tela) faz dela uma linha diferente para a dedup — o mesmo arquivo com a conta corrigida entra de
+> novo. O que **não** muda a chave é a conta passar a existir no cadastro: importar antes e depois
+> de criá-la continua deduplicando.
 
 ---
 
@@ -134,7 +150,7 @@ de caixa no dia errado.
 | Valor | ✅ | Sempre positivo |
 | Sentido | ✅ | `Entrada` ou `Saída` |
 | Moeda | | Em branco = BRL |
-| Conta | | Nome da conta ou cartão |
+| Conta | | Nome da conta ou cartão. Vence o cabeçalho, e precisa já existir no cadastro |
 | Tipo de conta | | `C. Corrente`, `Poupança`, `Cartão`, `Adquirente`, `Outra` |
 | Número da conta | | Agência/conta, ou final do cartão |
 | Natureza | | Código ou nome do plano de contas |

@@ -1486,3 +1486,95 @@ para `filtros.contas`.
 
 Sem `comparacao` na spec, a linha **não ganha campo novo** — é asserção do teste, não intenção. E o
 realizado de cada linha é idêntico ao da consulta sem comparação: comparar acrescenta, não altera.
+
+---
+
+## Decisão 26 — A conta é da LINHA; o cabeçalho é o padrão dela (1/set)
+
+**A pergunta que originou a decisão**, do Julio: ele criou duas contas manuais ("Caixa Av. D" e
+"Caixa Espécie"), baixou a planilha modelo, preencheu a coluna `Conta` **com valor diferente por
+linha**, importou — e a tela não reconheceu nada: *"não faz sentido, se eu já indiquei a conta no
+csv, ele deveria reconhecer não?"*.
+
+### Ele estava certo, e metade do caminho já funcionava
+
+`docs/FORMATO_DE_IMPORTACAO.md` já prometia que a coluna vence o cabeçalho, e
+`normalizarLancamento` já fazia isso: `texto('conta') ?? ctx.conta`. As quatro colunas
+`transactions.account_*` saíam **certas e diferentes por linha**. O que faltava era o resto:
+
+| # | Defeito | Efeito |
+|---|---|---|
+| 1 | `data_source_id` era **um por arquivo** | `/contas` conta por ele → as duas contas ficariam com "0 lançamentos" **para sempre**, e o filtro de `/transacoes` rotularia todas as contas com o nome da conta do cabeçalho |
+| 2 | A revisão não tinha coluna Conta em movimentos | o dado viajava invisível dentro de `raw_data` |
+| 3 | O bloco dizia *"vale para as N linhas deste arquivo"*, e o componente afirmava *"é de ARQUIVO e não de linha"* | o texto contradizia o contrato publicado, e foi ele que mandou o usuário escolher uma conta só |
+
+O nº 3 é o mais instrutivo: **o código estava mais certo que a própria documentação interna dele.**
+O comentário descrevia a intenção original (24/ago), a implementação evoluiu para o extrato
+consolidado, e ninguém voltou para reescrever a frase.
+
+### O que a linha decide, e o que ela não pode decidir
+
+**Decide o vínculo.** `approveAndInsert` e `aplicarImportacao` resolvem `data_source_id` **por
+linha**, contra `mapaDeContasManuais` — o mapa `arq:<slug> → conta`, a mesma identidade que
+`garantirContaManual` usa. A fonte de reserva (a conta do cabeçalho, ou a fonte genérica por origem)
+virou **preguiçosa**: arquivo cujas linhas todas resolvem não cria mais a `data_sources`
+`Upload — …` que nascia sem uso.
+
+**Não cria conta.** Decisão do Julio, e é a assimetria central desta sessão: o campo do **cabeçalho**
+cria (é ato explícito de quem digita), a coluna da **linha** não. Nome que não casa → a linha entra
+**sem vínculo**, e a tela avisa quais nomes e quantas linhas **antes** do clique. O motivo é o custo
+do erro: um typo em 500 linhas criaria 500 contas fantasma, e apagar conta com lançamento é recusado
+de propósito (Decisão 22).
+
+### "Sem conta" é sem VÍNCULO, não sem as colunas
+
+A linha não cadastrada **mantém** `account_id`/`account_name`/`account_type`/`account_number`. Duas
+razões, e a primeira é a que não podia ser diferente:
+
+1. **A conta entra na chave de dedup** (`import-dedup.ts`). Se as colunas fossem zeradas por não
+   haver cadastro, o mesmo arquivo geraria chaves diferentes antes e depois de alguém criar a conta
+   — e a segunda importação **duplicaria a contabilidade em silêncio**.
+2. `listarContasUsadas` trata o **uso** como fonte da verdade do que existe; zerar apagaria a única
+   prova de que o arquivo citou aquela conta. `metadata.contaNaoCadastrada` guarda o nome, que é o
+   que tornaria um backfill futuro possível sem reprocessar arquivo nenhum.
+
+**Corolário, e é a asserção que prende tudo:** a resolução contra o cadastro **nunca entra na
+chave**. Ela decide o vínculo, não a identidade da linha. O teste prova nos dois sentidos — trocar a
+conta de uma linha a torna nova para a dedup (a conta está na assinatura), mas **criar a conta e
+reimportar o mesmo arquivo continua deduplicando**.
+
+### A edição da tela mora em `raw_data.__conta`, ao lado do que o arquivo disse
+
+Não por cima de `__contrato`, e não em coluna nova na staging. `raw_data` é o espelho fiel do
+arquivo — é copiado inteiro para `transactions.raw_data` e é o que torna a camada 0 auditável.
+Sobrescrever apagaria a diferença entre *"o arquivo disse Caixa"* e *"alguém corrigiu para Caixa"*.
+Coluna na staging custaria migration, replicaria quatro campos e **não serviria ao MCP**, que não usa
+staging.
+
+A precedência, escrita num lugar só (`preparoDaLinha`):
+
+```
+__conta (a escolha humana)  >  __contrato (o que o arquivo disse)  >  cabeçalho
+```
+
+`__conta = { nome: null }` é o "sem conta" explícito — a única forma de uma linha **recusar** a conta
+do cabeçalho. Ele precisa do contexto capado, e não do bruto vazio: em `normalizarLancamento`,
+string vazia vira `null` e cai no cabeçalho de volta.
+
+### No balanço, a conta continua sendo do arquivo
+
+O ramo de balanço de `normalizarLancamento` lê só `ctx`, e `brutoDaLinha` nem repassa `__contrato`.
+Então a coluna não existe no plano **nem na tela** para BP — um seletor por linha ali seria um
+controle que comprovadamente não faz nada. (E "Conta" no BP já é o rótulo da natureza patrimonial.)
+
+### O que esta decisão NÃO faz
+
+**Não faz backfill.** Os lançamentos já importados mantêm o `data_source_id` de nível de arquivo. O
+`UPDATE` seria mecânico — as colunas `account_*` já estão certas por linha desde a 4.5.B — mas
+moveria lançamento entre fontes retroativamente, mudando contagens sobre dado já confirmado por
+humano. (Impacto real hoje: nulo. Os 7.762 importados por arquivo não têm conta nenhuma.)
+
+**Não alcança conta do Pluggy.** A identidade dela é o id do provedor, não `arq:<slug>` — escrever
+"Sicredi" na coluna não vincula à conexão do Sicredi, e a tela diz isso. Vincular faria linha
+importada pendurar numa fonte sincronizada e tornaria as duas origens indistinguíveis; é o mesmo nó
+de que depende a pendência do saldo bancário.
