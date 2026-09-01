@@ -138,7 +138,57 @@ Ao montar, restaura do storage **somente se a URL não tiver parâmetros** (resp
 
 ---
 
-## 9. Checklist antes de criar uma nova tabela
+## 9. Largura de coluna redimensionável (opt-in)
+
+Implementado em `/transacoes` (1/set/2026). **É opt-in, não obrigatório** — as matrizes de 12 meses
+(`/dre`, `/fluxo`, `/orcamento`, `/balanco`) têm colunas de largura homogênea, onde arrastar resolve
+pouco e a alça atrapalha o clique no cabeçalho.
+
+```tsx
+// 1. A lista de colunas vive em src/lib/column-widths.ts, NÃO na tela — é o que
+//    permite o teste afirmar sobre a lista real.
+const COLUNAS = [
+  { id: 'sel',  largura: 36, fixa: true },   // utilidade: sem alça
+  { id: 'desc', largura: 200 },
+  ...
+]
+
+// 2. No client component
+const cols = useColumnWidths('transacoes', COLUNAS)
+
+<table ref={cols.tableRef} style={{ width: cols.total }} className="min-w-full table-fixed ...">
+  <colgroup>{COLUNAS.map(c => <col key={c.id} {...cols.propsDaColuna(c.id)} />)}</colgroup>
+  <thead><tr>
+    <th className="group/col relative px-2 py-1">
+      <ColHeader …/>
+      <ResizeHandle onPointerDown={e => cols.iniciarArrasto(id, e)} onDoubleClick={() => cols.restaurarColuna(id)} />
+    </th>
+  </tr></thead>
+```
+
+Três regras que não são estéticas:
+
+- **`table-fixed` é pré-requisito.** Com layout automático a largura depende do conteúdo de todas as
+  linhas, e arrastar deixa de ser previsível.
+- **A largura da tabela é a soma das colunas**, e `min-w-full` cobre o caso de a soma caber no
+  contêiner. `w-full` com `min-w-[N]` — o que `/transacoes` tinha — transforma as larguras
+  declaradas em **proporções**: o navegador distribui a diferença, e arrastar uma coluna encolhe as
+  outras sozinhas.
+- **O arrasto escreve no DOM, não no estado.** Com `pageSize` de até 1.000 linhas, `setState` por
+  `pointermove` trava o gesto. O estado e o `localStorage` só são tocados ao soltar.
+
+Restaurar tem dois caminhos, de propósito: **duplo-clique na alça** devolve aquela coluna; o botão
+**Larguras** (aparece só quando algo saiu do padrão, ao lado de "Limpar") devolve todas — é a rede
+de segurança de quem arrastou até não achar mais a coluna.
+
+**Persistência:** `localStorage`, chave `lure:<rota>:colwidths` — **separada da de filtros**, senão
+"Limpar filtros" levaria o layout junto. É por **navegador**, não por usuário: a mesma pessoa em duas
+máquinas vê duas larguras. Per-usuário exigiria tabela de preferência e migration, e ficou declarado
+como v2 em `src/lib/column-widths.ts`.
+
+---
+
+## 10. Checklist antes de criar uma nova tabela
 
 - [ ] `page.tsx` tem wrapper `h-full flex flex-col overflow-hidden`
 - [ ] Client component tem `flex flex-col h-full overflow-hidden`
@@ -150,3 +200,5 @@ Ao montar, restaura do storage **somente se a URL não tiver parâmetros** (resp
 - [ ] Rodapé unifica totais selecionados + paginação em uma linha
 - [ ] Filtros persistidos em `localStorage` com chave `lure:<rota>:filters`
 - [ ] `PAGE_SIZE = 100` (ou justificativa documentada para valor diferente)
+- [ ] Largura redimensionável: decidido se entra (seção 9) — e, se entrar, a lista de colunas mora
+      em `src/lib/column-widths.ts`, nunca na tela

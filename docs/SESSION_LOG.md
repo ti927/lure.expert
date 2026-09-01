@@ -12,6 +12,78 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Colunas redimensionáveis em /transacoes — v1 (1/set)
+
+**Origem:** Julio mandou o print de `/transacoes` com os cabeçalhos truncados ("V...", "Banco/...",
+"Tip", "C. cu...", "Un. ...") e pediu que eu levantasse *"a possibilidade e/ou dificuldades das
+colunas serem redimensionáveis e salvar o tamanho por usuário"*. Depois do levantamento ele
+escolheu: **v1 só com o arrasto**; ver/ocultar coluna fica para depois.
+
+**Verificado: 37/37 em `scripts/verify-column-widths.ts`. `tsc`, lint e build limpos (41 rotas).**
+
+#### O levantamento, e o que ele separou
+
+A tela **já tinha o substrato certo**: `table-fixed` + `<colgroup>` com 13 `<col>`. Com layout fixo a
+largura sai do `<col>` e não do conteúdo, então arrastar é mudar um valor e o reflow é barato. Foi o
+que tornou isto uma sessão em vez de uma reescrita — nenhuma outra tabela do app tem isso.
+
+Quatro dificuldades reais foram levantadas antes de escrever código, e três viraram decisão:
+
+1. **"Por usuário" não existe no app.** Toda preferência de tela é `localStorage` (27 ocorrências em
+   11 arquivos) — por NAVEGADOR. Não há tabela de preferência de usuário (`memberships` guarda papel
+   e convite, sem jsonb). Julio escolheu a v1 por navegador; per-usuário é migration e fica para
+   depois, **declarado no topo de `lib/column-widths.ts`** para não virar promessa implícita.
+2. **As larguras de hoje eram proporção, não tamanho.** A `<table>` era `w-full min-w-[1470px]` e a
+   soma dos `<col>` dá **1.462px** — o navegador distribuía a diferença entre as colunas. Com isso,
+   arrastar uma faria as outras encolherem sozinhas, e leria como defeito. Agora a largura da tabela
+   é a soma (`style={{ width }}`) e `min-w-full` preserva o comportamento em tela larga.
+3. **O cabeçalho já tem três zonas clicáveis** (ordenar, filtrar, limpar). A alça é uma faixa
+   absoluta de 8px na borda direita do `<th>`, com `setPointerCapture` e `stopPropagation` — sem
+   isso o gesto abre o popover do filtro ou inverte a ordenação.
+4. **1.000 linhas por página.** `setState` a cada `pointermove` re-renderizaria as mil a cada pixel.
+   O arrasto escreve `style.width` direto no `<col>` e na `<table>`; o estado (e o `localStorage`) só
+   são tocados no `pointerup`.
+
+#### O que mudou
+
+| Arquivo | O quê |
+|---|---|
+| `lib/column-widths.ts` **(novo)** | A regra pura: `LARGURA_MINIMA` 60 / `LARGURA_MAXIMA` 900, `clampLargura`, `lerLarguras` (tolerante), `larguraParaSalvar` (**só a diferença**), `larguraTotal`, `temCustomizacao` e `COLUNAS_TRANSACOES` — a lista real, aqui para o teste afirmar sobre ela |
+| `components/transacoes-shared/column-resize.tsx` **(novo)** | `useColumnWidths` (restauro na montagem, arrasto no DOM, gravação no soltar, restaurar coluna/tudo) + `ResizeHandle` |
+| `transacoes-client.tsx` | `<colgroup>` gerado da lista; `<table>` com largura = soma; `ThRedim` (módulo, não closure) em 11 cabeçalhos; botão **Larguras** na barra, ao lado de Limpar |
+| `scripts/verify-column-widths.ts` **(novo)** | 37 asserções, sem banco |
+| `docs/DATA_TABLE_PATTERN.md` | Seção 10 — o padrão é **opt-in**, e por quê |
+
+#### Decisões que ficaram no código
+
+- **Grava só o que difere do padrão.** Salvar as 13 congelaria o layout de hoje no navegador de quem
+  mexeu numa só: coluna nova, ou padrão ajustado num deploy futuro, nunca alcançaria essa pessoa. O
+  teste prende os dois lados — a coluna arrastada fica, a não arrastada segue o padrão novo.
+- **Chave própria** (`lure:transacoes:colwidths`), separada da de filtros: largura não é filtro, e
+  "Limpar" não pode levar o layout junto.
+- **Piso de 60px e id desconhecido descartado.** Os dois defeitos que este arquivo existe para
+  impedir são silenciosos: largura 0 gravada faz a coluna sumir **e recarregar não desfaz**; id de
+  uma coluna removida somaria na largura da tabela sem nada ser desenhado.
+- **Coluna fixa ignora o storage** — nem editando o JSON à mão a caixa de seleção muda de tamanho.
+- **`ThRedim` no módulo, nunca dentro do componente**: componente criado a cada render remonta a
+  subárvore, e a subárvore aqui é o filtro da coluna — o campo de descrição perderia o texto a cada
+  tecla.
+- **Não entrou:** ver/ocultar e reordenar coluna (a próxima conversa), auto-ajuste por duplo-clique
+  (com `table-fixed` exigiria medir o conteúdo de mil linhas) e as outras tabelas do app.
+
+#### O que o teste encontrou
+
+- **`clampLargura(Infinity)` caía no PISO**, porque `!Number.isFinite` mandava tudo para o mínimo.
+  Só o `NaN` precisa de ramo (ele atravessa `Math.max`/`Math.min` intacto e viraria `width: NaNpx`,
+  descartado em silêncio pelo navegador); infinito o próprio clamp resolve. E `lerLarguras` passou a
+  descartar não-finito — vindo do storage é corrupção, e o padrão da coluna é melhor resposta que o
+  piso.
+- **Minha aritmética da soma estava errada**: eu havia contado as duas colunas de utilidade como 9px
+  (o número da classe `w-9`) em vez de 36px, e escrito "1.408" na documentação. São **1.462**, o que
+  torna a mudança visual ainda menor — o `min-w-[1470px]` antigo estava a 8px, não a 62.
+
+---
+
 ### ✅ A organização escolhe quando os bancos são sincronizados (1/set)
 
 **Origem:** ao explicar como as conexões Pluggy se mantêm logadas, mencionei o cron das 03:00 — e

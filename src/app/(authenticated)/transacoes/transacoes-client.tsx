@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ChevronLeft, ChevronRight, ChevronDown, Layers, Trash2, Bot, X, Split,
+  ChevronLeft, ChevronRight, ChevronDown, Layers, Trash2, Bot, X, Split, RotateCcw,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,8 @@ import {
   MultiSelectFilter, AmountFilter, DescFilter, DirectionFilter, ReportTypeFilter,
 } from '@/components/transacoes-shared/filters'
 import { CellCombobox, CategoryCellCombobox } from '@/components/transacoes-shared/cell-combobox'
+import { useColumnWidths, ResizeHandle } from '@/components/transacoes-shared/column-resize'
+import { COLUNAS_TRANSACOES as COLUNAS } from '@/lib/column-widths'
 import { BatchClassifyDialog } from '@/components/transacoes-shared/batch-classify-dialog'
 import { AllocationDialog } from '@/components/transacoes-shared/allocation-dialog'
 import { BatchAllocationDialog } from '@/components/transacoes-shared/batch-allocation-dialog'
@@ -99,6 +101,31 @@ function formatBRL(amount: string | number): string {
 //  src/components/transacoes-shared/. Importados no topo do arquivo.)
 
 
+/**
+ * Cabeçalho com alça de redimensionamento.
+ *
+ * Definido no MÓDULO, nunca dentro do componente: um componente criado a cada
+ * render remonta a subárvore, e a subárvore aqui é o filtro da coluna — o campo
+ * de descrição perderia o texto digitado a cada tecla.
+ */
+function ThRedim({
+  id, cols, children,
+}: {
+  id: string
+  cols: ReturnType<typeof useColumnWidths>
+  children: React.ReactNode
+}) {
+  return (
+    <th className="group/col relative px-2 py-1">
+      {children}
+      <ResizeHandle
+        onPointerDown={e => cols.iniciarArrasto(id, e)}
+        onDoubleClick={() => cols.restaurarColuna(id)}
+      />
+    </th>
+  )
+}
+
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
 const LS_FILTERS_KEY = 'lure:transacoes:filters'
@@ -154,6 +181,10 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
     useState<{ count: number; custoEstimadoUsd: number } | null>(null)
   const [fromLocal, setFromLocal] = useState(searchParams.from ?? '')
   const [toLocal, setToLocal] = useState(searchParams.to ?? '')
+
+  // Larguras de coluna: por navegador, chave própria (largura não é filtro, e
+  // "Limpar" não pode levar o layout junto).
+  const cols = useColumnWidths('transacoes', COLUNAS)
 
   useEffect(() => {
     serverRowsRef.current = data.rows
@@ -358,6 +389,17 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
               )}
             </div>
           </div>
+          {cols.customizado && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={cols.restaurarTudo}
+              className="h-7 text-xs gap-1"
+              title="Devolve as colunas à largura padrão"
+            >
+              <RotateCcw className="h-3 w-3" />Larguras
+            </Button>
+          )}
           {hasFilters && (
             <Button variant="ghost" size="sm" onClick={() => { try { localStorage.removeItem(LS_FILTERS_KEY) } catch { /* */ }; setFromLocal(''); setToLocal(''); router.push('/transacoes') }} className="h-7 text-xs gap-1">
               <X className="h-3 w-3" />Limpar
@@ -384,21 +426,17 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
       {/* ── Tabela (scroll interno) ────────────────────────────────────────── */}
       <div className="flex-1 min-h-0 overflow-hidden px-6 pb-0">
         <div className="h-full overflow-auto border rounded-lg">
-            <table className="w-full text-sm table-fixed min-w-[1470px] [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0">
+            {/* `min-w-full` preserva o comportamento de sempre em tela larga: se a
+                soma das colunas couber no contêiner, a tabela ainda ocupa a
+                largura toda. Passando disso, manda a soma — e é ela que produz a
+                rolagem lateral. */}
+            <table
+              ref={cols.tableRef}
+              style={{ width: cols.total }}
+              className="min-w-full text-sm table-fixed [&_td]:border-r [&_th]:border-r [&_td]:border-border/20 [&_th]:border-border/20 [&_td:last-child]:border-r-0 [&_th:last-child]:border-r-0"
+            >
               <colgroup>
-                <col className="w-9" />
-                <col className="w-[90px]" />
-                <col className="w-[200px]" />
-                <col className="w-[110px]" />
-                <col className="w-[140px]" />
-                <col className="w-[80px]" />
-                <col className="w-[70px]" />
-                <col className="w-[180px]" />
-                <col className="w-[130px]" />
-                <col className="w-[120px]" />
-                <col className="w-[120px]" />
-                <col className="w-[150px]" />
-                <col className="w-9" />
+                {COLUNAS.map(c => <col key={c.id} {...cols.propsDaColuna(c.id)} />)}
               </colgroup>
               <thead className="sticky top-0 z-10">
                 <tr className="bg-muted border-b">
@@ -407,73 +445,73 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                     <input type="checkbox" className="rounded border-input" checked={allSelected} ref={el => { if (el) el.indeterminate = someSelected }} onChange={toggleAll} />
                   </th>
                   {/* Data */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="date" cols={cols}>
                     <ColHeader hasValue={false} onClear={() => {}} sortKey="date" currentSort={searchParams.sort} onSort={() => toggleSort('date')}>
                       <span className="text-xs font-medium text-muted-foreground px-1">Data</span>
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Descrição */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="desc" cols={cols}>
                     <ColHeader hasValue={!!searchParams.q} onClear={() => updateFilters({ q: undefined, page: undefined })} sortKey="desc" currentSort={searchParams.sort} onSort={() => toggleSort('desc')}>
                       <DescFilter value={searchParams.q} onUpdate={v => updateFilters({ q: v, page: undefined })} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Valor */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="amount" cols={cols}>
                     <ColHeader hasValue={!!(searchParams.amountMin || searchParams.amountMax)} onClear={() => updateFilters({ amountMin: undefined, amountMax: undefined, page: undefined })} sortKey="amount" currentSort={searchParams.sort} onSort={() => toggleSort('amount')}>
                       <AmountFilter amountMin={searchParams.amountMin} amountMax={searchParams.amountMax} onUpdate={updateFilters} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Banco / Conta */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="account" cols={cols}>
                     <ColHeader hasValue={!!searchParams.accountId} onClear={() => updateFilters({ accountId: undefined, page: undefined })} sortKey="account" currentSort={searchParams.sort} onSort={() => toggleSort('account')}>
                       <MultiSelectFilter placeholder="Banco/Conta" value={searchParams.accountId} options={acctOptions} onUpdate={v => updateFilters({ accountId: v, page: undefined })} width="w-72" />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Tipo movimento */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="direction" cols={cols}>
                     <ColHeader hasValue={!!searchParams.direction} onClear={() => updateFilters({ direction: undefined, page: undefined })} sortKey="direction" currentSort={searchParams.sort} onSort={() => toggleSort('direction')}>
                       <DirectionFilter value={searchParams.direction} onUpdate={v => updateFilters({ direction: v, page: undefined })} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Origem DRE/BP */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="reporttype" cols={cols}>
                     <ColHeader hasValue={!!searchParams.reportType} onClear={() => updateFilters({ reportType: undefined, page: undefined })} sortKey="reporttype" currentSort={searchParams.sort} onSort={() => toggleSort('reporttype')}>
                       <ReportTypeFilter value={searchParams.reportType} onUpdate={v => updateFilters({ reportType: v, page: undefined })} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Categoria */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="category" cols={cols}>
                     <ColHeader hasValue={!!searchParams.category} onClear={() => updateFilters({ category: undefined, page: undefined })} sortKey="category" currentSort={searchParams.sort} onSort={() => toggleSort('category')}>
                       <MultiSelectFilter placeholder="Categoria" value={searchParams.category} options={[]} grouped={categoryFilterGroups} showSpecial onUpdate={v => updateFilters({ category: v, page: undefined })} width="w-72" />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* C. custo */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="costcenter" cols={cols}>
                     <ColHeader hasValue={!!searchParams.costCenter} onClear={() => updateFilters({ costCenter: undefined, page: undefined })} sortKey="costcenter" currentSort={searchParams.sort} onSort={() => toggleSort('costcenter')}>
                       <MultiSelectFilter placeholder="C. custo" value={searchParams.costCenter} options={ccOptions} showSpecial onUpdate={v => updateFilters({ costCenter: v, page: undefined })} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Un. negócio */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="businessunit" cols={cols}>
                     <ColHeader hasValue={!!searchParams.businessUnit} onClear={() => updateFilters({ businessUnit: undefined, page: undefined })} sortKey="businessunit" currentSort={searchParams.sort} onSort={() => toggleSort('businessunit')}>
                       <MultiSelectFilter placeholder="Un. negócio" value={searchParams.businessUnit} options={buOptions} showSpecial onUpdate={v => updateFilters({ businessUnit: v, page: undefined })} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Entidade */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="legalentity" cols={cols}>
                     <ColHeader hasValue={!!searchParams.legalEntity} onClear={() => updateFilters({ legalEntity: undefined, page: undefined })} sortKey="legalentity" currentSort={searchParams.sort} onSort={() => toggleSort('legalentity')}>
                       <MultiSelectFilter placeholder="Entidade" value={searchParams.legalEntity} options={leOptions} showSpecial onUpdate={v => updateFilters({ legalEntity: v, page: undefined })} />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* Contato */}
-                  <th className="px-2 py-1">
+                  <ThRedim id="contact" cols={cols}>
                     <ColHeader hasValue={!!searchParams.contact} onClear={() => updateFilters({ contact: undefined, page: undefined })} sortKey="contact" currentSort={searchParams.sort} onSort={() => toggleSort('contact')}>
                       <MultiSelectFilter placeholder="Contato" value={searchParams.contact} options={ctOptions} showSpecial onUpdate={v => updateFilters({ contact: v, page: undefined })} width="w-72" />
                     </ColHeader>
-                  </th>
+                  </ThRedim>
                   {/* ações */}
-                  <th className="w-9" />
+                  <th />
                 </tr>
               </thead>
               <tbody>
