@@ -314,7 +314,8 @@ deve*. Nada bloqueia.
 
 **Próximo passo é uma escolha de rumo**, não uma continuação: as frentes abertas estão na tabela
 *Frentes anteriores, ainda abertas* (Fase 8 adquirentes, 11 agente proativo, 12 onboarding/billing,
-contato pela NF-e), mais as **três** pendências de produto registradas — o plano patrimonial padrão
+contato pela NF-e, e as duas de coluna — **ver/ocultar**, que Julio já disse que vem depois, e
+largura por usuário), mais as **três** pendências de produto registradas — o plano patrimonial padrão
 do BP, o `DROP` das três tabelas do chat e, agora, **se o saldo bancário deve passar a existir de
 verdade** (ver abaixo).
 
@@ -808,6 +809,8 @@ aberto, e as afirmações abaixo foram **conferidas contra o banco**, não aceit
 | **Fase 11 — Agente Proativo** | job diário de insights, alertas WhatsApp/e-mail, fechamento mensal narrado | ~2 semanas |
 | **Fase 12 — Onboarding, Billing, Lançamento** | onboarding guiado, Stripe, planos com limites, trial que expira, `/pricing` | 2–3 semanas |
 | **Contato pela NF-e** (avulsa) | `invoices.contact_id` existe e nunca foi escrito; alimentaria sozinha a dimensão da Fase 10 | curta |
+| **Ver/ocultar e reordenar coluna** (avulsa) | **A v1.1 do que Julio pediu em 1/set** — a v1 entregou só o arrasto, a pedido dele. Esconder a coluna que não se usa resolve o cabeçalho truncado melhor que redimensionar, e o encanamento já está pronto: mesma lista `COLUNAS_TRANSACOES`, mesmo `localStorage`, mesma chave. Reordenar é o passo seguinte e custa mais (a ordem entra no `<colgroup>` E na ordem dos `<td>` de cada linha) | curta |
+| **Largura de coluna por USUÁRIO** (v2 da mesma frente) | Hoje é por navegador, porque não existe tabela de preferência de usuário — `memberships` guarda papel e convite, sem jsonb. Exige migration + RLS + teste, e a decisão de onde morar (coluna `settings` em `memberships`, que a torna por usuário-E-organização, ou tabela própria) | média |
 | **`vercel.json` com `regions`** | versionar a região `gru1`, hoje só no painel (ver Infraestrutura) | trivial |
 
 Recomendação registrada: **contato pela NF-e** tem a melhor relação custo/benefício agora — é curta
