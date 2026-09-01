@@ -10,8 +10,9 @@ import { getAuthContext } from '@/lib/auth-context'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrgForm } from '@/components/settings/org-form'
 import { AutoCategorizeToggle } from '@/components/settings/auto-categorize-toggle'
+import { SyncScheduleField } from '@/components/settings/sync-schedule-field'
 import { PendingInvites } from '@/components/settings/pending-invites'
-import { getAutoCategorize } from '@/server/settings'
+import { getAutoCategorize, getAgendaDeSync } from '@/server/settings'
 import { getMeusConvites } from '@/server/members'
 import { Tags, Building2, Briefcase, Landmark, Users, UserPlus, ChevronRight, Zap, FileText, Split, Activity, Plug } from 'lucide-react'
 
@@ -58,9 +59,10 @@ export default async function ConfiguracoesPage() {
   // A organização ATIVA (cookie + seletor), não mais "a primeira do usuário".
   const { organizationId } = await getAuthContext()
 
-  const [[org], autoCategorize, convites] = await Promise.all([
+  const [[org], autoCategorize, agendaDeSync, convites] = await Promise.all([
     db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1),
     getAutoCategorize(),
+    getAgendaDeSync(),
     getMeusConvites(),
   ])
 
@@ -127,6 +129,10 @@ export default async function ConfiguracoesPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <AutoCategorizeToggle initialValue={autoCategorize} />
+
+          <div className="border-t pt-4">
+            <SyncScheduleField initialValue={agendaDeSync} />
+          </div>
 
           <Link href="/configuracoes/regras">
             <div className="flex items-center gap-4 p-4 rounded-lg border bg-card hover:bg-muted/40 transition-colors cursor-pointer">

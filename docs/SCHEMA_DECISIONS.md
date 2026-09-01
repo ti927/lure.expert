@@ -1578,3 +1578,70 @@ humano. (Impacto real hoje: nulo. Os 7.762 importados por arquivo não têm cont
 "Sicredi" na coluna não vincula à conexão do Sicredi, e a tela diz isso. Vincular faria linha
 importada pendurar numa fonte sincronizada e tornaria as duas origens indistinguíveis; é o mesmo nó
 de que depende a pendência do saldo bancário.
+
+---
+
+## Decisão 27 — A agenda de sync governa a RELEITURA, não a Pluggy (1/set)
+
+**A pergunta do Julio:** *"esse cron de atualização às 3h poderia ser um item de configuração no
+app?"*
+
+### O que a verificação mostrou antes de qualquer código
+
+**Nenhum ponto do app chama `client.updateItem`** — a única chamada que faz a Pluggy ir ao banco
+buscar dado novo. Nem o cron, nem o botão "Atualizar" de `/contas`: os dois fazem `fetchAccounts` +
+`fetchTransactionsCursor`, que **leem o cache da Pluggy**.
+
+Quem vai ao banco é a Pluggy, no ciclo dela. Medido em 1/set nos 4 itens da Quick Aviação:
+`nextAutoSyncAt` sempre +24h do último update (17:24, 17:32, 17:38, 14:16). Quando ela termina,
+dispara o webhook `item/updated`, que já roda nosso sync na hora.
+
+**Consequência que decide o desenho:** o horário do nosso cron quase não muda a frescura do dado —
+ele é rede de segurança para quando o webhook falha. A tela diz isso com todas as letras, porque
+prometer "dado mais fresco" seria uma promessa que ninguém consegue conferir.
+
+### Um cron horário + preferência por organização
+
+Cron do Inngest é **estático**: `triggers: [{ cron }]` é registrado no deploy, igual para todas as
+organizações. Não existe "um cron por organização". O padrão que resolve é o inverso — um cron de
+hora em hora (`0 * * * *`) que lê a preferência de cada organização e despacha só quem está na hora.
+
+O custo é uma consulta indexada por hora, 24× por dia. A alternativa (uma função Inngest por
+organização, criada dinamicamente) não existe na plataforma.
+
+**A hora é lida DENTRO do `step.run`** que consulta, não fora: o Inngest memoiza o resultado do
+step, então uma retentativa despacha exatamente o mesmo conjunto em vez de recalcular numa hora
+diferente.
+
+### O padrão é o comportamento anterior, e isso é asserção
+
+`AGENDA_PADRAO = { horaInicial: 3, aCada: 24 }` — as 03:00 do cron antigo. O teste soma as 24
+execuções do dia e exige que cada conexão seja despachada **exatamente uma vez**: 10 de 10 hoje.
+Sem essa asserção, a tela nova poderia mudar em silêncio o comportamento de quem nunca a abriu.
+
+### Leitura tolerante, escrita recusa
+
+`lerAgenda` cai no padrão diante de qualquer valor inválido; `agendaDeSyncSchema` recusa na escrita.
+A assimetria é deliberada: a leitura roda **dentro do cron que serve todas as organizações**, e um
+`settings` corrompido numa delas não pode derrubar o despacho das outras. Na escrita há alguém na
+tela para corrigir.
+
+### `Intl`, não `−3` fixo
+
+O código antigo assumia UTC−3 num comentário ("Brasil não usa horário de verão"), verdade desde 2019
+e revogável por decreto. Um deslocamento fixo erraria por **uma hora sem levantar erro nenhum** — a
+organização sincronizaria no horário errado e ninguém perceberia. `horaEmBrasilia` usa
+`Intl.DateTimeFormat` com `America/Sao_Paulo` e `hourCycle: 'h23'`, este último porque `pt-BR` com
+`hour12: false` devolve **"24"** para a meia-noite em parte das versões de ICU.
+
+### Frequências que dividem 24
+
+O catálogo é `24, 12, 8, 6, 4, 3, 2`. Uma frequência que não divide 24 (5, por exemplo) faria a
+última janela do dia ser mais curta que as outras, e o horário "andaria" a cada dia — com a pessoa
+tendo escolhido "a partir das 07:00". É asserção no teste, não só no catálogo.
+
+### O que esta decisão NÃO faz
+
+Não força atualização na Pluggy (`updateItem`), não mexe no webhook, e não alcança adquirentes
+(04:00) nem NF-e/SEFAZ (02:00), que seguem com cron fixo — escolha do Julio, e a Fase 8 nunca rodou
+de verdade para justificar configurar o que não se exercita.

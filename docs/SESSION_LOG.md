@@ -12,6 +12,55 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ A organização escolhe quando os bancos são sincronizados (1/set)
+
+**Origem:** ao explicar como as conexões Pluggy se mantêm logadas, mencionei o cron das 03:00 — e
+Julio perguntou: *"esse cron poderia ser um item de configuração no app?"*
+
+**Verificado: 31/31, incluindo a simulação do despacho contra o banco real. `tsc`, lint e build
+limpos.**
+
+#### O levantamento mudou a pergunta
+
+**Nenhum ponto do app chama `updateItem`** — a única chamada que faz a Pluggy consultar o banco. O
+cron e o botão "Atualizar" de `/contas` leem o **cache** da Pluggy. Quem vai ao banco é ela, no ciclo
+dela: medido nos 4 itens da Quick, `nextAutoSyncAt` sempre +24h, e ao terminar ela dispara o webhook
+`item/updated`, que já roda nosso sync na hora.
+
+Ou seja: o horário do nosso cron quase não muda a frescura do dado — é rede de segurança para quando
+o webhook falha. Julio escolheu, sabendo disso, só o agendamento da releitura (as outras opções eram
+forçar atualização na Pluggy, ou nada).
+
+#### O que mudou
+
+| Arquivo | O quê |
+|---|---|
+| `lib/sync-schedule.ts` **(novo)** | Zod + `AGENDA_PADRAO {3, 24}`, `lerAgenda` (tolerante), `deveRodarAgora`, `horariosDoDia`, `horaEmBrasilia` e `descreverAgenda` — a frase da tela sai da mesma função que decide as horas |
+| `jobs/sync-all-pluggy-items.ts` | cron `0 6 * * *` → `0 * * * *`; junta `organizations.settings`, filtra por `deveRodarAgora`, despacha só quem está na hora. A hora é lida DENTRO do `step.run` para a retentativa despachar o mesmo conjunto |
+| `server/settings.ts` | `getAgendaDeSync` / `setAgendaDeSync`, com merge no jsonb (o `settings` carrega `autoCategorize` junto) |
+| `components/settings/sync-schedule-field.tsx` **(novo)** | dois seletores no card Automação de `/configuracoes` |
+
+Sem migration: `organizations.settings` já existia.
+
+#### As quatro decisões (detalhe na Decisão 27)
+
+**Cron do Inngest é estático**, registrado no deploy — não existe um cron por organização. O padrão
+inverso é um cron horário que lê a preferência e despacha os vencidos.
+
+**O padrão é o comportamento anterior, e é asserção:** somando as 24 execuções do dia, cada conexão é
+despachada exatamente 1× — 10 de 10 hoje. Sem isso a tela nova mudaria em silêncio o comportamento de
+quem nunca a abriu.
+
+**Leitura tolerante, escrita recusa.** `lerAgenda` roda dentro do cron que serve todas as
+organizações: um `settings` corrompido numa não pode derrubar o despacho das outras.
+
+**`Intl` com `America/Sao_Paulo`, não `−3` fixo.** O comentário antigo assumia que o Brasil não usa
+horário de verão — verdade desde 2019 e revogável por decreto; o erro seria de uma hora, silencioso.
+E `hourCycle: 'h23'` porque `pt-BR` com `hour12: false` devolve "24" para a meia-noite em parte das
+versões de ICU.
+
+---
+
 ### ✅ A conta declarada por linha vira vínculo de verdade (1/set)
 
 **Origem:** Julio criou duas contas manuais em `/contas` ("Caixa Av. D" e "Caixa Espécie"), baixou a
