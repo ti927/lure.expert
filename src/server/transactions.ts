@@ -12,7 +12,7 @@ import { sanitizePageSize } from '@/lib/transactions-page-size'
 import { dimensionExistsFilter } from '@/lib/sql-dimensions'
 import { estimarCustoCategorizacao } from '@/lib/ai-pricing'
 import {
-  dimensionSchema, assertLeafCategory, classificarPorIds, type DimensionData,
+  dimensionSchema, assertLeafCategory, classificarPorIds, semRateio, type DimensionData,
 } from '@/lib/transactions-write'
 import { recusaDePapel } from '@/lib/members-types'
 
@@ -293,6 +293,9 @@ async function idsNaoCategorizados(organizationId: string) {
       eq(transactions.organizationId, organizationId),
       ne(transactions.status, 'pending'),
       isNull(transactions.categoryId),
+      // Rateado tem a natureza vazia por regra (vive nas partes) — não é "sem
+      // natureza" para o expert classificar, e o gatilho recusaria a escrita.
+      semRateio,
     ))
 }
 
