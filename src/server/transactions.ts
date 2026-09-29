@@ -232,7 +232,10 @@ export async function classifyTransaction(id: string, data: DimensionData) {
     .limit(1)
   if (!tx) return { error: 'Transação não encontrada.' }
 
-  await classificarPorIds(organizationId, [id], parsed.data)
+  const r = await classificarPorIds(organizationId, [id], parsed.data)
+  if (r.atualizados === 0 && r.rateadosExcluidos > 0) {
+    return { error: 'Este lançamento está rateado: a natureza e as dimensões vivem nas partes. Abra o rateio para mudar.' }
+  }
 
   revalidatePath('/transacoes')
   revalidatePath('/dre')
@@ -275,11 +278,11 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
     if (catError) return { error: catError }
   }
 
-  const atualizados = await classificarPorIds(organizationId, ids, parsed.data)
+  const r = await classificarPorIds(organizationId, ids, parsed.data)
 
   revalidatePath('/transacoes')
   revalidatePath('/dre')
-  return { success: true, updated: atualizados }
+  return { success: true, updated: r.atualizados, rateadosExcluidos: r.rateadosExcluidos }
 }
 
 async function idsNaoCategorizados(organizationId: string) {

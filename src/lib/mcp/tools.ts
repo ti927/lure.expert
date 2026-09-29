@@ -457,7 +457,7 @@ const preverClassificacao: Ferramenta = {
       resumo,
       ...(resumo.rateadosExcluidos > 0 ? {
         aviso: `${resumo.rateadosExcluidos} lançamento(s) rateado(s) ficaram de fora: com rateio, ` +
-          'as dimensões ficam nas partes, não no lançamento. A natureza deles pode ser alterada normalmente.',
+          'a natureza e as dimensões ficam nas partes, não no lançamento. Para mudá-las, refaça o rateio.',
       } : {}),
       comoAplicar: `Mostre este resumo ao usuário. Com o aceite dele, chame ` +
         `aplicar_classificacao_em_lote com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
@@ -738,8 +738,8 @@ const aplicarRateio: Ferramenta = {
     return {
       aplicado: true,
       lancamentosRateados: r.aplicados,
-      observacao: 'As dimensões passaram para as partes; o lançamento em si ficou sem dimensão, ' +
-        'como o modelo de rateio exige. A natureza não é rateada e continua no lançamento.',
+      observacao: 'A natureza e as dimensões passaram para as partes; o lançamento em si ficou sem ' +
+        'elas, como o modelo de rateio exige. Cada parte herdou a natureza que o lançamento tinha.',
     }
   },
 }

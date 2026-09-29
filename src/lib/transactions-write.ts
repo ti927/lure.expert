@@ -23,8 +23,12 @@ export const dimensionSchema = z.object({
 
 export type DimensionData = z.infer<typeof dimensionSchema>
 
-/** As quatro que o rateio reparte. A natureza não é rateada. */
-const DIMENSOES_RATEAVEIS = ['costCenterId', 'businessUnitId', 'legalEntityId', 'contactId'] as const
+/**
+ * As cinco que o rateio reparte — natureza incluída desde a 0033 (29/set).
+ * Classificar qualquer uma delas num lançamento rateado seria recusado pelo
+ * gatilho: a classificação dele vive nas partes.
+ */
+const DIMENSOES_RATEAVEIS = ['categoryId', 'costCenterId', 'businessUnitId', 'legalEntityId', 'contactId'] as const
 
 export function mexeEmDimensaoRateavel(data: DimensionData): boolean {
   return DIMENSOES_RATEAVEIS.some(k => data[k] !== undefined)
@@ -219,15 +223,16 @@ function condicoes(organizationId: string, f: FiltroLancamentos): SQL[] {
 }
 
 /**
- * Lançamento rateado não aceita dimensão no pai.
+ * Lançamento rateado não aceita natureza nem dimensão no pai.
  *
- * É regra do banco (gatilho da migration 0026): com rateio, as dimensões do pai
- * ficam vazias, porque preenchê-las faria toda leitura ainda não migrada
- * atribuir o valor INTEGRAL a uma das partes. Sem esta exclusão o UPDATE
- * inteiro seria recusado pelo gatilho, e o lote todo falharia por causa de um
- * lançamento — daí excluir e CONTAR, para a prévia dizer quantos ficaram de fora.
+ * É regra do banco (gatilhos das migrations 0026 e 0033): com rateio, a
+ * natureza e as dimensões do pai ficam vazias, porque preenchê-las faria toda
+ * leitura que olhasse o lançamento atribuir o valor INTEGRAL a uma das partes.
+ * Sem esta exclusão o UPDATE inteiro seria recusado pelo gatilho, e o lote todo
+ * falharia por causa de um lançamento — daí excluir e CONTAR, para a prévia
+ * dizer quantos ficaram de fora. O categorizador usa o mesmo filtro.
  */
-const semRateio = sql`NOT EXISTS (
+export const semRateio = sql`NOT EXISTS (
   SELECT 1 FROM ${transactionAllocations}
   WHERE ${transactionAllocations.transactionId} = ${transactions.id}
 )`
@@ -360,26 +365,45 @@ export async function classificarPorFiltro(
   return { atualizados: alvos.length, regrasAfetadas, rateadosExcluidos: 0 }
 }
 
-/** O caminho da tela: ids explícitos, escolhidos a dedo no diálogo. */
+/**
+ * O caminho da tela: ids explícitos, escolhidos a dedo no diálogo.
+ *
+ * Rateados saem do conjunto quando a classificação mexe em natureza ou
+ * dimensão — mesma regra de `classificarPorFiltro` — e são contados, para a
+ * tela dizer por que não mudaram. Regra só se aprende do que foi gravado.
+ */
 export async function classificarPorIds(
   organizationId: string,
   ids: string[],
   data: DimensionData,
-): Promise<number> {
+): Promise<{ atualizados: number; rateadosExcluidos: number }> {
+  const base = [eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)]
+  const cond = mexeEmDimensaoRateavel(data) ? [...base, semRateio] : base
+
   const linhas = await db
     .select({
+      id: transactions.id,
       description: transactions.description,
       cleanedDescription: transactions.cleanedDescription,
       accountId: transactions.accountId,
     })
     .from(transactions)
-    .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
+    .where(and(...cond))
 
-  await db
-    .update(transactions)
-    .set(montarUpdates(data))
-    .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
+  if (linhas.length > 0) {
+    await db
+      .update(transactions)
+      .set(montarUpdates(data))
+      .where(and(
+        eq(transactions.organizationId, organizationId),
+        inArray(transactions.id, linhas.map(l => l.id)),
+      ))
+    await ensinarRegras(organizationId, linhas, data)
+  }
 
-  await ensinarRegras(organizationId, linhas, data)
-  return linhas.length
+  const [total] = await db
+    .select({ n: sql<number>`COUNT(*)::int` })
+    .from(transactions)
+    .where(and(...base))
+  return { atualizados: linhas.length, rateadosExcluidos: Number(total?.n ?? 0) - linhas.length }
 }
