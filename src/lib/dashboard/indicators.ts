@@ -49,6 +49,9 @@ export async function calcularIndicadores(
   }
   type Lucro12mRow = { lucro: string; meses: string }
 
+  // As três leituras passam pela view desde o rateio de natureza (29/set): com
+  // rateio a natureza vive nas partes. Nenhuma usa `t.id`, e as colunas lidas
+  // (amount, direction, date, status, category_id) existem na view.
   const [dreRows, bpRows, lucro12mRows] = await Promise.all([
     exec.execute<DreRow>(sql`
       SELECT
@@ -60,7 +63,7 @@ export async function calcularIndicadores(
           ELSE 0 END), 0)::text AS ebitda,
         COALESCE(SUM(CASE WHEN c.type = 'emprestimos_amortizacoes' AND t.direction = 'outflow'
           THEN t.amount::numeric ELSE 0 END), 0)::text AS servico_divida
-      FROM transactions t
+      FROM transaction_lines t
       JOIN categories c ON t.category_id = c.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
@@ -88,7 +91,7 @@ export async function calcularIndicadores(
           AND (c.name ILIKE '%estoque%' OR p.name ILIKE '%estoque%')
           THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
           ELSE 0 END), 0)::text AS estoque
-      FROM transactions t
+      FROM transaction_lines t
       JOIN categories c       ON t.category_id = c.id
       LEFT JOIN categories p  ON c.parent_id   = p.id
       WHERE t.organization_id = ${organizationId}::uuid
@@ -101,7 +104,7 @@ export async function calcularIndicadores(
           THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
           ELSE 0 END), 0)::text AS lucro,
         COUNT(DISTINCT date_trunc('month', t.date::date))::text AS meses
-      FROM transactions t
+      FROM transaction_lines t
       JOIN categories c ON t.category_id = c.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
