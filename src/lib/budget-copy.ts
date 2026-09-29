@@ -372,9 +372,12 @@ export async function collectActuals(
                DATE_TRUNC('month', ${txDate}::date)
     `)
 
+  // Pela view, como a query principal: com rateio de natureza (29/set) uma parte
+  // pode estar sem natureza enquanto as outras têm. `total` soma as PARTES sem
+  // natureza, e `count` conta lançamentos — é o que a prévia promete.
   const semCat = await client.execute<{ count: number; total: string }>(sql`
-      SELECT COUNT(*)::int AS count, COALESCE(SUM(t.amount::numeric), 0) AS total
-      FROM transactions t
+      SELECT COUNT(DISTINCT t.transaction_id)::int AS count, COALESCE(SUM(t.amount::numeric), 0) AS total
+      FROM transaction_lines t
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
         AND t.category_id IS NULL
@@ -383,8 +386,8 @@ export async function collectActuals(
     `)
 
   const inativas = await client.execute<{ count: number; total: string }>(sql`
-      SELECT COUNT(*)::int AS count, COALESCE(SUM(t.amount::numeric), 0) AS total
-      FROM transactions t
+      SELECT COUNT(DISTINCT t.transaction_id)::int AS count, COALESCE(SUM(t.amount::numeric), 0) AS total
+      FROM transaction_lines t
       JOIN categories c ON t.category_id = c.id
       JOIN categories p ON c.parent_id   = p.id
       WHERE t.organization_id = ${organizationId}::uuid
