@@ -5,8 +5,9 @@ import { getAuthContext } from '@/lib/auth-context'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { db } from '@/db'
-import { categories, transactions, categorizationRules } from '@/db/schema'
+import { categories, categorizationRules } from '@/db/schema'
 import { eq, and, count, sql } from 'drizzle-orm'
+import { contarUsoPorNatureza, contarUsoDaNatureza } from '@/lib/category-usage'
 
 const CATEGORY_TYPES = [
   // DRE
@@ -66,16 +67,15 @@ export async function getCategoriesWithTxCount() {
       metadata: categories.metadata,
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
-      txCount: sql<number>`(
-        SELECT COUNT(*)::int FROM transactions
-        WHERE category_id = ${categories.id}
-        AND organization_id = ${organizationId}
-      )`,
     })
     .from(categories)
     .where(eq(categories.organizationId, organizationId))
 
-  return rows.sort(numericCodeSort)
+  // A contagem era um subselect com `${categories.id}` numa consulta sem join —
+  // o Drizzle emitia `"id"` cru, capturado por `transactions.id`, e o número
+  // vivia em zero (Decisão 18). Agora vem das linhas, contando partes do rateio.
+  const uso = await contarUsoPorNatureza(organizationId)
+  return rows.map(r => ({ ...r, txCount: uso.get(r.id) ?? 0 })).sort(numericCodeSort)
 }
 
 export async function createCategory(formData: FormData) {
@@ -181,10 +181,8 @@ export async function deleteCategory(id: string) {
   if (childCount > 0)
     return { error: `Esta categoria possui ${childCount} subcategoria(s). Mova ou delete as subcategorias primeiro.` }
 
-  const [{ txCount }] = await db
-    .select({ txCount: count() })
-    .from(transactions)
-    .where(and(eq(transactions.categoryId, id), eq(transactions.organizationId, organizationId)))
+  // Pelas linhas: com rateio de natureza, a natureza pode estar só numa parte.
+  const txCount = await contarUsoDaNatureza(organizationId, id)
   if (txCount > 0)
     return { error: `Esta categoria está vinculada a ${txCount} transação(ões). Archive-a em vez de deletar, ou reclassifique as transações primeiro.` }
 
