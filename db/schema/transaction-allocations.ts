@@ -23,7 +23,7 @@ const tz = { withTimezone: true }
  *
  * Com `categoryId` desde a 0033 (29/set): a parte carrega a natureza, e o
  * lançamento rateado fica sem ela — mesma regra das dimensões (Decisão 16
- * revista; ver Decisão 27).
+ * revista; ver Decisão 28).
  */
 export const transactionAllocations = pgTable(
   'transaction_allocations',

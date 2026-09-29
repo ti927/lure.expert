@@ -12,6 +12,52 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Rateio de natureza — Sessões 1 e 2 (29/set) — branch `feat/rateio-natureza`, NÃO subiu
+
+Pedido do Julio: ratear também a natureza (TED que paga vários fornecedores; PIX que junta serviço
+e devolução). Desenho em `docs/superpowers/specs/2026-09-29-rateio-de-natureza-design.md`, plano em
+`docs/superpowers/plans/2026-09-29-rateio-de-natureza-sessoes-1-2.md`, decisão em
+`SCHEMA_DECISIONS.md` Decisão 28.
+
+**Backup antes de tudo:** tag `backup/antes-rateio-natureza-2026-09-29` (commit `1dc9469`) e dump
+completo do banco em `C:\Users\Julio\backups\lure-expert\`, restauração conferida (13.269
+lançamentos, soma R$ 30.070.441,98 idêntica). **Todo o desenvolvimento rodou contra um banco LOCAL**
+restaurado desse dump (`scripts/local-db.sh`) — a produção não foi tocada.
+
+**Sessão 1 — as leituras passam pela view (sem migration).** `lib/dashboard/kpis.ts`,
+`indicators.ts`, `lib/balance-sheet-read.ts` (novo — o SQL do Balanço saiu de `'use server'`),
+`lib/budget-copy.ts` (semCat/inativas), `lib/recurrence-detect.ts`, `lib/category-usage.ts` (novo),
+`lib/rules-write.ts`, `lib/mcp/tools.ts` (`descrever_organizacao`), `server/transactions.ts` e
+`server/review.ts` (filtro de natureza por `EXISTS`), `lib/sql-dimensions.ts` (`category_id` em
+`DimensionColumn` + `semNaturezaFilter`). Conciliação: `scripts/verify-rateio-natureza-leituras.ts`
+extrai os módulos ANTIGOS da tag e compara função por função — **224/224**. A base não tem documento
+de balanço, então o Balanço foi exercitado por cenário na Sessão 2.
+
+**Achado:** o contador de uso das naturezas (`getCategoriesWithTxCount`) vivia em ZERO — Decisão 18,
+terceira mordida. Corrigido.
+
+**Sessão 2 — migration e escritas.** `0033_rateio_de_natureza.sql` + reversa; schema Drizzle;
+`allocations-write.ts` (natureza por parte, `naturezaPadrao`, `validarNaturezas`, remoção que
+devolve a natureza, lote validando na prévia); `transactions-write.ts` (`categoryId` rateável,
+`classificarPorIds` exclui e conta rateados); `server/transactions.ts` (mensagem de recusa);
+categorizador e "Categorizar agora" ignoram rateado; duas frases do MCP que ficariam falsas.
+
+**A validação achou:** a reversa falhava em transação única ("pending trigger events" no `ALTER
+TABLE`) — `SET CONSTRAINTS ALL IMMEDIATE` nos dois arquivos. E `verify-mcp-write` tinha dois pontos
+do modelo antigo (gravava natureza em lançamento que ele mesmo rateou; contava "sem natureza" pela
+coluna) — ajustados mantendo a intenção.
+
+**Placar:** 0033 22/22 (ROLLBACK); `verify-rateio-natureza-escrita --comparar` 105/105 (66 meses de
+5 organizações idênticos antes/depois + cenário 29/29); query-engine 39/39, dashboards 117/117,
+visibilidade 24/24, mcp-write 188/188, mcp 39/39; `next build` limpo. As leituras ANTIGAS divergem
+depois da 0033 em 31 pontos, **só** nas 3 organizações com rateio.
+
+**Não feito (Sessões 3 e 4):** telas (coluna Natureza no diálogo de rateio, lote, modelos,
+`/transacoes`, drill-down) e MCP (natureza por parte nas ferramentas de rateio). Até lá, todo rateio
+herda a natureza do lançamento — o comportamento de hoje.
+
+---
+
 ### ✅ Colunas redimensionáveis em /transacoes — v1 (1/set)
 
 **Origem:** Julio mandou o print de `/transacoes` com os cabeçalhos truncados ("V...", "Banco/...",

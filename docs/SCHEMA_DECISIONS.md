@@ -725,6 +725,10 @@ de componentes.
 
 ## Decisão 16 — O rateio é sub-lançamento, não percentual por dimensão (Sessão 10.2)
 
+> **Revista em 29/set pela Decisão 28:** a natureza PASSOU a ser rateada. O parágrafo "A natureza
+> não se parte" abaixo é histórico; o resto (sub-lançamento, soma exata, gatilho deferido, origem
+> vazia) segue valendo e agora cobre a natureza também.
+
 **O desenho anterior, e por que caiu.** Até esta sessão o CLAUDE.md registrava rateio como
 *"independente por dimensão"*: o cliente informaria a divisão de cada dimensão em separado
 (centro de custo 60/40, contato 70/30) e uma view cruzaria as duas. Ao explicar o modelo para
@@ -1645,3 +1649,68 @@ tendo escolhido "a partir das 07:00". É asserção no teste, não só no catál
 Não força atualização na Pluggy (`updateItem`), não mexe no webhook, e não alcança adquirentes
 (04:00) nem NF-e/SEFAZ (02:00), que seguem com cron fixo — escolha do Julio, e a Fase 8 nunca rodou
 de verdade para justificar configurar o que não se exercita.
+
+---
+
+## Decisão 28 — A natureza passa a ser rateada; o lançamento rateado fica sem ela (29/set)
+
+**Revoga em parte a Decisão 16** ("a natureza não se parte"). O motivo veio do uso: o banco junta
+numa saída só um TED que paga cinco fornecedores, e um cliente paga num PIX só serviço e devolução.
+Esses lançamentos são UM no extrato e várias naturezas na DRE. Migration **0033**, com reversa.
+
+**Estender o rateio, não desmembrar o lançamento.** Desmembrar faria cada leitura funcionar sem
+mudança, mas quebraria o que um lançamento do extrato É: a dedup (reimportar traria o TED de volta),
+a conciliação com o banco e o Pluggy. A parte ganhou `category_id` ao lado das quatro dimensões, e
+a view `transaction_lines` passou a entregar a natureza da parte.
+
+**A natureza da origem fica VAZIA com rateio — e o banco recusa o contrário**, exatamente como as
+dimensões desde a 0026. A alternativa (a origem guarda uma natureza "principal", e a parte sem
+natureza herda) foi recusada pelo mesmo motivo da 0026: toda leitura esquecida somaria o valor
+INTEIRO na principal, em silêncio. Vazia, a leitura esquecida mostra "sem natureza" — lacuna
+visível. Consequência que não é opcional: **todo** rateio carrega a natureza nas partes, inclusive
+o que só divide centro de custo. A migração copiou a natureza dos 53 rateados para as partes.
+
+**Mesmo sentido.** Toda parte herda entrada/saída do lançamento, e Σ partes = valor continua no
+centavo. Partes de sentido oposto (recebimento líquido de taxa) ficaram fora — mudariam a
+invariante e toda leitura passaria a depender do sentido da parte.
+
+**Parte sem `categoryId` herda o padrão** (`naturezaPadrao`): a natureza do lançamento, ou, se ele
+já é rateado, a única comum às partes. Isso manteve funcionando, sem mudança, quem só divide centro
+de custo — a tela e o MCP antes de mandarem natureza. `null` explícito = sem natureza.
+
+**Remover o rateio devolve a natureza** quando as partes concordavam; se divergiam, o lançamento
+fica sem e volta a pedir classificação. Nunca escolhemos uma por ele.
+
+**Validação na aplicação, não no gatilho** (`validarNaturezas`): da organização, Natureza Filho,
+ativa, e do mesmo domínio do documento (balanço só recebe natureza de Balanço). É regra de negócio
+com mensagem boa, como o teto de linhas do modelo (Decisão 17). No lote, a validação roda na PRÉVIA,
+contra cada domínio presente — senão o lote pararia com metade aplicada.
+
+**Quem escreve natureza passou a respeitar o rateio:** `categoryId` entrou em
+`DIMENSOES_RATEAVEIS` (classificação recusa/exclui rateado), e o categorizador e "Categorizar
+agora" ignoram rateado — este último fecha um defeito latente desde a 10.4: o job escrevia dimensão
+em rateado e o gatilho derrubava o bloco inteiro no commit. A camada de recorrência não precisou
+mudar: ela filtra por natureza do lançamento, e rateado tem natureza nula.
+
+**As leituras migraram ANTES da migration** (Sessão 1): KPIs, indicadores, Balanço, copiar do
+realizado, recorrências, uso por natureza, "sem natureza" e os filtros de natureza de `/transacoes`
+e da revisão passaram a ler `transaction_lines` (ou `EXISTS` nela). Enquanto a 0033 não existia, a
+view devolvia a natureza do lançamento — por isso a migração das leituras foi conciliada contra os
+módulos antigos, extraídos da tag de backup: 224/224. Depois da 0033, as leituras antigas divergem
+**só** nas 3 organizações com rateio — a prova de que a ordem importava.
+
+**`SET CONSTRAINTS ALL IMMEDIATE` no topo das duas migrations.** O SQL Editor roda o arquivo numa
+transação só; com os gatilhos deferidos, um UPDATE deixa eventos pendentes e o Postgres recusa o
+`ALTER TABLE` seguinte ("has pending trigger events"). A reversa falhava assim — achado validando.
+
+**Perda declarada da reversa:** lançamento com partes de naturezas diferentes não cabe no modelo
+antigo; volta com a natureza da parte de maior valor. A reversa lista quais antes de rodar.
+
+**Achado de passagem — Decisão 18, terceira mordida.** `getCategoriesWithTxCount` contava uso com
+`${categories.id}` num subselect de consulta sem join: o Drizzle emitia `"id"` cru, capturado por
+`transactions.id`, e o contador vivia em ZERO desde sempre — o "N tx" do plano de contas e o aviso
+do diálogo de exclusão nunca apareceram. Corrigido em `lib/category-usage.ts`, contando partes.
+
+**Migration:** `db/migrations/rls/0033_rateio_de_natureza.sql` · reversa `0033_down_rateio_de_natureza.sql`
+**Verificado:** 0033+reversa 22/22 com ROLLBACK; retrato de 5 organizações × 66 meses (DRE, fluxo,
+KPIs, indicadores) idêntico antes e depois; cenário de escrita 29/29; suítes 39/117/24/188/39.
