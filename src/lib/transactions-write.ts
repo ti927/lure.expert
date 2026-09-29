@@ -9,9 +9,10 @@
 // retorno que o diálogo espera.
 
 import { z } from 'zod'
-import { and, eq, gte, inArray, isNull, lte, ne, sql, SQL } from 'drizzle-orm'
+import { and, eq, gte, inArray, lte, ne, sql, SQL } from 'drizzle-orm'
 import { db } from '@/db'
 import { transactions, categorizationRules, categories, transactionAllocations } from '@/db/schema'
+import { semNaturezaFilter, dimensionExistsFilter } from '@/lib/sql-dimensions'
 
 export const dimensionSchema = z.object({
   categoryId:     z.string().uuid().nullable().optional(),
@@ -210,8 +211,16 @@ function condicoes(organizationId: string, f: FiltroLancamentos): SQL[] {
     cond.push(sql`(${transactions.description} ILIKE ${alvo}
                    OR ${transactions.cleanedDescription} ILIKE ${alvo})`)
   }
-  if (f.semNatureza) cond.push(isNull(transactions.categoryId))
-  if (f.categorias?.length) cond.push(inArray(transactions.categoryId, f.categorias))
+  // Natureza pergunta às LINHAS (0033): num rateado a coluna do lançamento é
+  // nula por regra e a natureza vive nas partes. Pela coluna, "o que está em X"
+  // pularia em silêncio o rateado com parte em X, e "sem natureza" pegaria todo
+  // rateado — inclusive os de partes classificadas.
+  if (f.semNatureza) cond.push(semNaturezaFilter(sql`${transactions}.id`))
+  if (f.categorias?.length) {
+    const porNatureza = dimensionExistsFilter(sql`${transactions}.id`, 'category_id',
+      { ids: f.categorias, includeNone: false, includeClassified: false })
+    if (porNatureza) cond.push(porNatureza)
+  }
   if (f.de)  cond.push(gte(transactions.date, f.de))
   if (f.ate) cond.push(lte(transactions.date, f.ate))
   if (f.direcao) cond.push(eq(transactions.direction, f.direcao))

@@ -26,7 +26,7 @@ import { contarUsoDaNatureza } from '@/lib/category-usage'
 import {
   gravarAllocations, listarAllocations, preverLoteDeRateio, aplicarLoteDeRateio,
 } from '@/lib/allocations-write'
-import { classificarPorIds, semRateio } from '@/lib/transactions-write'
+import { classificarPorIds, semRateio, resumirClassificacao } from '@/lib/transactions-write'
 import { transactions } from '@/db/schema'
 
 let ok = 0, falhas = 0
@@ -180,6 +180,23 @@ async function cenario() {
   const c = await classificarPorIds(ORG, [tx1], { categoryId: A1 })
   t(c.atualizados === 0 && c.rateadosExcluidos === 1, `classificar natureza no rateado é excluído (${JSON.stringify(c)})`)
   t(await linhas(tx1) === 'A1=600 A2=400', 'e o rateio segue intacto')
+
+  console.log('\n── filtro de lote do MCP pergunta às partes (revisão final, Important 2) ──')
+  const porNatureza = await resumirClassificacao(ORG, { categorias: [A2] }, { categoryId: A1 })
+  t(porNatureza.rateadosExcluidos === 1,
+    `"reclassificar o que está em Energia" enxerga o rateado com parte em Energia e o declara excluído (${JSON.stringify({ q: porNatureza.quantidade, r: porNatureza.rateadosExcluidos })})`)
+  const semNat = await resumirClassificacao(ORG, { semNatureza: true }, { categoryId: A1 })
+  t(semNat.rateadosExcluidos === 0,
+    `"sem natureza" NÃO pega o rateado cujas partes têm natureza (${semNat.rateadosExcluidos})`)
+
+  console.log('\n── natureza herdada não é revalidada (revisão final, Important 1) ──')
+  const tx5 = await lanc(A3, '80.00')   // classificado numa natureza que depois foi arquivada
+  r = await gravarAllocations(ORG, tx5, [{ amount: 50, ...semDim }, { amount: 30, ...semDim }])
+  t('success' in r, `re-ratear só centro de custo num lançamento de natureza arquivada funciona (${JSON.stringify(r)})`)
+  t((await listarAllocations(ORG, tx5)).every(p => p.categoryId === A3), 'e as partes herdam a arquivada, como hoje')
+  const tx6 = await lanc(A3, '40.00')
+  const lote6 = await aplicarLoteDeRateio(ORG, [tx6], [{ weight: 1, ...semDim }, { weight: 1, ...semDim }])
+  t('success' in lote6, 'no lote também')
 
   console.log('\n── remover o rateio — Review Focus 2 e 3 ──')
   r = await gravarAllocations(ORG, tx1, [])

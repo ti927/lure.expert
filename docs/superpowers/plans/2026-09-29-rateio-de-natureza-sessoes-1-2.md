@@ -1635,7 +1635,7 @@ A Sessão 1 é inofensiva sozinha (mesmos números) e pode subir **antes**, em o
 
 1. Rodar `verify-migration-0033.ts` contra a **produção** (é ROLLBACK, não grava) — a base pode ter mudado desde o dump de 29/set.
 2. Novo dump de segurança da produção + `--retrato` da produção.
-3. **Aplicar a 0033 primeiro**, no SQL Editor. Com a Sessão 1 já no ar, o código antigo lê a view e nenhum número muda; o único risco da janela é alguém gravar um rateio ou classificar um rateado pela tela antiga — o gatilho novo **recusa** com mensagem (o código antigo não esvazia a natureza da origem), então é erro visível, nunca dado errado.
+3. **Aplicar a 0033 primeiro**, no SQL Editor. Com a Sessão 1 já no ar, o código antigo lê a view e nenhum número muda; o único risco da janela é alguém gravar um rateio ou classificar um rateado pela tela antiga — o gatilho novo **recusa** com mensagem (o código antigo não esvazia a natureza da origem), então é erro visível, nunca dado errado. **Um risco não visível na janela** (achado da revisão final): o "Categorizar agora" do código antigo mandaria os 53 rateados (agora sem natureza na origem) ao job, o gatilho recusaria no commit e o bloco de 50 falharia inteiro, só visível no Inngest. Por isso a janela é à noite e curta; se alguém clicar, basta clicar de novo depois do deploy.
 4. Merge da branch em `main` e push → deploy (~2 min).
 5. `--comparar` contra o retrato do passo 2; conferir `/dashboard`, `/dre`, `/balanco`.
 6. Se algo divergir: `0033_down` + revert do merge.

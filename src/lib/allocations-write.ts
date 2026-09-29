@@ -249,7 +249,11 @@ export async function gravarAllocations(
     }
     const dimErro = await validarDimensoes(organizationId, partes)
     if (dimErro) return { error: dimErro }
-    const natErro = await validarNaturezas(organizationId, tx.documentId, partes.map(p => p.categoryId))
+    // Só a natureza que o chamador ESCOLHEU é validada. A herdada já está no
+    // lançamento — e classificar nunca exigiu natureza ativa nem de domínio
+    // certo; revalidá-la faria um rateio só de centro de custo, que funcionava,
+    // passar a falhar num lançamento de natureza arquivada (revisão final).
+    const natErro = await validarNaturezas(organizationId, tx.documentId, parsed.data.map(p => p.categoryId))
     if (natErro) return { error: natErro }
   }
 
