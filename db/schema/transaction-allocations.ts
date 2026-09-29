@@ -7,6 +7,7 @@ import { businessUnits } from './business-units'
 import { legalEntities } from './legal-entities'
 import { contacts } from './contacts'
 import { allocationTemplates } from './allocation-templates'
+import { categories } from './categories'
 
 const tz = { withTimezone: true }
 
@@ -20,7 +21,9 @@ const tz = { withTimezone: true }
  * inserir as partes uma a uma. Quando há partes, as colunas de dimensão do
  * lançamento pai ficam nulas, e o mesmo gatilho recusa o contrário.
  *
- * Sem `categoryId` de propósito: a natureza não se parte (ver Decisão 16).
+ * Com `categoryId` desde a 0033 (29/set): a parte carrega a natureza, e o
+ * lançamento rateado fica sem ela — mesma regra das dimensões (Decisão 16
+ * revista; ver Decisão 27).
  */
 export const transactionAllocations = pgTable(
   'transaction_allocations',
@@ -36,6 +39,7 @@ export const transactionAllocations = pgTable(
     sequence: integer('sequence').notNull().default(1),
     // SEMPRE positivo — o sinal vem da direction do lançamento pai.
     amount: numeric('amount', { precision: 15, scale: 2 }).notNull(),
+    categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
     costCenterId: uuid('cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
     businessUnitId: uuid('business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
     legalEntityId: uuid('legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
@@ -59,6 +63,7 @@ export const transactionAllocations = pgTable(
     orgBusinessUnitIdx: index('idx_alloc_org_business_unit').on(t.organizationId, t.businessUnitId),
     orgLegalEntityIdx: index('idx_alloc_org_legal_entity').on(t.organizationId, t.legalEntityId),
     orgContactIdx: index('idx_alloc_org_contact').on(t.organizationId, t.contactId),
+    orgCategoryIdx: index('idx_alloc_org_category').on(t.organizationId, t.categoryId),
   })
 )
 

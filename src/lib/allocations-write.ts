@@ -11,10 +11,11 @@ import { z } from 'zod'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import {
-  transactions, transactionAllocations, allocationTemplates,
+  transactions, transactionAllocations, allocationTemplates, documents,
   costCenters, businessUnits, legalEntities, contacts,
 } from '@/db/schema'
 import { toCents, applyProportion } from '@/lib/allocation-math'
+import { BP_TYPES } from '@/lib/bp-types'
 
 export const MAX_PARTES = 50
 export const MAX_LOTE   = 200
@@ -24,6 +25,12 @@ const uuidOrNull = z.string().uuid().nullable()
 export const parteSchema = z.object({
   /** Em reais, com 2 casas — convertido para centavos antes de qualquer conta. */
   amount:         z.number().positive('Cada parte precisa de valor maior que zero'),
+  /**
+   * A natureza da parte (0033). AUSENTE = herdar a natureza padrão do
+   * lançamento (ver `naturezaPadrao`) — é o que mantém funcionando quem só
+   * divide centro de custo e ainda não manda natureza. `null` = sem natureza.
+   */
+  categoryId:     uuidOrNull.optional(),
   costCenterId:   uuidOrNull,
   businessUnitId: uuidOrNull,
   legalEntityId:  uuidOrNull,
@@ -32,14 +39,17 @@ export const parteSchema = z.object({
 })
 export type AllocationPart = z.infer<typeof parteSchema>
 
-export interface AllocationRow extends AllocationPart {
+export interface AllocationRow extends Omit<AllocationPart, 'categoryId'> {
   id:       string
   sequence: number
+  categoryId: string | null
   allocationTemplateId: string | null
 }
 
 export const pesoSchema = z.object({
   weight:         z.number().positive('O peso precisa ser maior que zero'),
+  /** Ausente = cada lançamento do lote herda a própria natureza padrão. */
+  categoryId:     uuidOrNull.optional(),
   costCenterId:   uuidOrNull,
   businessUnitId: uuidOrNull,
   legalEntityId:  uuidOrNull,
@@ -56,6 +66,7 @@ export async function listarAllocations(
       id:             transactionAllocations.id,
       sequence:       transactionAllocations.sequence,
       amount:         transactionAllocations.amount,
+      categoryId:     transactionAllocations.categoryId,
       costCenterId:   transactionAllocations.costCenterId,
       businessUnitId: transactionAllocations.businessUnitId,
       legalEntityId:  transactionAllocations.legalEntityId,
@@ -121,6 +132,78 @@ export async function validarDimensoes(
 }
 
 /**
+ * A natureza de uma parte segue a regra da natureza de um lançamento: da
+ * organização, Natureza Filho, ativa, e do mesmo domínio do documento — balanço
+ * só recebe natureza de Balanço; o resto, só de DRE. É a regra de
+ * `domainFromReportType` do categorizador, escrita aqui por extenso para não
+ * trazer o categorizador (e o cliente da Anthropic) para o caminho do rateio.
+ */
+export async function validarNaturezas(
+  organizationId: string,
+  documentId: string | null,
+  ids: (string | null | undefined)[],
+): Promise<string | null> {
+  const unicos = Array.from(new Set(ids.filter((v): v is string => !!v)))
+  if (unicos.length === 0) return null
+
+  // Alias explícitos (`c`, `f`) — sem `${tabela.coluna}` dentro do EXISTS
+  // (Decisão 18).
+  const rows = await db.execute<{ id: string; name: string; type: string; is_active: boolean; tem_filho: boolean }>(sql`
+    SELECT c.id::text AS id, c.name, c.type, c.is_active,
+           EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = c.id) AS tem_filho
+      FROM categories c
+     WHERE c.organization_id = ${organizationId}::uuid
+       AND c.id IN (${sql.join(unicos.map(id => sql`${id}::uuid`), sql`, `)})
+  `)
+  if (rows.length !== unicos.length) return 'Natureza não pertence à sua organização.'
+
+  const pai = rows.find(r => r.tem_filho)
+  if (pai) return `"${pai.name}" é Natureza Pai — escolha uma Natureza Filho para a parte.`
+  const inativa = rows.find(r => !r.is_active)
+  if (inativa) return `A natureza "${inativa.name}" está arquivada.`
+
+  let reportType: string | null = null
+  if (documentId) {
+    const [doc] = await db
+      .select({ r: documents.reportType })
+      .from(documents)
+      .where(and(eq(documents.id, documentId), eq(documents.organizationId, organizationId)))
+      .limit(1)
+    reportType = doc?.r ?? null
+  }
+  const ehBalanco = reportType === 'balance_sheet'
+  const errada = rows.find(r => (BP_TYPES as readonly string[]).includes(r.type) !== ehBalanco)
+  if (errada) {
+    return ehBalanco
+      ? `"${errada.name}" não é natureza de Balanço, e este lançamento veio de um balanço.`
+      : `"${errada.name}" é natureza de Balanço e não pode receber lançamento de movimento.`
+  }
+  return null
+}
+
+/**
+ * A natureza que uma parte recebe quando o chamador não diz qual: a do
+ * lançamento; se ele já é rateado (e por isso não tem), a única comum às partes
+ * atuais. É o que preserva o comportamento de quem só divide centro de custo —
+ * inclusive a tela e o MCP enquanto não mandam natureza.
+ */
+export async function naturezaPadrao(
+  organizationId: string,
+  transactionId: string,
+  categoriaDoLancamento: string | null,
+): Promise<string | null> {
+  if (categoriaDoLancamento) return categoriaDoLancamento
+  const rows = await db
+    .selectDistinct({ c: transactionAllocations.categoryId })
+    .from(transactionAllocations)
+    .where(and(
+      eq(transactionAllocations.organizationId, organizationId),
+      eq(transactionAllocations.transactionId, transactionId),
+    ))
+  return rows.length === 1 ? rows[0].c : null
+}
+
+/**
  * Substitui o rateio de um lançamento pelas partes informadas.
  *
  * Lista vazia remove o rateio. A soma é conferida aqui em centavos para dar
@@ -130,22 +213,32 @@ export async function validarDimensoes(
 export async function gravarAllocations(
   organizationId: string,
   transactionId: string,
-  partes: AllocationPart[],
+  partesPedidas: AllocationPart[],
   templateId?: string | null,
 ): Promise<{ error: string } | { success: true; partes: number }> {
-  const parsed = z.array(parteSchema).max(MAX_PARTES, `Máximo de ${MAX_PARTES} partes.`).safeParse(partes)
+  const parsed = z.array(parteSchema).max(MAX_PARTES, `Máximo de ${MAX_PARTES} partes.`).safeParse(partesPedidas)
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
   const [tx] = await db
-    .select({ id: transactions.id, amount: transactions.amount })
+    .select({
+      id: transactions.id, amount: transactions.amount,
+      categoryId: transactions.categoryId, documentId: transactions.documentId,
+    })
     .from(transactions)
     .where(and(eq(transactions.id, transactionId), eq(transactions.organizationId, organizationId)))
     .limit(1)
   if (!tx) return { error: 'Lançamento não encontrado.' }
 
-  if (parsed.data.length > 0) {
+  // Parte sem `categoryId` herda a natureza padrão; `null` explícito fica sem.
+  const padrao = await naturezaPadrao(organizationId, transactionId, tx.categoryId)
+  const partes = parsed.data.map(p => ({
+    ...p,
+    categoryId: p.categoryId === undefined ? padrao : p.categoryId,
+  }))
+
+  if (partes.length > 0) {
     const totalCents = toCents(tx.amount)
-    const somaCents  = parsed.data.reduce((a, p) => a + toCents(p.amount), 0)
+    const somaCents  = partes.reduce((a, p) => a + toCents(p.amount), 0)
     if (somaCents !== totalCents) {
       const falta = (totalCents - somaCents) / 100
       return {
@@ -154,15 +247,17 @@ export async function gravarAllocations(
           : `As partes passam R$ ${Math.abs(falta).toFixed(2).replace('.', ',')} do lançamento.`,
       }
     }
-    const dimErro = await validarDimensoes(organizationId, parsed.data)
+    const dimErro = await validarDimensoes(organizationId, partes)
     if (dimErro) return { error: dimErro }
+    const natErro = await validarNaturezas(organizationId, tx.documentId, partes.map(p => p.categoryId))
+    if (natErro) return { error: natErro }
   }
 
   // O carimbo é conferido, não confiado: um id de outra organização derrubaria
   // a gravação inteira pela FK. Como o carimbo é etiqueta e o rateio é o que o
   // usuário pediu, um id inválido vira null e o rateio segue.
   let templateValido: string | null = null
-  if (templateId && parsed.data.length > 0) {
+  if (templateId && partes.length > 0) {
     const [tpl] = await db
       .select({ id: allocationTemplates.id })
       .from(allocationTemplates)
@@ -178,28 +273,55 @@ export async function gravarAllocations(
   // A mensagem do RAISE é escrita para ser lida por gente, então vale repassá-la.
   try {
     await db.transaction(async (t) => {
+      // As naturezas de hoje, lidas antes de apagar: se o pedido for REMOVER o
+      // rateio, é daqui que a natureza volta para o lançamento.
+      const naturezasAtuais = await t
+        .selectDistinct({ c: transactionAllocations.categoryId })
+        .from(transactionAllocations)
+        .where(and(
+          eq(transactionAllocations.organizationId, organizationId),
+          eq(transactionAllocations.transactionId, transactionId),
+        ))
+
       await t.delete(transactionAllocations)
         .where(and(
           eq(transactionAllocations.organizationId, organizationId),
           eq(transactionAllocations.transactionId, transactionId),
         ))
 
-      if (parsed.data.length > 0) {
-        // Com rateio, a classificação vive nas partes: as colunas do lançamento
-        // ficam vazias, e o gatilho do banco recusa o contrário.
+      if (partes.length === 0) {
+        // Remover o rateio devolve a natureza ao lançamento quando as partes
+        // concordavam; se divergiam, ele fica sem e volta a pedir classificação
+        // — lacuna visível, nunca uma escolha feita por nós.
+        const unica = naturezasAtuais.length === 1 ? naturezasAtuais[0].c : null
+        if (unica && !tx.categoryId) {
+          await t.update(transactions)
+            .set({ categoryId: unica, updatedAt: new Date() })
+            .where(and(eq(transactions.id, transactionId), eq(transactions.organizationId, organizationId)))
+        }
+      }
+
+      if (partes.length > 0) {
+        // Com rateio, a classificação vive nas partes: a natureza e as
+        // dimensões do lançamento ficam vazias, e o gatilho do banco recusa o
+        // contrário (0026 e 0033).
         await t.update(transactions)
           .set({
+            categoryId: null,
             costCenterId: null, businessUnitId: null,
             legalEntityId: null, contactId: null,
+            // Ratear é classificar à mão: o lançamento sai da fila de revisão.
+            needsReview: false,
             updatedAt: new Date(),
           })
           .where(and(eq(transactions.id, transactionId), eq(transactions.organizationId, organizationId)))
 
-        await t.insert(transactionAllocations).values(parsed.data.map((p, i) => ({
+        await t.insert(transactionAllocations).values(partes.map((p, i) => ({
           organizationId,
           transactionId,
           sequence:       i + 1,
           amount:         p.amount.toFixed(2),
+          categoryId:     p.categoryId ?? null,
           costCenterId:   p.costCenterId,
           businessUnitId: p.businessUnitId,
           legalEntityId:  p.legalEntityId,
@@ -251,6 +373,21 @@ export async function preverLoteDeRateio(
   const dimErro = await validarDimensoes(organizationId, parsedPesos.data)
   if (dimErro) return { error: dimErro }
 
+  // Natureza fixada no peso vale para todos os lançamentos do lote — então é
+  // conferida contra CADA domínio presente (um lote pode misturar movimento e
+  // balanço). Aqui, e não só em `gravarAllocations`, para o lote não parar no
+  // meio com metade aplicada.
+  if (parsedPesos.data.some(p => p.categoryId)) {
+    const docs = await db
+      .selectDistinct({ d: transactions.documentId })
+      .from(transactions)
+      .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
+    for (const { d } of docs) {
+      const natErro = await validarNaturezas(organizationId, d, parsedPesos.data.map(p => p.categoryId))
+      if (natErro) return { error: natErro }
+    }
+  }
+
   const txs = await db
     .select({
       id: transactions.id, date: transactions.date,
@@ -294,6 +431,8 @@ export async function aplicarLoteDeRateio(
   for (const row of preview.rows) {
     const partes: AllocationPart[] = row.parts.map((valor, i) => ({
       amount:         valor,
+      // Ausente no peso = cada lançamento herda a própria natureza padrão.
+      categoryId:     pesos[i].categoryId,
       costCenterId:   pesos[i].costCenterId,
       businessUnitId: pesos[i].businessUnitId,
       legalEntityId:  pesos[i].legalEntityId,

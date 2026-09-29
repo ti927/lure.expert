@@ -5,6 +5,7 @@ import { costCenters } from './cost-centers'
 import { businessUnits } from './business-units'
 import { legalEntities } from './legal-entities'
 import { contacts } from './contacts'
+import { categories } from './categories'
 
 const tz = { withTimezone: true }
 
@@ -54,6 +55,8 @@ export const allocationTemplateLines = pgTable(
       .references(() => allocationTemplates.id, { onDelete: 'cascade' }),
     sequence: integer('sequence').notNull().default(1),
     weight: numeric('weight', { precision: 18, scale: 6 }).notNull(),
+    // Vazio = usar a natureza atual do lançamento ao aplicar o modelo (0033).
+    categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
     costCenterId: uuid('cost_center_id').references(() => costCenters.id, { onDelete: 'set null' }),
     businessUnitId: uuid('business_unit_id').references(() => businessUnits.id, { onDelete: 'set null' }),
     legalEntityId: uuid('legal_entity_id').references(() => legalEntities.id, { onDelete: 'set null' }),
