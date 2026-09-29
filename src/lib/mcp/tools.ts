@@ -45,6 +45,7 @@ import {
   cabecalhoDoArquivoSchema, TIPOS_DE_RELATORIO, TIPOS_DE_CONTA, ROTULO_DE_CONTA,
 } from '@/lib/import-contract'
 import { listarContasUsadas, mapaDeContasManuais } from '@/lib/accounts'
+import { semNaturezaFilter } from '@/lib/sql-dimensions'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -133,7 +134,10 @@ const descreverOrganizacao: Ferramenta = {
     const [resumo] = await db
       .select({
         lancamentos: sql<number>`COUNT(*)::int`,
-        semNatureza: sql<number>`COUNT(*) FILTER (WHERE ${transactions.categoryId} IS NULL)::int`,
+        // `${transactions}.id` e NÃO `${transactions.id}`: consulta sem join, e
+        // dentro do EXISTS o `"id"` cru seria capturado pela view (Decisão 18).
+        // Pelas linhas porque, com rateio de natureza, ela vive nas partes.
+        semNatureza: sql<number>`COUNT(*) FILTER (WHERE ${semNaturezaFilter(sql`${transactions}.id`)})::int`,
         primeira: sql<string | null>`MIN(${transactions.date})::text`,
         ultima: sql<string | null>`MAX(${transactions.date})::text`,
       })
