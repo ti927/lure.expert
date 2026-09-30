@@ -428,6 +428,56 @@ async function main() {
   t(modeloAlheio.isError && modeloAlheio.texto.includes('não encontrado'),
     'modelo que não é desta empresa: recusa')
 
+  // ── Natureza por peso (0033, Sessão 4) ─────────────────────────────────────
+  // O caso que motivou tudo: um lançamento que paga coisas de naturezas
+  // diferentes. Duas Natureza Filho quaisquer desta organização.
+  const [natA, natB] = await db.execute<{ id: string }>(sql`
+    SELECT c.id::text AS id FROM categories c
+     WHERE c.organization_id = ${ORG}::uuid
+       AND NOT EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = c.id)
+       AND c.type NOT IN ('ativo_circulante','ativo_nao_circulante','passivo_circulante','passivo_nao_circulante','patrimonio_liquido')
+     ORDER BY c.code LIMIT 2`)
+  const porNatureza = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG,
+    filtro: { descricaoContem: 'RATEADA' },
+    pesos: [{ peso: 7, categoryId: natA.id }, { peso: 3, categoryId: natB.id }],
+  })
+  const pn = porNatureza.dados as { previaId: string }
+  const aplicNat = await chamar(comEscrita, 'aplicar_rateio_em_lote', {
+    organizationId: ORG, previaId: pn.previaId, confirmacao: 'aplicar',
+  })
+  t(!porNatureza.isError && !aplicNat.isError, 'rateio em lote com natureza por peso: prevê e aplica')
+  const natLinhas = await db.execute<{ c: string; v: string }>(sql`
+    SELECT tl.category_id::text AS c, tl.amount::text AS v FROM transaction_lines tl
+      JOIN transactions t ON t.id = tl.transaction_id
+     WHERE t.organization_id = ${ORG}::uuid AND t.description = 'UBER *TRIP RATEADA' ORDER BY tl.sequence`)
+  t(natLinhas.length === 2 && natLinhas[0].c === natA.id && Number(natLinhas[0].v) === 70
+      && natLinhas[1].c === natB.id && Number(natLinhas[1].v) === 30,
+    `a view reparte a natureza: ${natLinhas.map(l => `${Number(l.v)}`).join(' + ')} em duas naturezas`)
+  const [origemNat] = await db.execute<{ c: string | null }>(sql`
+    SELECT category_id::text AS c FROM transactions
+     WHERE organization_id = ${ORG}::uuid AND description = 'UBER *TRIP RATEADA'`)
+  t(origemNat.c === null, 'e o lançamento em si ficou sem natureza, como a regra exige')
+  // Devolve o estado de antes: mais adiante a suíte conta este lançamento entre
+  // os "sem natureza", e essas asserções não são sobre rateio.
+  await db.execute(sql`
+    UPDATE transaction_allocations a SET category_id = NULL FROM transactions t
+     WHERE t.id = a.transaction_id AND t.organization_id = ${ORG}::uuid
+       AND t.description = 'UBER *TRIP RATEADA'`)
+
+  const pesoMalfeito = await chamar(comEscrita, 'prever_rateio_em_lote', {
+    organizationId: ORG, filtro: { descricaoContem: 'RATEADA' },
+    pesos: [{ peso: 1, categoryId: '00000000-0000-0000-0000-000000000000' }, { peso: 1 }],
+  })
+  t(pesoMalfeito.isError && pesoMalfeito.texto.includes('Natureza'),
+    `natureza que não é desta empresa: recusa nomeando ("${pesoMalfeito.texto.slice(0, 60)}")`)
+
+  const esquemaRateio = JSON.stringify(((await rpc(comEscrita, 'tools/list')).result as {
+    tools: { name: string; inputSchema: Record<string, unknown> }[]
+  }).tools.find(f => f.name === 'prever_rateio_em_lote')?.inputSchema ?? {})
+  t(esquemaRateio.includes('categoryId') && esquemaRateio.includes('TED') && esquemaRateio.includes('OMITA'),
+    'o JSON Schema PUBLICADO leva a descrição de categoryId (JSDoc não chegaria ao modelo)')
+
   // ═══ Orçamento ════════════════════════════════════════════════════════════
   console.log('\n── orçamento ──')
 
@@ -1398,8 +1448,8 @@ async function main() {
     SELECT COUNT(*) FILTER (WHERE type = 'mcp_preview')::int AS previas,
            COUNT(*) FILTER (WHERE type = 'mcp_applied')::int AS aplicadas
     FROM agent_events WHERE organization_id = ${ORG}::uuid`)
-  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 9,
-    `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — classificação, dois rateios, ` +
+  t(Number(aud.previas) > 0 && Number(aud.aplicadas) === 10,
+    `${aud.previas} prévias e ${aud.aplicadas} aplicações registradas — classificação, três rateios (um por natureza), ` +
     'um lançamento orçado, uma cópia do realizado, um lote de regras, duas importações de movimentos ' +
     'e uma de balanço')
 
