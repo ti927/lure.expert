@@ -17,6 +17,11 @@ const uuidOrNull = z.string().uuid().nullable()
 const linhaSchema = z.object({
   /** Peso relativo. Não precisa somar 100 — só a razão entre eles importa. */
   weight:         z.number().positive('O peso precisa ser maior que zero'),
+  /**
+   * Natureza da parte (0033). Vazio = ao aplicar, a parte fica com a natureza
+   * que o lançamento já tem — é o modelo que só divide centro de custo.
+   */
+  categoryId:     uuidOrNull.optional(),
   costCenterId:   uuidOrNull,
   businessUnitId: uuidOrNull,
   legalEntityId:  uuidOrNull,
@@ -68,10 +73,14 @@ export async function listAllocationTemplates(incluirArquivados = false): Promis
       // COUNT(DISTINCT transaction_id): o número promete LANÇAMENTOS. Contar
       // partes diria 2 para um único lançamento dividido em dois, e a tela
       // existe justamente para decidir se dá para apagar o modelo.
+      //
+      // `${allocationTemplates}.id` e NÃO `${allocationTemplates.id}`: consulta
+      // sem join, e o Drizzle emitia `"id"` cru — capturado por `a.id` dentro do
+      // subselect, e a contagem vivia em ZERO (Decisão 18, achado em 30/set).
       usageCount: sql<number>`(
         SELECT COUNT(DISTINCT a.transaction_id)::int
         FROM transaction_allocations a
-        WHERE a.allocation_template_id = ${allocationTemplates.id}
+        WHERE a.allocation_template_id = ${allocationTemplates}.id
       )`,
     })
     .from(allocationTemplates)
@@ -90,6 +99,7 @@ export async function listAllocationTemplates(incluirArquivados = false): Promis
       templateId:     allocationTemplateLines.templateId,
       sequence:       allocationTemplateLines.sequence,
       weight:         allocationTemplateLines.weight,
+      categoryId:     allocationTemplateLines.categoryId,
       costCenterId:   allocationTemplateLines.costCenterId,
       businessUnitId: allocationTemplateLines.businessUnitId,
       legalEntityId:  allocationTemplateLines.legalEntityId,
@@ -107,6 +117,7 @@ export async function listAllocationTemplates(incluirArquivados = false): Promis
     const lista = porModelo.get(l.templateId) ?? []
     lista.push({
       id: l.id, sequence: l.sequence, weight: Number(l.weight),
+      categoryId: l.categoryId,
       costCenterId: l.costCenterId, businessUnitId: l.businessUnitId,
       legalEntityId: l.legalEntityId, contactId: l.contactId,
     })
@@ -154,6 +165,23 @@ async function validarDimensoes(organizationId: string, linhas: TemplateLineInpu
     const achados = await db.select({ id: contacts.id }).from(contacts)
       .where(and(eq(contacts.organizationId, organizationId), inArray(contacts.id, ctIds)))
     if (achados.length !== ctIds.length) return 'Contato não pertence à sua organização.'
+  }
+
+  // Natureza: da organização e Natureza Filho. Domínio (DRE × Balanço) e
+  // natureza arquivada são conferidos ao APLICAR, contra o lançamento — o
+  // modelo não sabe em que lançamento vai cair.
+  const catIds = unicos(l => l.categoryId)
+  if (catIds.length > 0) {
+    const achados = await db.execute<{ id: string; name: string; tem_filho: boolean }>(sql`
+      SELECT c.id::text AS id, c.name,
+             EXISTS (SELECT 1 FROM categories f WHERE f.parent_id = c.id) AS tem_filho
+        FROM categories c
+       WHERE c.organization_id = ${organizationId}::uuid
+         AND c.id IN (${sql.join(catIds.map(id => sql`${id}::uuid`), sql`, `)})
+    `)
+    if (achados.length !== catIds.length) return 'Natureza não pertence à sua organização.'
+    const pai = achados.find(a => a.tem_filho)
+    if (pai) return `"${pai.name}" é Natureza Pai — escolha uma Natureza Filho.`
   }
 
   return null
@@ -204,6 +232,7 @@ export async function saveAllocationTemplate(input: TemplateInput) {
         templateId:     alvo!,
         sequence:       i + 1,
         weight:         l.weight.toFixed(6),
+        categoryId:     l.categoryId ?? null,
         costCenterId:   l.costCenterId,
         businessUnitId: l.businessUnitId,
         legalEntityId:  l.legalEntityId,

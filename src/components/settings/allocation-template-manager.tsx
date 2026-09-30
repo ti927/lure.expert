@@ -20,7 +20,8 @@ import { EmptyState } from '@/components/states/empty-state'
 import { cn } from '@/lib/utils'
 import { formatProportion, normalizeWeights } from '@/lib/allocation-math'
 import { WeightRowsEditor, novaLinhaPeso, type WeightRow } from '@/components/transacoes-shared/weight-rows-editor'
-import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
+import type { SimpleDimensionItem, CategoryItem } from '@/components/transacoes-shared/types'
+import { NATUREZA_HERDADA } from '@/components/transacoes-shared/weight-rows-editor'
 import {
   saveAllocationTemplate, deleteAllocationTemplate, toggleAllocationTemplateActive,
   type TemplateRow,
@@ -28,6 +29,7 @@ import {
 
 interface Props {
   templates: TemplateRow[]
+  categories:    CategoryItem[]
   costCenters:   SimpleDimensionItem[]
   businessUnits: SimpleDimensionItem[]
   legalEntities: SimpleDimensionItem[]
@@ -42,7 +44,7 @@ interface Rascunho {
 }
 
 export function AllocationTemplateManager({
-  templates, costCenters, businessUnits, legalEntities, contacts,
+  templates, categories, costCenters, businessUnits, legalEntities, contacts,
 }: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -57,8 +59,9 @@ export function AllocationTemplateManager({
     return {
       cc: mapa(costCenters), bu: mapa(businessUnits),
       le: mapa(legalEntities), ct: mapa(contacts),
+      nat: new Map(categories.map(c => [c.id, c.name])),
     }
-  }, [costCenters, businessUnits, legalEntities, contacts])
+  }, [categories, costCenters, businessUnits, legalEntities, contacts])
 
   const visiveis = mostrarArquivados ? templates : templates.filter(t => t.isActive)
   const arquivados = templates.filter(t => !t.isActive).length
@@ -73,6 +76,7 @@ export function AllocationTemplateManager({
       name: t.name,
       lines: t.lines.map(l => ({
         ...novaLinhaPeso(l.weight),
+        categoryId: l.categoryId ?? null,
         costCenterId: l.costCenterId, businessUnitId: l.businessUnitId,
         legalEntityId: l.legalEntityId, contactId: l.contactId,
       })),
@@ -87,6 +91,7 @@ export function AllocationTemplateManager({
         name: rascunho.name,
         lines: rascunho.lines.map(l => ({
           weight: l.weight,
+          categoryId: l.categoryId,
           costCenterId: l.costCenterId, businessUnitId: l.businessUnitId,
           legalEntityId: l.legalEntityId, contactId: l.contactId,
         })),
@@ -120,12 +125,16 @@ export function AllocationTemplateManager({
   /** As dimensões de uma linha, em texto — só as preenchidas. */
   function descreverLinha(l: TemplateRow['lines'][number]): string {
     const partes = [
+      // Natureza vazia no modelo = a do lançamento. Dito só quando há outra
+      // coisa na linha, para "sem dimensão" continuar valendo quando não há nada.
+      l.categoryId     && nomes.nat.get(l.categoryId),
       l.costCenterId   && nomes.cc.get(l.costCenterId),
       l.businessUnitId && nomes.bu.get(l.businessUnitId),
       l.legalEntityId  && nomes.le.get(l.legalEntityId),
       l.contactId      && nomes.ct.get(l.contactId),
     ].filter(Boolean)
-    return partes.length > 0 ? partes.join(' · ') : 'sem dimensão'
+    if (partes.length === 0) return 'sem dimensão'
+    return l.categoryId ? partes.join(' · ') : [NATUREZA_HERDADA, ...partes].join(' · ')
   }
 
   const rascunhoValido = !!rascunho
@@ -261,6 +270,7 @@ export function AllocationTemplateManager({
             <WeightRowsEditor
               rows={rascunho.lines}
               onChange={lines => setRascunho(r => r && { ...r, lines })}
+              categories={categories}
               costCenters={costCenters}
               businessUnits={businessUnits}
               legalEntities={legalEntities}

@@ -3,6 +3,7 @@ import { getAuthContext } from '@/lib/auth-context'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AllocationTemplateManager } from '@/components/settings/allocation-template-manager'
 import { listAllocationTemplates } from '@/server/allocation-templates'
+import { getCategories } from '@/server/categories'
 import {
   getCostCenters, getBusinessUnits, getLegalEntities, getContactOptions,
 } from '@/server/dimensions'
@@ -13,8 +14,9 @@ export default async function ModelosDeRateioPage() {
   await getAuthContext()
 
   // Inclui arquivados: é esta tela que os reativa.
-  const [templates, ccs, bus, les, cts] = await Promise.all([
+  const [templates, cats, ccs, bus, les, cts] = await Promise.all([
     listAllocationTemplates(true),
+    getCategories(),
     getCostCenters(),
     getBusinessUnits(),
     getLegalEntities(),
@@ -42,6 +44,7 @@ export default async function ModelosDeRateioPage() {
         <CardContent>
           <AllocationTemplateManager
             templates={templates}
+            categories={cats.filter(c => c.isActive)}
             costCenters={ccs.filter(c => c.isActive)}
             businessUnits={bus.filter(c => c.isActive)}
             legalEntities={les.filter(c => c.isActive)}
