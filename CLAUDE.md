@@ -288,7 +288,13 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**EM ANDAMENTO — 29/set: rateio de NATUREZA, na branch `feat/rateio-natureza` (NÃO subiu).**
+**NO AR em 30/set (01:41) — Sessões 1 e 2 do rateio de natureza; faltam 3 (telas) e 4 (MCP).**
+Subida feita sozinha de madrugada, autorizada pelo Julio: validação 22/22 contra a produção, dump
+`lure-expert-2026-09-30-antes-0033.dump`, retrato, 0033 aplicada (113 partes receberam natureza, 53
+lançamentos esvaziados), `--comparar` 110/110 antes e depois do deploy, merge `ba22049` em `main`.
+O texto abaixo é o de 29/set, mantido como contexto.
+
+**(29/set) rateio de NATUREZA, na branch `feat/rateio-natureza`.**
 Pedido do Julio: TED que paga vários fornecedores e PIX que junta serviço e devolução são UM
 lançamento no extrato e várias naturezas. A parte do rateio ganhou natureza, e **o lançamento
 rateado fica sem ela** (mesma regra das dimensões, o banco recusa o contrário) — revoga em parte a
@@ -907,15 +913,16 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ Hardening pipeline de categorização — 4 fixes encadeados: catch loud em `approveAndInsert` (com flag `categorizationDispatched` pro frontend), chunking interno do `categorize-transactions` em `step.run`s de 50 (sobrevive ao maxDuration=300 do Vercel), chunking de evento `transaction/batch-inserted` em 3000 IDs/event (limite real do Inngest é 256KB, não 512KB — `sendCategorizationEvents` helper em `lib/inngest.ts`), sanitização de BOM/zero-width nas envs Anthropic e Inngest no startup (causa do `TypeError: Cannot convert argument to a ByteString`). Commits `b040a23` / `37026ef` / `cec830a` / `2bd4cf1`. Detalhes em `docs/SESSION_LOG.md`.
 - ✅ Layer 0 de categorização — match determinístico do CSV antes do LLM. Parser detecta colunas autoritativas (`Categoria/Natureza Pai/Filho`, `Conta Contábil`, `Plano de Contas`, `Tipo Natureza`) por regex no header. `findCategoryByCsvMapping` faz lookup normalizado (lowercase + sem acento + colapsa dash/barra/parênteses em espaço). Desempate cumulativo: nome → tipo (`TIPO_ALIASES`: `Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc) → pai. `approveAndInsert` pré-classifica no INSERT (linhas casadas não entram no evento Inngest). Resultado: CSVs de ERP com plano alinhado importam zero-Haiku. Commits `d587644` / `d72ec37` / `35400e6`. Decisão arquitetural em `docs/SCHEMA_DECISIONS.md` Decisão 12.
 
-**Migration PENDENTE (não aplicar fora do horário combinado):**
-- 🔲 `db/migrations/rls/0033_rateio_de_natureza.sql` — `category_id` em `transaction_allocations` e
-  `allocation_template_lines`, índice, função e gatilho da invariante passam a cobrir a natureza, view
-  `transaction_lines` tira a natureza da parte, e os 53 rateados com natureza a passam às partes.
-  Validada 22/22 com ROLLBACK e aplicada no banco LOCAL. Reversa: `0033_down_rateio_de_natureza.sql`.
-  **Só aplicar junto do merge da branch `feat/rateio-natureza`** — o código de `main` não esvazia a
-  natureza da origem ao ratear, e o gatilho novo recusaria.
-
 **Migrations aplicadas no Supabase Studio:**
+- ✅ `db/migrations/rls/0033_rateio_de_natureza.sql` — **aplicada em 30/set 01:40** (por mim, via
+  `psql -1` pelo pooler, autorizado pelo Julio), junto do merge `ba22049`. `category_id` em
+  `transaction_allocations` e `allocation_template_lines`, índice, função e gatilho da invariante
+  cobrindo a natureza, view `transaction_lines` tirando a natureza da parte. Efeito: 113 partes
+  receberam natureza, 53 lançamentos rateados ficaram sem. Validada 22/22 com ROLLBACK contra a
+  produção imediatamente antes; conciliação 110/110 (66 meses de 5 organizações idênticos) antes e
+  depois do deploy. Dump de antes: `C:\Users\Julio\backups\lure-expert\lure-expert-2026-09-30-antes-0033.dump`.
+  Reversa: `0033_down_rateio_de_natureza.sql` (perda declarada: rateio com naturezas diferentes volta
+  com a de maior valor).
 - ✅ `db/migrations/rls/0032_alerta_saldo_negativo.sql` — **aplicada e conferida contra o banco**
   (11/12; a única falha era **da asserção**, não da migration — ver abaixo). Não mexe em estrutura
   nenhuma: tira `'saldo-negativo'` do `jsonb` das specs de bloco `alertas` já gravadas. Era
