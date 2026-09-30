@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { transactions, documents, organizations, dataSources, invoices } from '@/db/schema'
 import { eq, and, inArray } from 'drizzle-orm'
 import { somarMatchCount } from '@/lib/rules-write'
+import { semRateio } from '@/lib/transactions-write'
 import {
   loadOrgContext,
   categorizeTransaction,
@@ -46,6 +47,10 @@ async function processChunk(
     .where(and(
       eq(transactions.organizationId, organizationId),
       inArray(transactions.id, ids),
+      // Rateado é classificação manual que vive nas partes. Escrever natureza ou
+      // dimensão nele seria recusado pelo gatilho no commit — e derrubaria o
+      // bloco inteiro. Para dimensões esse risco existia desde a 10.4.
+      semRateio,
     ))
 
   // Deriva o domínio (bp/dre) a partir do report_type do documento de cada transação.

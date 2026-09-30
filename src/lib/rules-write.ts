@@ -33,6 +33,7 @@ import {
   costCenters, businessUnits, legalEntities, contacts,
 } from '@/db/schema'
 import { validarDimensoes } from '@/lib/allocations-write'
+import { semNaturezaFilter } from '@/lib/sql-dimensions'
 
 /** Teto por chamada. 50 linhas ainda é uma lista que uma pessoa lê antes de aceitar. */
 export const MAX_REGRAS_POR_LOTE = 50
@@ -433,7 +434,7 @@ async function contarAlcance(
   const rows = await db.execute<{ idx: number; casam: number; sem_natureza: number }>(sql`
     SELECT v.idx AS idx,
            COUNT(t.id)::int AS casam,
-           COUNT(t.id) FILTER (WHERE t.category_id IS NULL)::int AS sem_natureza
+           COUNT(t.id) FILTER (WHERE ${semNaturezaFilter(sql.raw('t.id'))})::int AS sem_natureza
       FROM (VALUES ${valores}) AS v(idx, descricao, conta)
       LEFT JOIN transactions t
         ON t.organization_id = ${organizationId}::uuid

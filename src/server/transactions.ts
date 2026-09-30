@@ -6,13 +6,13 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { transactions, categories, documents, costCenters, businessUnits, legalEntities, contacts, dataSources } from '@/db/schema'
-import { eq, and, isNotNull, desc, asc, count, inArray, or, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
+import { eq, and, desc, asc, count, inArray, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
 import { dimensionExistsFilter } from '@/lib/sql-dimensions'
 import { estimarCustoCategorizacao } from '@/lib/ai-pricing'
 import {
-  dimensionSchema, assertLeafCategory, classificarPorIds, type DimensionData,
+  dimensionSchema, assertLeafCategory, classificarPorIds, semRateio, type DimensionData,
 } from '@/lib/transactions-write'
 import { recusaDePapel } from '@/lib/members-types'
 
@@ -25,23 +25,6 @@ function parseMultiFilter(param: string | undefined): { ids: string[]; includeNo
     includeClassified: parts.includes('__classified__'),
     ids: parts.filter(p => p !== '__none__' && p !== '__classified__'),
   }
-}
-
-// Constrói condição SQL para filtro multi-select numa coluna nullable
-function buildMultiFilterCondition(
-  column: Parameters<typeof isNull>[0],
-  filter: { ids: string[]; includeNone: boolean; includeClassified: boolean },
-): SQL | null {
-  const { ids, includeNone, includeClassified } = filter
-  if (!includeNone && !includeClassified && ids.length === 0) return null
-
-  const clauses: (SQL | undefined)[] = []
-  if (includeNone) clauses.push(isNull(column) as SQL)
-  if (includeClassified) clauses.push(isNotNull(column) as SQL)
-  if (ids.length > 0) clauses.push(inArray(column, ids) as SQL)
-
-  if (clauses.length === 1) return clauses[0]!
-  return or(...clauses as SQL[]) as SQL
 }
 
 interface GetTransactionsParams {
@@ -82,7 +65,8 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   if (amountMin) conditions.push(gte(sql`${transactions.amount}::numeric`, sql`${amountMin}::numeric`))
   if (amountMax) conditions.push(lte(sql`${transactions.amount}::numeric`, sql`${amountMax}::numeric`))
 
-  const catFilter = buildMultiFilterCondition(transactions.categoryId, parseMultiFilter(category))
+  // Natureza pergunta às LINHAS, como as dimensões: com rateio ela vive nas partes.
+  const catFilter = dimensionExistsFilter(transactions.id, 'category_id', parseMultiFilter(category))
   if (catFilter) conditions.push(catFilter)
 
   // As quatro dimensões filtram pelas LINHAS do lançamento, não pela coluna
@@ -248,7 +232,10 @@ export async function classifyTransaction(id: string, data: DimensionData) {
     .limit(1)
   if (!tx) return { error: 'Transação não encontrada.' }
 
-  await classificarPorIds(organizationId, [id], parsed.data)
+  const r = await classificarPorIds(organizationId, [id], parsed.data)
+  if (r.atualizados === 0 && r.rateadosExcluidos > 0) {
+    return { error: 'Este lançamento está rateado: a natureza e as dimensões vivem nas partes. Abra o rateio para mudar.' }
+  }
 
   revalidatePath('/transacoes')
   revalidatePath('/dre')
@@ -291,11 +278,11 @@ export async function batchClassifyTransactions(ids: string[], data: DimensionDa
     if (catError) return { error: catError }
   }
 
-  const atualizados = await classificarPorIds(organizationId, ids, parsed.data)
+  const r = await classificarPorIds(organizationId, ids, parsed.data)
 
   revalidatePath('/transacoes')
   revalidatePath('/dre')
-  return { success: true, updated: atualizados }
+  return { success: true, updated: r.atualizados, rateadosExcluidos: r.rateadosExcluidos }
 }
 
 async function idsNaoCategorizados(organizationId: string) {
@@ -306,6 +293,9 @@ async function idsNaoCategorizados(organizationId: string) {
       eq(transactions.organizationId, organizationId),
       ne(transactions.status, 'pending'),
       isNull(transactions.categoryId),
+      // Rateado tem a natureza vazia por regra (vive nas partes) — não é "sem
+      // natureza" para o expert classificar, e o gatilho recusaria a escrita.
+      semRateio,
     ))
 }
 

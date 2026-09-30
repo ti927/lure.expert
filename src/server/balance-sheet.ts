@@ -4,10 +4,10 @@ import { getAuthContext } from '@/lib/auth-context'
 
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
-import { documents, transactions, categories } from '@/db/schema'
-import { eq, and, isNotNull, desc, lte, gte, asc, inArray, sum, sql } from 'drizzle-orm'
-import { alias } from 'drizzle-orm/pg-core'
+import { documents, categories } from '@/db/schema'
+import { eq, and, isNotNull, desc, lte, gte, asc, inArray, sql } from 'drizzle-orm'
 import { BP_TYPES, BP_TYPE_LABELS, type BpType } from '@/lib/bp-types'
+import { lerLinhasDoBalanco, somarBalancoPorDocumento } from '@/lib/balance-sheet-read'
 import type { DrillDownTransaction } from '@/lib/dre-types'
 export type { BpType } from '@/lib/bp-types'
 
@@ -31,8 +31,6 @@ export type BpData = {
 export async function getBpData(referenceDate: string): Promise<BpData | null> {
   const { organizationId } = await getAuthContext()
 
-  const parent = alias(categories, 'parent')
-
   const [latestDoc] = await db
     .select({ id: documents.id, referenceDate: documents.referenceDate })
     .from(documents)
@@ -47,44 +45,12 @@ export async function getBpData(referenceDate: string): Promise<BpData | null> {
 
   if (!latestDoc?.referenceDate) return null
 
-  const rows = await db
-    .select({
-      childId: categories.id,
-      childName: categories.name,
-      childCode: categories.code,
-      parentId: parent.id,
-      parentName: parent.name,
-      parentCode: parent.code,
-      parentType: parent.type,
-      total: sum(transactions.amount),
-    })
-    .from(transactions)
-    .innerJoin(categories, eq(transactions.categoryId, categories.id))
-    .innerJoin(parent, eq(categories.parentId, parent.id))
-    .where(and(
-      eq(transactions.documentId, latestDoc.id),
-      eq(transactions.organizationId, organizationId),
-      inArray(parent.type, [...BP_TYPES]),
-    ))
-    .groupBy(
-      categories.id, categories.name, categories.code,
-      parent.id, parent.name, parent.code, parent.type,
-    )
-    .orderBy(parent.code, categories.code)
+  const rows = await lerLinhasDoBalanco(organizationId, latestDoc.id)
 
   return {
     referenceDate: latestDoc.referenceDate,
     documentId: latestDoc.id,
-    rows: rows.map(r => ({
-      childId: r.childId,
-      childName: r.childName,
-      childCode: r.childCode,
-      parentId: r.parentId,
-      parentName: r.parentName,
-      parentCode: r.parentCode,
-      parentType: r.parentType as BpType,
-      total: Number(r.total ?? 0),
-    })),
+    rows: rows.map(r => ({ ...r, parentType: r.parentType as BpType })),
   }
 }
 
@@ -182,20 +148,7 @@ export async function getBpAllDates(from?: string, to?: string): Promise<BpAllDa
   const amounts: Record<string, Record<string, number>> = {}
   if (dedupedDocs.length > 0) {
     const docIds = dedupedDocs.map(d => d.id)
-    const sums = await db
-      .select({
-        documentId: transactions.documentId,
-        categoryId: transactions.categoryId,
-        total: sum(transactions.amount),
-      })
-      .from(transactions)
-      .where(and(
-        eq(transactions.organizationId, organizationId),
-        inArray(transactions.documentId, docIds),
-        isNotNull(transactions.documentId),
-        isNotNull(transactions.categoryId),
-      ))
-      .groupBy(transactions.documentId, transactions.categoryId)
+    const sums = await somarBalancoPorDocumento(organizationId, docIds)
 
     const docToYearMonth = new Map(dedupedDocs.map(d => [d.id, d.yearMonth]))
     for (const row of sums) {

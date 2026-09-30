@@ -45,6 +45,7 @@ import {
   cabecalhoDoArquivoSchema, TIPOS_DE_RELATORIO, TIPOS_DE_CONTA, ROTULO_DE_CONTA,
 } from '@/lib/import-contract'
 import { listarContasUsadas, mapaDeContasManuais } from '@/lib/accounts'
+import { semNaturezaFilter } from '@/lib/sql-dimensions'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -133,7 +134,10 @@ const descreverOrganizacao: Ferramenta = {
     const [resumo] = await db
       .select({
         lancamentos: sql<number>`COUNT(*)::int`,
-        semNatureza: sql<number>`COUNT(*) FILTER (WHERE ${transactions.categoryId} IS NULL)::int`,
+        // `${transactions}.id` e NÃO `${transactions.id}`: consulta sem join, e
+        // dentro do EXISTS o `"id"` cru seria capturado pela view (Decisão 18).
+        // Pelas linhas porque, com rateio de natureza, ela vive nas partes.
+        semNatureza: sql<number>`COUNT(*) FILTER (WHERE ${semNaturezaFilter(sql`${transactions}.id`)})::int`,
         primeira: sql<string | null>`MIN(${transactions.date})::text`,
         ultima: sql<string | null>`MAX(${transactions.date})::text`,
       })
@@ -453,7 +457,7 @@ const preverClassificacao: Ferramenta = {
       resumo,
       ...(resumo.rateadosExcluidos > 0 ? {
         aviso: `${resumo.rateadosExcluidos} lançamento(s) rateado(s) ficaram de fora: com rateio, ` +
-          'as dimensões ficam nas partes, não no lançamento. A natureza deles pode ser alterada normalmente.',
+          'a natureza e as dimensões ficam nas partes, não no lançamento. Para mudá-las, refaça o rateio.',
       } : {}),
       comoAplicar: `Mostre este resumo ao usuário. Com o aceite dele, chame ` +
         `aplicar_classificacao_em_lote com previaId e confirmacao: "${PALAVRA_DE_CONFIRMACAO}".`,
@@ -734,8 +738,8 @@ const aplicarRateio: Ferramenta = {
     return {
       aplicado: true,
       lancamentosRateados: r.aplicados,
-      observacao: 'As dimensões passaram para as partes; o lançamento em si ficou sem dimensão, ' +
-        'como o modelo de rateio exige. A natureza não é rateada e continua no lançamento.',
+      observacao: 'A natureza e as dimensões passaram para as partes; o lançamento em si ficou sem ' +
+        'elas, como o modelo de rateio exige. Cada parte herdou a natureza que o lançamento tinha.',
     }
   },
 }

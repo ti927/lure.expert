@@ -13,7 +13,7 @@ import {
   legalEntities,
   contacts,
 } from '@/db/schema'
-import { eq, and, desc, count, inArray, sql, ilike, gte, lte, or, isNull } from 'drizzle-orm'
+import { eq, and, desc, count, inArray, sql, ilike, gte, lte } from 'drizzle-orm'
 import { dimensionExistsFilter } from '@/lib/sql-dimensions'
 
 const PAGE_SIZE = 30
@@ -54,15 +54,15 @@ export async function getReviewQueue(filters: ReviewFilters = {}) {
       conditions.push(eq(transactions.direction, filters.direction as 'inflow' | 'outflow'))
     }
     if (filters.category) {
+      // Natureza pergunta às LINHAS, como as dimensões abaixo: com rateio ela
+      // vive nas partes.
       const ids = filters.category.split(',').filter(Boolean)
-      if (ids.includes('__none__')) {
-        const rest = ids.filter(id => id !== '__none__')
-        conditions.push(rest.length > 0
-          ? or(isNull(transactions.categoryId), inArray(transactions.categoryId, rest))!
-          : isNull(transactions.categoryId))
-      } else {
-        conditions.push(inArray(transactions.categoryId, ids))
-      }
+      const f = dimensionExistsFilter(transactions.id, 'category_id', {
+        ids: ids.filter(id => id !== '__none__'),
+        includeNone: ids.includes('__none__'),
+        includeClassified: false,
+      })
+      if (f) conditions.push(f)
     }
     // As quatro dimensões perguntam pelas LINHAS do lançamento (ver
     // `dimensionExistsFilter`): num lançamento rateado a coluna do pai é nula e

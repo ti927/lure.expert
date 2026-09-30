@@ -55,8 +55,15 @@ export function dimensionFilters(alias: DimensionAlias, f: DimensionFilterInput)
 }
 
 /** As quatro colunas de dimensão, como union fechado — o que entra via `sql.raw`. */
+/**
+ * As colunas que um filtro pode perguntar às LINHAS de um lançamento. Natureza
+ * entrou em 29/set (rateio de natureza): com rateio ela vive nas partes, então
+ * a pergunta "tem esta natureza?" é sobre as linhas, como já era para as quatro
+ * dimensões.
+ */
 export type DimensionColumn =
   | 'cost_center_id' | 'business_unit_id' | 'legal_entity_id' | 'contact_id'
+  | 'category_id'
 
 export interface MultiFilter {
   ids: string[]
@@ -123,5 +130,21 @@ export function dimensionExistsFilter(
     SELECT 1 FROM transaction_lines tl
     WHERE tl.transaction_id = ${txIdColumn}
       AND (${sql.join(preds, sql` OR `)})
+  )`
+}
+
+/**
+ * "Sem natureza", dito sobre as LINHAS: o lançamento tem alguma linha sem
+ * natureza. Sem rateio é exatamente `category_id IS NULL`; com rateio, basta
+ * uma parte sem natureza para o lançamento pedir classificação.
+ *
+ * Passe a coluna JÁ QUALIFICADA (`sql\`${transactions}.id\`` ou `sql.raw('t.id')`)
+ * — ver a nota da Decisão 18 acima.
+ */
+export function semNaturezaFilter(txIdColumn: SQL): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM transaction_lines tl
+    WHERE tl.transaction_id = ${txIdColumn}
+      AND tl.category_id IS NULL
   )`
 }

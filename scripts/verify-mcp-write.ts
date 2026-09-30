@@ -23,6 +23,8 @@ import { and, eq, like, sql, isNotNull } from 'drizzle-orm'
 import { garantirGrant, emitirTokens } from '@/lib/oauth/store'
 import { loadOrgContext, categorizeTransaction } from '@/lib/categorizer'
 import { somarMatchCount } from '@/lib/rules-write'
+import { semRateio } from '@/lib/transactions-write'
+import { semNaturezaFilter } from '@/lib/sql-dimensions'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3100'
 const RECURSO = `${BASE}/api/mcp`
@@ -531,8 +533,17 @@ async function main() {
     `avisa que ${pc.resumo.semCategoria.count} lançamento(s) sem natureza ficaram de fora`)
 
   // O dente da prévia, no orçamento: classificar um lançamento muda o realizado.
+  // Desde a 0033 a natureza de um lançamento rateado vive nas PARTES, e o
+  // gatilho recusa gravá-la no lançamento — um POSTO IPIRANGA foi rateado acima.
+  // Classificar, para ele, é dar natureza às partes.
   await db.update(transactions).set({ categoryId: folha.id })
-    .where(and(eq(transactions.organizationId, ORG), eq(transactions.description, 'POSTO IPIRANGA')))
+    .where(and(eq(transactions.organizationId, ORG), eq(transactions.description, 'POSTO IPIRANGA'), semRateio))
+  await db.execute(sql`
+    UPDATE transaction_allocations a SET category_id = ${folha.id}::uuid
+      FROM transactions t
+     WHERE t.id = a.transaction_id AND t.organization_id = ${ORG}::uuid
+       AND t.description = 'POSTO IPIRANGA'
+  `)
 
   const copiaVelha = await chamar(comEscrita, 'aplicar_copia_do_realizado', {
     organizationId: ORG, previaId: pc.previaId, confirmacao: 'aplicar',
@@ -688,9 +699,11 @@ async function main() {
   t(gravada?.cc === cc.id && gravada?.cat === folha.id,
     'e a regra nova aponta para a natureza E o centro de custo pedidos')
 
+  // "Sem natureza" pelas LINHAS (0033): o lançamento rateado tem a coluna vazia
+  // por regra, e só conta se alguma parte estiver sem.
   const [semReclassificar] = await db.execute<{ n: number }>(sql`
-    SELECT COUNT(*)::int AS n FROM transactions
-     WHERE organization_id = ${ORG}::uuid AND category_id IS NULL`)
+    SELECT COUNT(*)::int AS n FROM transactions t
+     WHERE t.organization_id = ${ORG}::uuid AND ${semNaturezaFilter(sql.raw('t.id'))}`)
   t(Number(semReclassificar.n) === 2,
     'e os 2 lançamentos sem natureza continuam sem — criar regra não mexe no passado')
 

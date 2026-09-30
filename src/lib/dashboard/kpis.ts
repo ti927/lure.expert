@@ -116,8 +116,12 @@ export async function calcularKpisDoMes(
       COALESCE(SUM(CASE WHEN c.type NOT IN (${lista(TIPOS_FORA_DO_RESULTADO)})
         THEN (CASE WHEN t.direction = 'inflow' THEN t.amount::numeric ELSE -t.amount::numeric END)
         ELSE 0 END), 0)::text AS lucro,
-      COUNT(*)::text AS tx_count
-    FROM transactions t
+      -- DISTINCT: a view devolve uma linha por parte, e o campo conta lançamentos.
+      COUNT(DISTINCT t.transaction_id)::text AS tx_count
+    -- Pela view: com rateio de natureza (29/set) cada parte tem a sua, e ler
+    -- transactions jogaria o valor inteiro na natureza do lançamento — que,
+    -- rateado, é vazia. As somas são idênticas enquanto ninguém rateia natureza.
+    FROM transaction_lines t
     JOIN categories c ON t.category_id = c.id
     WHERE t.organization_id = ${organizationId}::uuid
       AND t.status NOT IN ('pending', 'duplicate')

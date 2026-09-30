@@ -79,11 +79,18 @@ export async function detectarRecorrencias(
         t.amount::numeric AS amount,
         COALESCE(t.effective_date, t.date)::date AS tx_date
       FROM transactions t
-      LEFT JOIN categories c ON t.category_id = c.id
       WHERE t.organization_id = ${organizationId}::uuid
         AND t.status NOT IN ('pending', 'duplicate')
         AND COALESCE(t.effective_date, t.date)::date >= CURRENT_DATE - INTERVAL '180 days'
-        AND (c.id IS NULL OR c.hide_in_cashflow = false)
+        -- A recorrência é da DESCRIÇÃO do lançamento inteiro; a natureza só
+        -- decide se ele fica de fora. Desde o rateio de natureza (29/set) ela
+        -- vive nas linhas: basta uma linha em natureza oculta no fluxo para o
+        -- lançamento sair. Sem rateio é exatamente a regra anterior.
+        AND NOT EXISTS (
+          SELECT 1 FROM transaction_lines tl
+          JOIN categories c ON c.id = tl.category_id
+          WHERE tl.transaction_id = t.id AND c.hide_in_cashflow = true
+        )
       ORDER BY lower(trim(t.description)), t.direction, COALESCE(t.effective_date, t.date)::date, t.amount::numeric DESC
     ),
     grouped AS (
