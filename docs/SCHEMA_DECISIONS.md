@@ -1726,3 +1726,11 @@ dizer "não sei" não apagar natureza. `/transacoes` mostra a natureza do ratead
 contagem de uso dos modelos de rateio (`usageCount`) vivia em zero — `${allocationTemplates.id}` em
 subselect de consulta sem join.
 
+**Revisão das sessões 3/4 — duas correções.** (1) Rateio sem natureza informada sobre um lançamento
+JÁ rateado em naturezas diferentes é **recusado** (em `gravarAllocations` e na prévia do lote): não
+existe "a natureza do lançamento" para manter, e antes as partes ficavam sem natureza e o valor saía
+da DRE em silêncio. `naturezaPadrao` passou a devolver `{ id, divergente }`. (2) "Salvar como
+modelo" no diálogo individual grava `null` (natureza do lançamento) quando a natureza da parte é só
+a herdada — senão um modelo feito para dividir centro de custo carregaria a natureza de quem o
+originou para todo lançamento em que fosse aplicado.
+

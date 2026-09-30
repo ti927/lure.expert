@@ -113,11 +113,12 @@ function NaturezaDoRateio({ tx, categories, onClick }: {
   onClick: () => void
 }) {
   const ids = tx.allocCategoryIds ?? []
-  const texto = ids.length === 0
-    ? 'sem natureza'
-    : ids.length === 1 && !tx.allocSemNatureza
+  const base = ids.length === 0
+    ? null
+    : ids.length === 1
       ? (nomeDaNatureza(categories, ids[0]) ?? '1 natureza')
-      : `${ids.length} ${ids.length === 1 ? 'natureza' : 'naturezas'}${tx.allocSemNatureza ? ' · parte sem natureza' : ''}`
+      : `${ids.length} naturezas`
+  const texto = !base ? 'sem natureza' : tx.allocSemNatureza ? `${base} + parte sem natureza` : base
   const alerta = ids.length === 0 || tx.allocSemNatureza
   return (
     <button onClick={onClick} title="A natureza está nas partes do rateio — clique para ver"

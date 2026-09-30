@@ -207,13 +207,17 @@ export function AllocationDialog({
     const pesos = reduceWeights(partes.map(p => p.cents))
     return partes.map((p, i) => ({
       weight:         pesos[i],
-      categoryId:     p.categoryId,
+      // A natureza que é só a herdada do lançamento vira "natureza do
+      // lançamento" no modelo (null) — senão um modelo feito para dividir o
+      // centro de custo do aluguel mandaria a conta de luz para Aluguel quando
+      // aplicado em lote. Só a natureza ESCOLHIDA fica gravada no modelo.
+      categoryId:     p.categoryId === naturezaDoLancamento ? null : p.categoryId,
       costCenterId:   p.costCenterId,
       businessUnitId: p.businessUnitId,
       legalEntityId:  p.legalEntityId,
       contactId:      p.contactId,
     }))
-  }, [partes, faltam])
+  }, [partes, faltam, naturezaDoLancamento])
 
   function salvar() {
     if (!transaction) return
@@ -257,11 +261,15 @@ export function AllocationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <AllocationTemplateBar
-          applied={modelo}
-          onApply={aplicarModelo}
-          currentLines={linhasParaModelo}
-        />
+        {/* Só depois de carregar: aplicado antes, o modelo seria sobrescrito pelas
+            partes que chegam — e sem saber a natureza do lançamento. */}
+        {!isLoading && (
+          <AllocationTemplateBar
+            applied={modelo}
+            onApply={aplicarModelo}
+            currentLines={linhasParaModelo}
+          />
+        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">

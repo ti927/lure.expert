@@ -608,8 +608,10 @@ const pesoDeEntrada = z.object({
     'Natureza desta parte — o id de uma Natureza Filho de listar_categorias. Use quando o mesmo ' +
     'lançamento paga ou recebe coisas de naturezas diferentes (um TED que paga vários fornecedores, ' +
     'um PIX que junta serviço e reembolso). OMITA para a parte manter a natureza que cada ' +
-    'lançamento já tem — é o caso de dividir só centro de custo, unidade ou contato. Toda parte ' +
-    'segue o sentido (entrada/saída) do lançamento; não existe parte de sentido oposto.',
+    'lançamento já tem — é o caso de dividir só centro de custo, unidade ou contato. null vale o ' +
+    'mesmo que omitir. Se o lançamento JÁ está rateado em naturezas diferentes, não há uma para ' +
+    'manter: a prévia recusa, e cada peso precisa trazer a sua. Toda parte segue o sentido ' +
+    '(entrada/saída) do lançamento; não existe parte de sentido oposto.',
   ),
   costCenterId:   z.string().uuid().nullable().default(null),
   businessUnitId: z.string().uuid().nullable().default(null),

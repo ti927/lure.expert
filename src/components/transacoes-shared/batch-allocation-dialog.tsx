@@ -109,7 +109,8 @@ export function BatchAllocationDialog({
           <DialogDescription>
             Lançamentos de valores diferentes só podem dividir a mesma proporção. A prévia mostra os
             valores que cada um receberá, já fechados no centavo. Natureza em branco numa parte = cada
-            lançamento mantém a natureza que já tem.
+            lançamento mantém a natureza que já tem (num já rateado em naturezas diferentes, informe a
+            natureza em cada parte).
           </DialogDescription>
         </DialogHeader>
 
