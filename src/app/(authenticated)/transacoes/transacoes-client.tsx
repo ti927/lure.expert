@@ -73,6 +73,10 @@ type TxRow = Transaction & {
   connectionBadge?: string | null
   /** Tem partes de rateio: a classificação vive nelas, não neste lançamento. */
   isAllocated?: boolean
+  /** As naturezas distintas das partes (0033) — a do lançamento rateado é nula. */
+  allocCategoryIds?: string[]
+  /** Alguma parte está sem natureza. */
+  allocSemNatureza?: boolean
 }
 
 interface Props {
@@ -90,6 +94,39 @@ function formatDate(iso: string): string {
   const p = iso.split('-')
   if (p.length !== 3) return iso
   return `${p[2]}/${p[1]}/${p[0].slice(2)}`
+}
+
+function nomeDaNatureza(categories: { id: string; code: string | null; name: string }[], id: string | null | undefined): string | null {
+  if (!id) return null
+  const c = categories.find(x => x.id === id)
+  return c ? `${c.code ? `${c.code} – ` : ''}${c.name}` : null
+}
+
+/**
+ * A célula de natureza de um lançamento rateado: só leitura, porque a natureza
+ * vive nas partes. Uma natureza só → o nome; várias → "N naturezas"; nenhuma →
+ * "sem natureza", em âmbar, que é o que pede classificação. Clicar abre as partes.
+ */
+function NaturezaDoRateio({ tx, categories, onClick }: {
+  tx: { allocCategoryIds?: string[]; allocSemNatureza?: boolean }
+  categories: { id: string; code: string | null; name: string }[]
+  onClick: () => void
+}) {
+  const ids = tx.allocCategoryIds ?? []
+  const base = ids.length === 0
+    ? null
+    : ids.length === 1
+      ? (nomeDaNatureza(categories, ids[0]) ?? '1 natureza')
+      : `${ids.length} naturezas`
+  const texto = !base ? 'sem natureza' : tx.allocSemNatureza ? `${base} + parte sem natureza` : base
+  const alerta = ids.length === 0 || tx.allocSemNatureza
+  return (
+    <button onClick={onClick} title="A natureza está nas partes do rateio — clique para ver"
+      className={cn('flex h-8 w-full items-center px-2 text-xs truncate rounded-md hover:bg-muted/50',
+        alerta ? 'text-amber-600' : 'text-muted-foreground')}>
+      <span className="truncate">{texto}</span>
+    </button>
+  )
 }
 
 function formatBRL(amount: string | number): string {
@@ -517,10 +554,9 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
               <tbody>
                 {localRows.map(tx => {
                   const isClassifying = classifyingId === tx.id
-                  // Lançamento rateado: as dimensões vivem nas partes, e o banco
-                  // recusa gravá-las aqui. A célula vira leitura até a 10.4
-                  // trazer a edição do rateio. A categoria segue editável — ela
-                  // não se parte.
+                  // Lançamento rateado: a natureza e as dimensões vivem nas
+                  // partes (0026 e 0033), e o banco recusa gravá-las aqui. As
+                  // células viram leitura; edita-se pelo diálogo de rateio.
                   const dimLocked = tx.isAllocated === true
                   const acctLabel = tx.accountType ? (ACCT_LABELS[tx.accountType] ?? tx.accountType) : null
                   const acctStr = acctLabel
@@ -576,7 +612,11 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                         )}
                       </td>
                       <td className="px-1 py-1">
-                        <CategoryCellCombobox value={tx.categoryId ?? null} categories={options.categories} onValueChange={v => handleClassify(tx.id, 'categoryId', v)} disabled={isClassifying} />
+                        {dimLocked ? (
+                          <NaturezaDoRateio tx={tx} categories={options.categories} onClick={() => toggleExpand(tx.id)} />
+                        ) : (
+                          <CategoryCellCombobox value={tx.categoryId ?? null} categories={options.categories} onValueChange={v => handleClassify(tx.id, 'categoryId', v)} disabled={isClassifying} />
+                        )}
                       </td>
                       {dimLocked ? (
                         <td className="px-2 py-1.5 text-xs text-muted-foreground" colSpan={4}>
@@ -610,7 +650,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                       )}
                       <td className="px-1 py-1 text-center">
                         <div className="flex items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => setAllocTarget(tx)} className="h-7 w-7 rounded flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5" title={dimLocked ? 'Editar rateio' : 'Ratear entre dimensões'}>
+                          <button onClick={() => setAllocTarget(tx)} className="h-7 w-7 rounded flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/5" title={dimLocked ? 'Editar rateio' : 'Ratear (natureza e dimensões)'}>
                             <Split className="h-3.5 w-3.5" />
                           </button>
                           <button onClick={() => setDeleteTargetIds([tx.id])} className="h-7 w-7 rounded flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/5" title="Apagar lançamento">
@@ -631,6 +671,9 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                                 <div key={p.id} className="flex items-center gap-3 text-xs">
                                   <span className="text-muted-foreground">└</span>
                                   <span className="tabular-nums font-medium w-24 text-right">{formatBRL(p.amount)}</span>
+                                  <span className={cn('w-56 truncate', !p.categoryId && 'text-amber-600')}>
+                                    {nomeDaNatureza(options.categories, p.categoryId) ?? 'sem natureza'}
+                                  </span>
                                   <span className="text-muted-foreground">
                                     {[
                                       options.costCenters.find(c => c.id === p.costCenterId)?.name,
@@ -767,6 +810,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
         open={allocTarget !== null}
         onOpenChange={o => { if (!o) setAllocTarget(null) }}
         transaction={allocTarget}
+        categories={options.categories}
         costCenters={options.costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
         businessUnits={options.businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
         legalEntities={options.legalEntities.map(c => ({ id: c.id, name: c.name }))}
@@ -782,6 +826,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
         open={batchAllocOpen}
         onOpenChange={setBatchAllocOpen}
         selectedIds={Array.from(selectedIds)}
+        categories={options.categories}
         costCenters={options.costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
         businessUnits={options.businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
         legalEntities={options.legalEntities.map(c => ({ id: c.id, name: c.name }))}

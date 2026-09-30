@@ -191,8 +191,8 @@ export async function naturezaPadrao(
   organizationId: string,
   transactionId: string,
   categoriaDoLancamento: string | null,
-): Promise<string | null> {
-  if (categoriaDoLancamento) return categoriaDoLancamento
+): Promise<{ id: string | null; divergente: boolean }> {
+  if (categoriaDoLancamento) return { id: categoriaDoLancamento, divergente: false }
   const rows = await db
     .selectDistinct({ c: transactionAllocations.categoryId })
     .from(transactionAllocations)
@@ -200,8 +200,16 @@ export async function naturezaPadrao(
       eq(transactionAllocations.organizationId, organizationId),
       eq(transactionAllocations.transactionId, transactionId),
     ))
-  return rows.length === 1 ? rows[0].c : null
+  // Partes em naturezas DIFERENTES não têm "a natureza do lançamento" para
+  // herdar. Quem chama precisa recusar em vez de gravar sem natureza — senão um
+  // rateio só de centro de custo tiraria o valor da DRE em silêncio.
+  if (rows.length > 1) return { id: null, divergente: true }
+  return { id: rows[0]?.c ?? null, divergente: false }
 }
+
+const MSG_DIVERGENTE =
+  'as partes atuais têm naturezas diferentes, então não há uma natureza do lançamento para manter. ' +
+  'Informe a natureza de cada parte.'
 
 /**
  * Substitui o rateio de um lançamento pelas partes informadas.
@@ -231,9 +239,12 @@ export async function gravarAllocations(
 
   // Parte sem `categoryId` herda a natureza padrão; `null` explícito fica sem.
   const padrao = await naturezaPadrao(organizationId, transactionId, tx.categoryId)
+  if (padrao.divergente && parsed.data.some(p => p.categoryId === undefined)) {
+    return { error: `Este lançamento está rateado em naturezas diferentes: ${MSG_DIVERGENTE}` }
+  }
   const partes = parsed.data.map(p => ({
     ...p,
-    categoryId: p.categoryId === undefined ? padrao : p.categoryId,
+    categoryId: p.categoryId === undefined ? padrao.id : p.categoryId,
   }))
 
   if (partes.length > 0) {
@@ -407,6 +418,29 @@ export async function preverLoteDeRateio(
     .from(transactions)
     .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
     .orderBy(asc(transactions.date))
+
+  // Peso sem natureza = "manter a do lançamento". Num já rateado em naturezas
+  // diferentes isso não existe — a mesma recusa de `gravarAllocations`, aqui na
+  // PRÉVIA, para o lote não parar com metade aplicada. Parte sem natureza conta
+  // como uma natureza a mais, igual ao `selectDistinct` de `naturezaPadrao`.
+  if (parsedPesos.data.some(p => p.categoryId === undefined)) {
+    const [div] = await db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM transactions t
+       WHERE t.organization_id = ${organizationId}::uuid
+         AND t.id IN (${sql.join(ids.map(id => sql`${id}::uuid`), sql`, `)})
+         AND t.category_id IS NULL
+         AND (SELECT COUNT(DISTINCT COALESCE(a.category_id::text, '-'))
+                FROM transaction_allocations a WHERE a.transaction_id = t.id) > 1
+    `)
+    const n = Number(div?.n ?? 0)
+    if (n > 0) {
+      return {
+        error: `${n} dos lançamentos ${n === 1 ? 'está rateado' : 'estão rateados'} em naturezas diferentes: ` +
+          MSG_DIVERGENTE.replace('Informe a natureza de cada parte.',
+            'Informe a natureza em cada peso, ou tire esses lançamentos do lote.'),
+      }
+    }
+  }
 
   const weights = parsedPesos.data.map(p => p.weight)
   const rows: BatchPreviewRow[] = txs.map(t => ({

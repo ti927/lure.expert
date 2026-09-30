@@ -540,7 +540,8 @@ const listarModelosDeRateio: Ferramenta = {
   descricao:
     'Modelos de rateio salvos. Um modelo guarda PROPORÇÃO, nunca valor — o mesmo serve ao aluguel ' +
     'de R$ 12.000 e à conta de luz de R$ 340. Use o id de um deles em prever_rateio_em_lote no ' +
-    'lugar de informar pesos à mão.',
+    'lugar de informar pesos à mão. Em cada parte, categoryId nulo significa que a parte mantém a ' +
+    'natureza que o lançamento já tem; preenchido, a parte vai para aquela natureza.',
   entrada: alvo,
   escopo: 'leitura',
   async executar(args, ctx) {
@@ -562,6 +563,7 @@ const listarModelosDeRateio: Ferramenta = {
       .select({
         templateId: allocationTemplateLines.templateId,
         peso: allocationTemplateLines.weight,
+        categoryId: allocationTemplateLines.categoryId,
         costCenterId: allocationTemplateLines.costCenterId,
         businessUnitId: allocationTemplateLines.businessUnitId,
         legalEntityId: allocationTemplateLines.legalEntityId,
@@ -580,6 +582,8 @@ const listarModelosDeRateio: Ferramenta = {
           nome: m.nome,
           partes: minhas.map((l, i) => ({
             percentual: pcts[i],
+            // null = a parte fica com a natureza que cada lançamento já tem.
+            categoryId: l.categoryId,
             costCenterId: l.costCenterId,
             businessUnitId: l.businessUnitId,
             legalEntityId: l.legalEntityId,
@@ -598,6 +602,17 @@ const pesoDeEntrada = z.object({
     'Peso RELATIVO, não percentual fechado: 60 e 40 é a mesma divisão que 6 e 4. ' +
     'Não precisa somar 100.',
   ),
+  // Natureza por parte desde a 0033. O texto abaixo é o que o modelo lê —
+  // JSDoc não chega a ele (Decisão 23).
+  categoryId: z.string().uuid().nullable().optional().describe(
+    'Natureza desta parte — o id de uma Natureza Filho de listar_categorias. Use quando o mesmo ' +
+    'lançamento paga ou recebe coisas de naturezas diferentes (um TED que paga vários fornecedores, ' +
+    'um PIX que junta serviço e reembolso). OMITA para a parte manter a natureza que cada ' +
+    'lançamento já tem — é o caso de dividir só centro de custo, unidade ou contato. null vale o ' +
+    'mesmo que omitir. Se o lançamento JÁ está rateado em naturezas diferentes, não há uma para ' +
+    'manter: a prévia recusa, e cada peso precisa trazer a sua. Toda parte segue o sentido ' +
+    '(entrada/saída) do lançamento; não existe parte de sentido oposto.',
+  ),
   costCenterId:   z.string().uuid().nullable().default(null),
   businessUnitId: z.string().uuid().nullable().default(null),
   legalEntityId:  z.string().uuid().nullable().default(null),
@@ -615,7 +630,8 @@ const preverRateio: Ferramenta = {
   nome: 'prever_rateio_em_lote',
   titulo: 'Prever rateio em lote',
   descricao:
-    'Mostra como um rateio repartiria os lançamentos, SEM gravar. Cada lançamento é repartido pelo ' +
+    'Mostra como um rateio repartiria os lançamentos, SEM gravar. Reparte a NATUREZA e as dimensões ' +
+    '(centro de custo, unidade, entidade, contato): cada peso pode levar a sua. Cada lançamento é repartido pelo ' +
     'método do maior resto, então fecha no centavo exato — e a prévia mostra onde a sobra caiu. ' +
     'Rateio SUBSTITUI o que já existir no lançamento; a prévia diz quantos já eram rateados. ' +
     'Apresente o resumo ao usuário e obtenha o aceite antes de aplicar.',
@@ -739,7 +755,8 @@ const aplicarRateio: Ferramenta = {
       aplicado: true,
       lancamentosRateados: r.aplicados,
       observacao: 'A natureza e as dimensões passaram para as partes; o lançamento em si ficou sem ' +
-        'elas, como o modelo de rateio exige. Cada parte herdou a natureza que o lançamento tinha.',
+        'elas, como o modelo de rateio exige. Parte sem natureza informada ficou com a que o ' +
+        'lançamento tinha.',
     }
   },
 }
@@ -756,6 +773,9 @@ async function resolverPesos(
   if (pesos?.length) {
     return pesos.map(p => ({
       weight: p.peso,
+      // null e ausente são o mesmo aqui: "manter a do lançamento". Um modelo
+      // mandando null querendo dizer "não sei" não pode apagar natureza.
+      categoryId: p.categoryId ?? undefined,
       costCenterId: p.costCenterId ?? null,
       businessUnitId: p.businessUnitId ?? null,
       legalEntityId: p.legalEntityId ?? null,
@@ -767,6 +787,7 @@ async function resolverPesos(
   const linhas = await db
     .select({
       peso: allocationTemplateLines.weight,
+      categoryId: allocationTemplateLines.categoryId,
       costCenterId: allocationTemplateLines.costCenterId,
       businessUnitId: allocationTemplateLines.businessUnitId,
       legalEntityId: allocationTemplateLines.legalEntityId,
@@ -786,6 +807,8 @@ async function resolverPesos(
 
   return linhas.map(l => ({
     weight: Number(l.peso),
+    // Linha de modelo sem natureza = manter a do lançamento.
+    categoryId: l.categoryId ?? undefined,
     costCenterId: l.costCenterId,
     businessUnitId: l.businessUnitId,
     legalEntityId: l.legalEntityId,

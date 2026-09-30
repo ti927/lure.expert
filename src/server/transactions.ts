@@ -9,7 +9,9 @@ import { transactions, categories, documents, costCenters, businessUnits, legalE
 import { eq, and, desc, asc, count, inArray, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
-import { dimensionExistsFilter } from '@/lib/sql-dimensions'
+import {
+  dimensionExistsFilter, naturezasDoRateioSql, rateioComParteSemNaturezaSql,
+} from '@/lib/sql-dimensions'
 import { estimarCustoCategorizacao } from '@/lib/ai-pricing'
 import {
   dimensionSchema, assertLeafCategory, classificarPorIds, semRateio, type DimensionData,
@@ -134,8 +136,13 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
       // A tela precisa saber para não oferecer edição direta de dimensão: num
       // lançamento rateado o banco recusa gravar dimensão no pai.
       isAllocated: sql<boolean>`EXISTS (
-        SELECT 1 FROM transaction_allocations a WHERE a.transaction_id = ${transactions.id}
+        SELECT 1 FROM transaction_allocations a WHERE a.transaction_id = ${transactions}.id
       )`,
+      // Desde a 0033 a natureza de um rateado vive nas partes e a coluna dele é
+      // nula por regra. A célula de natureza mostra o que as partes têm: o nome,
+      // se for uma só, ou "N naturezas". `${transactions}.id` pela Decisão 18.
+      allocCategoryIds: naturezasDoRateioSql(sql`${transactions}.id`),
+      allocSemNatureza: rateioComParteSemNaturezaSql(sql`${transactions}.id`),
     })
     .from(transactions)
     .leftJoin(documents, eq(transactions.documentId, documents.id))

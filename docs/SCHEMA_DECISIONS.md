@@ -1714,3 +1714,23 @@ do diálogo de exclusão nunca apareceram. Corrigido em `lib/category-usage.ts`,
 **Migration:** `db/migrations/rls/0033_rateio_de_natureza.sql` · reversa `0033_down_rateio_de_natureza.sql`
 **Verificado:** 0033+reversa 22/22 com ROLLBACK; retrato de 5 organizações × 66 meses (DRE, fluxo,
 KPIs, indicadores) idêntico antes e depois; cenário de escrita 29/29; suítes 39/117/24/188/39.
+
+**Sessões 3 e 4 (30/set) — telas e MCP.** O diálogo de rateio ganhou a coluna Natureza,
+pré-preenchida com a natureza do lançamento (ou, num já rateado, a comum às partes — a mesma regra de
+`naturezaPadrao`). No **peso** (lote e modelos), natureza vazia significa **"manter a do
+lançamento"**, não "sem natureza": um peso não sabe em que lançamento vai cair. Por isso o lote
+manda `undefined`, e não `null`, ao servidor — `null` explícito gravaria a parte sem natureza. No
+MCP, `categoryId` nulo e ausente valem o mesmo ("manter"), para um modelo que mande `null` querendo
+dizer "não sei" não apagar natureza. `/transacoes` mostra a natureza do rateado como leitura (nome,
+"N naturezas" ou "sem natureza" em âmbar). **Achado de passagem, Decisão 18 pela quarta vez:** a
+contagem de uso dos modelos de rateio (`usageCount`) vivia em zero — `${allocationTemplates.id}` em
+subselect de consulta sem join.
+
+**Revisão das sessões 3/4 — duas correções.** (1) Rateio sem natureza informada sobre um lançamento
+JÁ rateado em naturezas diferentes é **recusado** (em `gravarAllocations` e na prévia do lote): não
+existe "a natureza do lançamento" para manter, e antes as partes ficavam sem natureza e o valor saía
+da DRE em silêncio. `naturezaPadrao` passou a devolver `{ id, divergente }`. (2) "Salvar como
+modelo" no diálogo individual grava `null` (natureza do lançamento) quando a natureza da parte é só
+a herdada — senão um modelo feito para dividir centro de custo carregaria a natureza de quem o
+originou para todo lançamento em que fosse aplicado.
+

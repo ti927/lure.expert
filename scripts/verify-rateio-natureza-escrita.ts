@@ -189,6 +189,19 @@ async function cenario() {
   t(semNat.rateadosExcluidos === 0,
     `"sem natureza" NÃO pega o rateado cujas partes têm natureza (${semNat.rateadosExcluidos})`)
 
+  console.log('\n── rateio com naturezas divergentes não é achatado em silêncio (revisão das sessões 3/4) ──')
+  // tx1 está rateado em Aluguel 600 + Energia 400. Um novo rateio SEM natureza
+  // não tem como "manter a do lançamento" — são duas. Antes, as partes ficavam
+  // sem natureza e o valor saía da DRE sem ninguém pedir.
+  r = await gravarAllocations(ORG, tx1, [{ amount: 500, ...semDim }, { amount: 500, ...semDim }])
+  t('error' in r && /naturezas diferentes/.test(r.error), `gravar sem natureza sobre partes divergentes é recusado ("${'error' in r ? r.error.slice(0, 70) : ''}")`)
+  t(await linhas(tx1) === 'A1=600 A2=400', 'e o rateio anterior fica intacto')
+  const loteDiv = await preverLoteDeRateio(ORG, [tx1], [{ weight: 1, ...semDim }, { weight: 1, ...semDim }])
+  t('error' in loteDiv && /naturezas diferentes/.test(loteDiv.error), 'no lote, a PRÉVIA recusa (antes de aplicar metade)')
+  r = await gravarAllocations(ORG, tx1, [{ amount: 500, categoryId: A1, ...semDim }, { amount: 500, categoryId: A2, ...semDim }])
+  t('success' in r, 'com a natureza informada em cada parte, grava')
+  r = await gravarAllocations(ORG, tx1, [{ amount: 600, categoryId: A1, ...semDim }, { amount: 400, categoryId: A2, ...semDim }])
+
   console.log('\n── natureza herdada não é revalidada (revisão final, Important 1) ──')
   const tx5 = await lanc(A3, '80.00')   // classificado numa natureza que depois foi arquivada
   r = await gravarAllocations(ORG, tx5, [{ amount: 50, ...semDim }, { amount: 30, ...semDim }])

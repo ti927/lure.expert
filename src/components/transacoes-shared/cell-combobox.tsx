@@ -72,9 +72,14 @@ interface CategoryCellComboboxProps {
   categories: CategoryItem[]
   onValueChange: (value: string | null) => void
   disabled?: boolean
+  /**
+   * O que o vazio significa. Na tabela é "sem natureza" (—); no editor de pesos
+   * do lote e dos modelos é "manter a natureza que o lançamento já tem".
+   */
+  emptyLabel?: string
 }
 
-export function CategoryCellCombobox({ value, categories, onValueChange, disabled }: CategoryCellComboboxProps) {
+export function CategoryCellCombobox({ value, categories, onValueChange, disabled, emptyLabel = '—' }: CategoryCellComboboxProps) {
   const [open, setOpen] = useState(false)
   const selected = categories.find(c => c.id === value)
   const label = selected ? `${selected.code} – ${selected.name}` : null
@@ -99,7 +104,7 @@ export function CategoryCellCombobox({ value, categories, onValueChange, disable
           'disabled:opacity-50 disabled:pointer-events-none',
           open && 'border-input bg-background',
         )}>
-          <span className={cn('truncate', !label && 'text-muted-foreground')}>{label ?? '—'}</span>
+          <span className={cn('truncate', !label && 'text-muted-foreground')}>{label ?? emptyLabel}</span>
           <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-40" />
         </button>
       </PopoverTrigger>
@@ -109,7 +114,7 @@ export function CategoryCellCombobox({ value, categories, onValueChange, disable
           <CommandList>
             <CommandEmpty>Nenhuma categoria encontrada.</CommandEmpty>
             <CommandItem value="__clear__" onSelect={() => { onValueChange(null); setOpen(false) }} className="text-muted-foreground">
-              <Check className={cn('mr-2 h-3 w-3', value === null ? 'opacity-100' : 'opacity-0')} />—
+              <Check className={cn('mr-2 h-3 w-3', value === null ? 'opacity-100' : 'opacity-0')} />{emptyLabel}
             </CommandItem>
             <CommandSeparator />
             {Object.entries(byType).map(([type, cats]) => (

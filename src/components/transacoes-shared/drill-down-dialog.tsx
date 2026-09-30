@@ -528,7 +528,10 @@ export function DrillDownDialog({
                             value={tx.categoryId}
                             categories={leafCategories.map(c => ({ id: c.id, name: c.name, code: c.code, type: c.type, parentId: null }))}
                             onValueChange={v => handleClassify(tx.id, 'categoryId', v)}
-                            disabled={isClassifying}
+                            // Desde a 0033 a natureza também é da parte: esta
+                            // linha mostra a natureza DA PARTE, e gravá-la no
+                            // lançamento seria recusado pelo banco.
+                            disabled={isClassifying || tx.isAllocated}
                           />
                         </td>
                         <td className="px-1 py-1">

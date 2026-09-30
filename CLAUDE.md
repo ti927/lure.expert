@@ -288,7 +288,9 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**NO AR em 30/set (01:41) — Sessões 1 e 2 do rateio de natureza; faltam 3 (telas) e 4 (MCP).**
+**Sessões 3 (telas) e 4 (MCP) do rateio de natureza PRONTAS em 30/set na branch `feat/rateio-natureza-telas` — NÃO subiram** (só código, sem migration; verificadas contra o banco local: telas 9/9, MCP escrita 193/193, leitura 39/39, motor 39/39, painéis 117/117, visibilidade 24/24, escrita 110/110). O que falta é o olho do Julio na tela: diálogo de rateio com coluna Natureza, lote e modelos com "natureza do lançamento" como vazio, `/transacoes` mostrando a natureza do rateado.
+
+**NO AR em 30/set (01:41) — Sessões 1 e 2 do rateio de natureza.**
 Subida feita sozinha de madrugada, autorizada pelo Julio: validação 22/22 contra a produção, dump
 `lure-expert-2026-09-30-antes-0033.dump`, retrato, 0033 aplicada (113 partes receberam natureza, 53
 lançamentos esvaziados), `--comparar` 110/110 antes e depois do deploy, merge `ba22049` em `main`.

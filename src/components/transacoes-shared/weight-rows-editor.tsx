@@ -2,21 +2,29 @@
 
 import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { CellCombobox } from './cell-combobox'
-import type { SimpleDimensionItem } from './types'
+import { CellCombobox, CategoryCellCombobox } from './cell-combobox'
+import type { SimpleDimensionItem, CategoryItem } from './types'
 import { formatProportion } from '@/lib/allocation-math'
 
+/** O que o vazio da natureza significa num peso: a parte fica com a do lançamento. */
+export const NATUREZA_HERDADA = 'natureza do lançamento'
+
 /**
- * Uma linha de proporção: peso relativo + as quatro dimensões.
+ * Uma linha de proporção: peso relativo + natureza + as quatro dimensões.
  *
  * `texto` existe separado de `weight` porque o campo precisa aceitar estados
  * intermediários de digitação ("33," antes do resto) sem que o número por trás
  * vire NaN e derrube a soma exibida.
+ *
+ * `categoryId` nulo NÃO é "sem natureza": é "manter a natureza que o lançamento
+ * já tem" (0033). Um peso não sabe em que lançamento vai cair, então não tem
+ * como dizer "sem" — só "esta" ou "a de cada um".
  */
 export interface WeightRow {
   key:            string
   weight:         number
   texto:          string
+  categoryId:     string | null
   costCenterId:   string | null
   businessUnitId: string | null
   legalEntityId:  string | null
@@ -27,6 +35,7 @@ let seq = 0
 export function novaLinhaPeso(weight = 0): WeightRow {
   return {
     key: `w${++seq}`, weight, texto: weight ? String(weight) : '',
+    categoryId: null,
     costCenterId: null, businessUnitId: null, legalEntityId: null, contactId: null,
   }
 }
@@ -34,6 +43,7 @@ export function novaLinhaPeso(weight = 0): WeightRow {
 interface Props {
   rows:     WeightRow[]
   onChange: (rows: WeightRow[]) => void
+  categories:    CategoryItem[]
   costCenters:   SimpleDimensionItem[]
   businessUnits: SimpleDimensionItem[]
   legalEntities: SimpleDimensionItem[]
@@ -49,7 +59,7 @@ interface Props {
  * valor que ainda não se conhece.
  */
 export function WeightRowsEditor({
-  rows, onChange, costCenters, businessUnits, legalEntities, contacts,
+  rows, onChange, categories, costCenters, businessUnits, legalEntities, contacts,
   maxRows = 50, minRows = 1,
 }: Props) {
   const pesos = rows.map(r => (Number.isFinite(r.weight) ? r.weight : 0))
@@ -64,6 +74,7 @@ export function WeightRowsEditor({
         <thead>
           <tr className="border-b text-left text-muted-foreground">
             <th className="px-2 py-1.5 font-medium w-20">Peso</th>
+            <th className="px-2 py-1.5 font-medium">Natureza</th>
             <th className="px-2 py-1.5 font-medium">Centro de custo</th>
             <th className="px-2 py-1.5 font-medium">Un. de negócio</th>
             <th className="px-2 py-1.5 font-medium">Entidade</th>
@@ -84,6 +95,11 @@ export function WeightRowsEditor({
                   inputMode="decimal"
                   className="w-full h-7 rounded border border-input px-1.5 text-right tabular-nums bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                 />
+              </td>
+              <td className="px-1 py-1">
+                <CategoryCellCombobox value={r.categoryId} categories={categories}
+                  emptyLabel={NATUREZA_HERDADA}
+                  onValueChange={v => patch(r.key, { categoryId: v })} />
               </td>
               <td className="px-1 py-1">
                 <CellCombobox value={r.costCenterId} options={costCenters}

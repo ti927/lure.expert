@@ -148,3 +148,27 @@ export function semNaturezaFilter(txIdColumn: SQL): SQL {
       AND tl.category_id IS NULL
   )`
 }
+
+/**
+ * As naturezas distintas das PARTES de um lançamento rateado, como array JSON
+ * de ids (vazio sem rateio ou sem natureza nas partes). A célula de natureza de
+ * `/transacoes` mostra o nome, se for uma só, ou "N naturezas" — desde a 0033 a
+ * coluna do lançamento rateado é nula por regra.
+ *
+ * Passe a coluna JÁ QUALIFICADA (`sql\`${transactions}.id\``) — Decisão 18.
+ */
+export function naturezasDoRateioSql(txIdColumn: SQL): SQL<string[]> {
+  return sql<string[]>`(
+    SELECT COALESCE(json_agg(DISTINCT a.category_id::text)
+                      FILTER (WHERE a.category_id IS NOT NULL), '[]'::json)
+      FROM transaction_allocations a WHERE a.transaction_id = ${txIdColumn}
+  )`
+}
+
+/** Alguma parte do rateio está sem natureza. Coluna qualificada — Decisão 18. */
+export function rateioComParteSemNaturezaSql(txIdColumn: SQL): SQL<boolean> {
+  return sql<boolean>`EXISTS (
+    SELECT 1 FROM transaction_allocations a
+     WHERE a.transaction_id = ${txIdColumn} AND a.category_id IS NULL
+  )`
+}

@@ -6,7 +6,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import type { SimpleDimensionItem } from './types'
+import type { SimpleDimensionItem, CategoryItem } from './types'
 import { WeightRowsEditor, novaLinhaPeso, type WeightRow } from './weight-rows-editor'
 import { AllocationTemplateBar } from './allocation-template-bar'
 import {
@@ -18,6 +18,7 @@ interface Props {
   open:         boolean
   onOpenChange: (open: boolean) => void
   selectedIds:  string[]
+  categories:    CategoryItem[]
   costCenters:   SimpleDimensionItem[]
   businessUnits: SimpleDimensionItem[]
   legalEntities: SimpleDimensionItem[]
@@ -28,7 +29,7 @@ interface Props {
 const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export function BatchAllocationDialog({
-  open, onOpenChange, selectedIds,
+  open, onOpenChange, selectedIds, categories,
   costCenters, businessUnits, legalEntities, contacts, onSaved,
 }: Props) {
   const [pesos, setPesos] = useState<WeightRow[]>([])
@@ -57,6 +58,7 @@ export function BatchAllocationDialog({
   function aplicarModelo(t: TemplateRow) {
     setPesos(t.lines.map(l => ({
       ...novaLinhaPeso(l.weight),
+      categoryId: l.categoryId ?? null,
       costCenterId: l.costCenterId, businessUnitId: l.businessUnitId,
       legalEntityId: l.legalEntityId, contactId: l.contactId,
     })))
@@ -67,14 +69,16 @@ export function BatchAllocationDialog({
   const linhasParaModelo: TemplateLineInput[] | null = useMemo(() => {
     if (pesos.length < 2 || pesos.some(p => !(p.weight > 0))) return null
     return pesos.map(p => ({
-      weight: p.weight,
+      weight: p.weight, categoryId: p.categoryId,
       costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
       legalEntityId: p.legalEntityId, contactId: p.contactId,
     }))
   }, [pesos])
 
+  // Natureza vazia no peso = cada lançamento mantém a sua. `undefined`, não
+  // `null`: no servidor, `null` explícito gravaria a parte SEM natureza.
   const paraServidor = () => pesos.map(p => ({
-    weight: p.weight, costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
+    weight: p.weight, categoryId: p.categoryId ?? undefined, costCenterId: p.costCenterId, businessUnitId: p.businessUnitId,
     legalEntityId: p.legalEntityId, contactId: p.contactId,
   }))
 
@@ -104,7 +108,9 @@ export function BatchAllocationDialog({
           <DialogTitle>Ratear {selectedIds.length} lançamentos</DialogTitle>
           <DialogDescription>
             Lançamentos de valores diferentes só podem dividir a mesma proporção. A prévia mostra os
-            valores que cada um receberá, já fechados no centavo.
+            valores que cada um receberá, já fechados no centavo. Natureza em branco numa parte = cada
+            lançamento mantém a natureza que já tem (num já rateado em naturezas diferentes, informe a
+            natureza em cada parte).
           </DialogDescription>
         </DialogHeader>
 
@@ -117,6 +123,7 @@ export function BatchAllocationDialog({
         <WeightRowsEditor
           rows={pesos}
           onChange={mudouPesos}
+          categories={categories}
           costCenters={costCenters}
           businessUnits={businessUnits}
           legalEntities={legalEntities}

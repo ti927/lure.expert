@@ -12,6 +12,25 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Rateio de natureza — Sessões 3 e 4 (30/set) — branch `feat/rateio-natureza-telas`
+
+Sessões 1 e 2 subiram sozinhas às 01:41 de 30/set (0033 aplicada, 110/110 antes e depois do deploy).
+**Sessão 3 (telas):** `AllocationDialog` com coluna Natureza (pré-preenchida; aviso de parte sem
+natureza); `WeightRowsEditor` com coluna Natureza cujo vazio é "natureza do lançamento"
+(`NATUREZA_HERDADA`), usado pelo lote e pelo editor de modelos; `CategoryCellCombobox` ganhou
+`emptyLabel`; `/transacoes` mostra a natureza do rateado como leitura (`naturezasDoRateioSql` e
+`rateioComParteSemNaturezaSql` em `lib/sql-dimensions.ts`) e a linha expandida mostra a de cada
+parte; drill-down trava a natureza nas linhas de parte; `server/allocation-templates.ts` grava e lê
+natureza por linha. **Achado:** `usageCount` dos modelos vivia em zero (Decisão 18, 4ª vez) —
+`verify-rateio-natureza-telas` prova que a forma antiga dava 0 e a nova conta. **Sessão 4 (MCP):**
+`prever_rateio_em_lote` aceita `categoryId` por peso, com `.describe()` (TED/PIX, omitir = manter);
+`listar_modelos_de_rateio` mostra a natureza de cada parte; textos atualizados. `verify-mcp-write`
++5 asserções (inclusive sobre o JSON Schema publicado): 193/193.
+
+**Não verificado automaticamente:** as telas (Julio).
+
+---
+
 ### ✅ Rateio de natureza — Sessões 1 e 2 (29/set) — branch `feat/rateio-natureza`, NÃO subiu
 
 Pedido do Julio: ratear também a natureza (TED que paga vários fornecedores; PIX que junta serviço
