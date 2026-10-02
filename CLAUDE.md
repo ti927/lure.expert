@@ -171,7 +171,7 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 |---|---|
 | `dre-calc.ts` | `computeSubtotals` (cascata do P&L), `generateMonthRange`, `verticalShare` (AV%) |
 | `dre-layout.ts` | `LAYOUT`, `buildBlocks` genérico (árvore Tipo → Pai → Filho) |
-| `sql-dimensions.ts` | `dimensionFilters(alias, filtros)` — o único trecho que entra via `sql.raw` |
+| `sql-dimensions.ts` | `dimensionFilters(alias, filtros)` — o único trecho que entra via `sql.raw`; `dimensionExistsFilter` (agora também `category_id`), `semNaturezaFilter` e os fragmentos do rateado (`naturezasDoRateioSql`, `rateioComParteSemNaturezaSql`). **"Sem natureza" é pergunta às LINHAS** desde a 0033 |
 | `category-visibility.ts` | `filtroDeVisibilidade(alias, campo)` + `campoDoRegime` — os selos "ocultar na DRE/no Fluxo", **herdando do pai**. Uma regra, cinco leituras |
 | `format.ts` | `fmtNum`/`fmtMoney`/`fmtBRL`/`fmtPct`/`fmtPctSigned`, `monthLabel`, `parseAmount` |
 | `column-widths.ts` | a largura das colunas: faixa (60–900), `lerLarguras` tolerante, `larguraParaSalvar` (**só o que difere do padrão**) e `COLUNAS_TRANSACOES` — a lista real mora aqui para o teste afirmar sobre ela. Persistência por **navegador**; per-usuário é v2 e exigiria migration |
@@ -181,6 +181,9 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `budget-copy.ts` | `buildCopyDrafts`, `shapeMonthly`, `collectActuals`, `applyDraftsToBudget`, `applyDuplicateVersion` |
 | `budget-import.ts` | `parseBudgetCsv`, `buildRecurrenceCandidates`, `timesPerMonth` |
 | `budget-read.ts` | `fetchBudgetRows` — a leitura do orçado que `/dre` e `/orcamento` compartilham |
+| `allocations-write.ts` | a escrita do rateio: `gravarAllocations` (natureza por parte desde a 0033 — **ausente = herda** via `naturezaPadrao`, `null` = sem natureza; recusa herdar quando as partes divergem), `validarNaturezas` (só a ESCOLHIDA), lote com validação na prévia |
+| `balance-sheet-read.ts` | o SQL do Balanço (`lerLinhasDoBalanco`, `somarBalancoPorDocumento`), pela view — fora de `'use server'` para ser conciliável |
+| `category-usage.ts` | quantos lançamentos usam cada natureza, contando partes do rateio — substituiu o subselect que vivia em zero |
 | `allocation-math.ts` | aritmética do rateio em centavos inteiros: `toCents`, `splitEqually`, `applyProportion` (maior resto), `reduceWeights` (MDC), `normalizeWeights`/`formatProportion` |
 | `ai-pricing.ts` | tabela de preço por modelo, `calcCostUsd`, conversão USD→BRL, `estimarCustoCategorizacao` |
 | `oauth/tokens.ts` | geração e hash (SHA-256) dos tokens, TTLs, `tokenVivo` — **revogação vence validade** |
@@ -207,6 +210,12 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 
 Sem rateio a view degenera na linha de hoje, então nenhum número muda; com rateio o número
 conserta. `getTransactions` e a fila de revisão já estão do lado certo.
+
+**Desde a 0033 (30/set) a regra vale para a NATUREZA também.** Num lançamento rateado
+`transactions.category_id` é nulo por regra do banco — qualquer leitura nova que agregue por natureza
+lendo `transactions` direto **joga o rateado em "sem natureza"**. Natureza pergunta-se às linhas:
+`transaction_lines`, `dimensionExistsFilter(…, 'category_id', …)` ou `semNaturezaFilter`. E toda escrita
+de natureza/dimensão em lançamento usa `semRateio` (de `transactions-write.ts`) para pular os rateados.
 - `/server` — server actions, lógica de backend
 - `/jobs` — definições Inngest
 - `/db` — schema Drizzle, migrations
@@ -288,27 +297,44 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Rateio de natureza COMPLETO NO AR — sessões 3 (telas) e 4 (MCP) subiram em 30/set às 10:30** (merge `41abb63`, autorizado pelo Julio; só código, sem migration; fumaça em produção ok e `verify-rateio-natureza-telas` 9/9 contra a produção). Antes de subir (só código, sem migration; verificadas contra o banco local: telas 9/9, MCP escrita 193/193, leitura 39/39, motor 39/39, painéis 117/117, visibilidade 24/24, escrita 110/110). O que falta é o olho do Julio na tela: diálogo de rateio com coluna Natureza, lote e modelos com "natureza do lançamento" como vazio, `/transacoes` mostrando a natureza do rateado.
+**Última sessão — 29 e 30/set: RATEIO DE NATUREZA, completo e no ar.** Pedido do Julio: um TED que
+paga vários fornecedores e um PIX que junta serviço e devolução são UM lançamento no extrato e
+várias naturezas na DRE. A parte do rateio ganhou natureza, e **o lançamento rateado fica sem ela**
+(a mesma regra das dimensões; o banco recusa o contrário) — revoga em parte a Decisão 16, ver
+**Decisão 28**. Todas as partes têm o mesmo sentido do lançamento (sentido oposto ficou fora).
+Estendeu-se o rateio em vez de desmembrar o lançamento, para não quebrar dedup, conciliação e Pluggy.
 
-**NO AR em 30/set (01:41) — Sessões 1 e 2 do rateio de natureza.**
-Subida feita sozinha de madrugada, autorizada pelo Julio: validação 22/22 contra a produção, dump
-`lure-expert-2026-09-30-antes-0033.dump`, retrato, 0033 aplicada (113 partes receberam natureza, 53
-lançamentos esvaziados), `--comparar` 110/110 antes e depois do deploy, merge `ba22049` em `main`.
-O texto abaixo é o de 29/set, mantido como contexto.
+| Sessão | Entrega | No ar |
+|---|---|---|
+| 1 | As 10 leituras que liam `transactions` passam pela view (KPIs, indicadores, Balanço, copiar do realizado, recorrências, uso de natureza, "sem natureza", filtros de natureza) — conciliadas contra os módulos antigos extraídos da tag de backup, 224/224 | 30/set 01:41 |
+| 2 | Migration **0033** + reversa; `gravarAllocations` grava natureza por parte (ausente = herda, via `naturezaPadrao`; `validarNaturezas`); classificação e categorizador respeitam rateado | 30/set 01:41 |
+| 3 | Telas: coluna Natureza no diálogo de rateio, no lote e nos modelos (vazio no peso = "natureza do lançamento"); `/transacoes` mostra a natureza do rateado; drill-down trava | 30/set 10:30 |
+| 4 | MCP: `prever_rateio_em_lote` aceita `categoryId` por peso, com `.describe()`; `listar_modelos_de_rateio` mostra a natureza | 30/set 10:30 |
 
-**(29/set) rateio de NATUREZA, na branch `feat/rateio-natureza`.**
-Pedido do Julio: TED que paga vários fornecedores e PIX que junta serviço e devolução são UM
-lançamento no extrato e várias naturezas. A parte do rateio ganhou natureza, e **o lançamento
-rateado fica sem ela** (mesma regra das dimensões, o banco recusa o contrário) — revoga em parte a
-Decisão 16, ver **Decisão 28**. Sessões 1 (leituras pela view) e 2 (migration **0033** + reversa +
-escritas) prontas e verificadas **contra um banco local** restaurado do backup (`scripts/local-db.sh`);
-a produção não foi tocada. **Faltam as Sessões 3 (telas) e 4 (MCP)** — até lá todo rateio herda a
-natureza do lançamento, que é o comportamento de hoje. **Subir é combinado com o Julio (à noite)**, na
-ordem do plano: validar a 0033 contra a produção (ROLLBACK) → dump + retrato → aplicar a 0033 →
-merge/deploy → `--comparar`. Backup: tag `backup/antes-rateio-natureza-2026-09-29` + dump em
-`C:\Users\Julio\backups\lure-expert\`. Spec e plano em `docs/superpowers/`.
+**Como foi feito, e vale repetir:** backup antes de tudo (tag `backup/antes-rateio-natureza-2026-09-29`
++ dump em `C:\Users\Julio\backups\lure-expert\`, restauração conferida); **todo o desenvolvimento
+contra um banco LOCAL** restaurado do dump (`scripts/local-db.sh`); as sessões 1–2 subiram **por mim,
+sozinho, de madrugada**, autorizado, por roteiro com critério de abortar (validação 22/22 contra a
+produção → dump novo → retrato → 0033 em `psql -1` → `--comparar` 110/110 → merge `ba22049` → deploy →
+`--comparar` de novo). As sessões 3–4 subiram de dia (merge `41abb63`), autorizadas — "não tem
+ninguém on-line". Spec e plano em `docs/superpowers/`.
 
-**Sessão anterior — 1/set: as colunas de `/transacoes` passam a ser arrastáveis (v1).** Julio mandou o
+**Defeitos achados de passagem, corrigidos:** o contador de uso das naturezas
+(`getCategoriesWithTxCount`) e o de uso dos modelos de rateio (`usageCount`) **viviam em zero** —
+Decisão 18, terceira e quarta mordidas. A reversa da 0033 falhava em transação única ("pending trigger
+events") → `SET CONSTRAINTS ALL IMMEDIATE`. Duas revisões finais por revisor novo acharam 4 problemas
+importantes, todos corrigidos com teste: natureza herdada revalidada (quebrava rateio só de CC em
+natureza arquivada), filtro de lote do MCP lendo a coluna do lançamento, rateio sem natureza sobre
+partes divergentes apagando-as em silêncio (agora recusa), e "Salvar como modelo" cravando a natureza
+herdada no modelo.
+
+**Pendentes pequenos, registrados:** "realizado sem categoria" do orçado × realizado conta partes, não
+lançamentos (`server/budget.ts`); rateados antigos com `needs_review` seguem na fila de revisão;
+aplicar modelo sobre rateio de naturezas divergentes no diálogo deixa as partes sem natureza (o aviso
+âmbar aparece); `0033_down` não é idempotente; ordenar `/transacoes` por natureza põe o rateado entre
+os sem natureza; corrida rara em `gravarAllocations` (lê a natureza fora da transação).
+
+**Sessão de 1/set: as colunas de `/transacoes` passam a ser arrastáveis (v1).** Julio mandou o
 print com os cabeçalhos truncados e pediu o levantamento. A tela já tinha o substrato (`table-fixed`
 + `<colgroup>`), então foi sessão e não reescrita. **Três coisas ficaram declaradas:** a persistência
 é por **navegador** (`localStorage`, chave própria — per-usuário exige tabela de preferência e
@@ -318,7 +344,7 @@ arrastar uma encolher as outras; e **ver/ocultar coluna ficou de fora**, a pedid
 conversa seguinte. Ver `docs/DATA_TABLE_PATTERN.md` seção 9 — o padrão é **opt-in**, e as matrizes de
 12 meses ficam fora de propósito.
 
-**Sessão anterior — 1/set: a conta declarada por linha no arquivo passa a valer.** Julio preencheu a
+**Sessão de 1/set: a conta declarada por linha no arquivo passa a valer.** Julio preencheu a
 coluna `Conta` da planilha modelo com duas contas diferentes e a tela ignorou. O contrato já
 prometia que a coluna vence o cabeçalho e o código já produzia as colunas certas; o que faltava era
 o **vínculo** (`data_source_id` era um por arquivo, e `/contas` conta por ele), a **coluna na tela**
@@ -330,7 +356,7 @@ sem **vínculo**, não sem as colunas, porque a conta entra na chave de dedup.
 ferramentas de painel) aguardam o olho do Julio, listadas em *Confirmações na tela que Julio ainda
 deve*. Nada bloqueia.
 
-**A migration `0032` foi aplicada e conferida em 26/ago** — nenhuma pendência de banco em aberto.
+**A migration `0033` foi aplicada e conciliada em 30/set** — nenhuma pendência de banco em aberto.
 
 **Próximo passo é uma escolha de rumo**, não uma continuação: as frentes abertas estão na tabela
 *Frentes anteriores, ainda abertas* (Fase 8 adquirentes, 11 agente proativo, 12 onboarding/billing,
@@ -682,6 +708,15 @@ vez**. Preserva o que não é acessório: registro em `documents` (origem rastre
 o plano de contas) e o disparo da categorização do que sobrou. Ver `docs/SCHEMA_DECISIONS.md`
 Decisão 20.
 
+**Do rateio de natureza (30/set) — o teste que fecha o pedido:** em `/transacoes`, clicar no ícone de
+ratear de um lançamento; a coluna **Natureza** vem preenchida com a dele. Dividir em duas partes com
+naturezas diferentes e salvar → a célula de natureza do lançamento mostra "2 naturezas" (leitura, não
+combobox); clicar mostra as partes, cada uma com a sua; a `/dre` mostra o valor dividido. No lote e
+em `/configuracoes/modelos-de-rateio`, a coluna Natureza vazia diz **"natureza do lançamento"**, e a
+contagem de uso dos modelos passa a mostrar número (vivia em zero). Em `/configuracoes/categorias`,
+o "N tx" ao lado de cada natureza aparece pela primeira vez. Pelo claude.ai, **reconectar** e pedir um
+rateio em lote "com natureza diferente em cada parte".
+
 **Das colunas arrastáveis (1/set):** em `/transacoes`, passar o mouse na borda direita de qualquer
 cabeçalho (ex.: entre **Descrição** e **Valor**) faz aparecer uma alça verde — arrastar muda a
 largura, e a tabela cresce para a direita com a rolagem lateral. **Duplo-clique na alça** devolve
@@ -982,6 +1017,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Rateio de natureza — sessões 1 a 4 (29–30/set)** | **A parte do rateio ganhou natureza; o lançamento rateado fica sem ela** (Decisão 28, revoga em parte a 16). Antes de tocar em código: **backup** (tag + dump do banco, restauração conferida) e um **banco local** restaurado do dump (`scripts/local-db.sh`) — nada foi testado contra a produção, exceto validações com ROLLBACK. **S1:** as 10 leituras que liam `transactions` passaram pela view, conciliadas extraindo os módulos ANTIGOS da tag e comparando função por função (224/224); `lib/balance-sheet-read.ts` e `lib/category-usage.ts` novos. **S2:** migration 0033 + reversa (22/22 com ROLLBACK, também contra a produção); a reversa falhava em transação única — `SET CONSTRAINTS ALL IMMEDIATE`; retrato de 5 organizações × 66 meses idêntico antes e depois (110/110); escrita com natureza por parte, herança (`naturezaPadrao`), validação de domínio só da natureza ESCOLHIDA. **S3:** coluna Natureza no diálogo, no lote e nos modelos ("natureza do lançamento" como vazio do peso), célula de leitura no rateado em `/transacoes`. **S4:** `categoryId` por peso no MCP, com `.describe()` e teste sobre o JSON Schema publicado. **Decisão 18 mordeu duas vezes mais** — uso das naturezas e uso dos modelos viviam em zero. Duas revisões por revisor novo: 4 achados importantes, corrigidos com teste RED→GREEN. **Subidas:** S1–2 por mim, sozinho, às 01:41 de 30/set, por roteiro com critério de abortar; S3–4 às 10:30. Placar final: escrita 114, MCP escrita 193, MCP leitura 39, motor 39, painéis 117, visibilidade 24, telas 9 |
 | **Colunas arrastáveis em /transacoes — v1 (1/set)** | **Julio mandou o print com os cabeçalhos truncados ("V...", "Banco/...", "Tip", "C. cu...") e pediu o levantamento antes de qualquer código.** A tela já tinha o substrato certo — `table-fixed` + `<colgroup>` — e é a única do app que tem: com layout fixo a largura sai do `<col>` e não do conteúdo, então arrastar é mudar um valor. **O levantamento separou quatro dificuldades, e três viraram decisão.** (1) **"Por usuário" não existe no app**: toda preferência de tela é `localStorage` (27 ocorrências em 11 arquivos), ou seja por NAVEGADOR, e não há tabela de preferência de usuário — `memberships` guarda papel e convite, sem jsonb. Julio escolheu a v1 por navegador, e a limitação ficou **escrita no topo de `lib/column-widths.ts`** para não virar promessa implícita. (2) **As larguras de hoje eram proporção, não tamanho**: a tabela era `w-full min-w-[1470px]` sobre uma soma de **1.462px**, e o navegador distribuía a diferença entre as colunas — arrastar uma faria as outras encolherem sozinhas, que lê como defeito. Agora a largura da tabela é a soma e `min-w-full` cobre a tela larga. (3) **O cabeçalho já tem três zonas clicáveis** (ordenar, filtrar, limpar), então a alça é faixa absoluta de 8px com `setPointerCapture` e `stopPropagation` — sem isso o gesto abre o popover. (4) **1.000 linhas por página**: `setState` por `pointermove` re-renderizaria as mil a cada pixel, então o arrasto escreve `style.width` direto no `<col>` e o estado só é tocado ao soltar. **Grava só o que difere do padrão** — salvar as 13 congelaria o layout de hoje no navegador de quem mexeu numa só, e coluna nova ou padrão ajustado num deploy futuro nunca alcançaria essa pessoa (o teste prende os dois lados). **Chave própria**, separada da de filtros: largura não é filtro, e "Limpar" não pode levar o layout junto. **O teste achou dois defeitos meus:** `clampLargura(Infinity)` caía no PISO (só o `NaN` precisa de ramo — ele atravessa `Math.max`/`Math.min` intacto e viraria `width: NaNpx`, descartado em silêncio); e eu havia contado as colunas de utilidade como 9px, o número da classe `w-9`, em vez de 36 — a soma é 1.462, não 1.408. **Fora de escopo, a pedido:** ver/ocultar e reordenar coluna. Verificado: **37/37**, sem banco |
 | **Agenda de sync por organização (1/set)** | **Julio perguntou se o cron das 03:00 podia ser configuração — e o levantamento mudou a pergunta.** Medido: **nenhum ponto do app chama `updateItem`**, a única chamada que faz a Pluggy consultar o banco. O cron e o botão "Atualizar" de `/contas` leem o **cache** da Pluggy; quem vai ao banco é ela, no ciclo dela (`nextAutoSyncAt` +24h nos 4 itens da Quick), e ao terminar dispara `item/updated`, que já roda o sync na hora. Então o horário do nosso cron quase não muda a frescura do dado — é rede de segurança para quando o webhook falha, e a tela diz isso em vez de prometer o que não entrega. Sabendo disso, Julio escolheu só o agendamento da releitura: **hora inicial + a cada N horas**, em `/configuracoes`, **só bancos**. **Cron do Inngest é estático** (registrado no deploy, igual para todos), então o padrão é o inverso: cron **de hora em hora** que lê `organizations.settings.syncBancos` e despacha só quem está na hora — a hora lida DENTRO do `step.run` para a retentativa despachar o mesmo conjunto. **O padrão preserva o comportamento anterior, e é asserção**: somando as 24 execuções do dia, cada conexão é despachada **exatamente 1×** (10 de 10 hoje) — sem isso a tela nova mudaria em silêncio quem nunca a abriu. **Leitura tolerante, escrita recusa**: `lerAgenda` roda dentro do cron que serve TODAS as organizações, e um `settings` corrompido numa não pode derrubar as outras. **`Intl` com `America/Sao_Paulo`, não `−3` fixo** — o comentário antigo assumia que o Brasil não usa horário de verão (verdade desde 2019, revogável por decreto), e o erro seria de uma hora, sem exceção nenhuma; mais `hourCycle: 'h23'`, porque `pt-BR` com `hour12:false` devolve "24" à meia-noite em parte das versões de ICU. Sem migration. Verificado: **31/31**, incluindo a simulação do despacho contra o banco real |
 | **A conta por linha vira vínculo (1/set)** | **Julio preencheu a coluna `Conta` com duas contas diferentes no mesmo arquivo, e a tela não reconheceu.** Ele estava certo, e metade já funcionava: o contrato publicado promete que a coluna **vence o cabeçalho**, e `normalizarLancamento` já fazia isso — as quatro colunas `account_*` saíam certas e diferentes por linha. **O que quebrava era o VÍNCULO:** `data_source_id` era um só por arquivo, e `/contas` conta por ele — as duas contas ficariam com "0 lançamentos" para sempre (e o filtro de `/transacoes` rotularia todas com o nome da conta do cabeçalho). Mais dois: a revisão **não tinha coluna Conta**, e o texto do bloco dizia *"vale para as 4 linhas deste arquivo"* enquanto o docstring afirmava *"é de ARQUIVO e não de linha"* — a intenção de 24/ago que a implementação já superara. **O código estava mais certo que a documentação interna dele.** Agora a fonte é resolvida **por linha** contra `mapaDeContasManuais` (identidade `arq:<slug>`, a mesma de `garantirContaManual`), a reserva virou **preguiçosa** (arquivo 100% resolvido não cria mais a `data_sources` genérica sem uso), e a tela mostra **e edita** a conta por linha, uma ou várias selecionadas. **Duas decisões, ambas do Julio ou declaradas:** (1) **o arquivo nunca cria conta** — nome que não casa entra **sem vínculo**, com a tela nomeando quais e quantas linhas antes do clique; um typo em 500 linhas criaria 500 contas fantasma, e apagar conta com lançamento é recusado de propósito; (2) **"sem conta" é sem VÍNCULO, não sem as colunas** — a conta entra na chave de dedup, então zerá-la faria o mesmo arquivo gerar chaves diferentes antes e depois de a conta existir, **duplicando a contabilidade em silêncio**. Corolário preso por teste: a **resolução** contra o cadastro nunca entra na chave (trocar a conta de uma linha a torna nova; criar a conta e reimportar continua deduplicando). A edição mora em `raw_data.__conta`, **ao lado** de `__contrato` e não por cima — sobrescrever apagaria a diferença entre "o arquivo disse Caixa" e "alguém corrigiu para Caixa". No **balanço a coluna não existe**, porque lá o ramo do contrato lê só o cabeçalho. O MCP levou a mesma correção, e ali o campo de conta do ARQUIVO **passa a de fato criar** — a descrição publicada ao modelo promete isso desde a 4.5.C e o código nunca fez; `listar_contas` ganhou `contasSemUso`, sem o qual uma conta recém-criada era invisível justamente para quem precisa nomeá-la. **A verificação achou coisa:** `verify-staging-import` falhou no isolamento acusando 5 chaves `arq:` fora da organização de teste — eram de **26/ago 14:29**, da bateria irreversível que o Julio autorizou. **O erro era da asserção**, que afirmava "o banco está limpo" em vez de "esta execução não escreveu fora"; vinha falhando havia seis dias. Verificado: **51/51** no script novo, 70/70 staging, 188/188 escrita MCP, 39/39 leitura |
