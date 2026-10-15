@@ -71,6 +71,42 @@ export async function getMeusConvites(): Promise<ConvitePendente[]> {
 
 // ─── Convite ────────────────────────────────────────────────────────────────
 
+/** O e-mail do Supabase com o link de definir senha. Cria a conta se ela não existir. */
+async function enviarLinkDeConvite(email: string): Promise<{ userId: string } | { erro: string }> {
+  const admin = supabaseAdmin()
+  if (!admin) {
+    return {
+      erro: 'SUPABASE_SERVICE_ROLE_KEY não está configurada — sem ela não é possível ' +
+            'enviar o convite. Configure a variável e tente de novo.',
+    }
+  }
+  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${origemDaRequisicao()}/auth/confirm?next=/convite/definir-senha`,
+  })
+  if (error || !data.user) {
+    return { erro: `O Supabase recusou o envio do convite: ${error?.message ?? 'resposta vazia'}` }
+  }
+  return { userId: data.user.id }
+}
+
+/**
+ * Para conta ATIVA o Supabase não envia nada — o aviso sai por nós, via Resend.
+ * Devolve o motivo da falha, ou `undefined` se saiu.
+ */
+async function avisarContaAtiva(organizationId: string, email: string): Promise<string | undefined> {
+  const [org] = await db
+    .select({ name: organizations.name })
+    .from(organizations)
+    .where(eq(organizations.id, organizationId))
+    .limit(1)
+  const aviso = emailAvisoDeConvite({
+    empresa: org?.name ?? 'uma empresa',
+    url: `${origemDaRequisicao()}/login?next=/configuracoes`,
+  })
+  const envio = await enviarEmail({ para: email, assunto: aviso.assunto, html: aviso.html })
+  return envio.erro
+}
+
 export interface ResultadoConvite {
   erro?: string
   /** true = a pessoa já tinha conta; o convite aparece para ela dentro do app. */
@@ -103,26 +139,18 @@ export async function convidarMembro(input: { email: string; papel: string }): P
   let convidadoUserId: string
   let usuarioJaExistia = false
 
-  if (existente) {
-    // Conta já existe: o Supabase recusa reconvidar e-mail cadastrado, e não é
+  if (existente?.ativada) {
+    // Conta ativa: o Supabase recusa reconvidar e-mail confirmado, e não é
     // preciso — o convite pendente aparece para a pessoa dentro do app.
     convidadoUserId = existente.id
     usuarioJaExistia = true
   } else {
-    const admin = supabaseAdmin()
-    if (!admin) {
-      return {
-        erro: 'SUPABASE_SERVICE_ROLE_KEY não está configurada — sem ela não é possível ' +
-              'criar a conta da pessoa convidada. Configure a variável e tente de novo.',
-      }
-    }
-    const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${origemDaRequisicao()}/auth/confirm?next=/convite/definir-senha`,
-    })
-    if (error || !data.user) {
-      return { erro: `O Supabase recusou o envio do convite: ${error?.message ?? 'resposta vazia'}` }
-    }
-    convidadoUserId = data.user.id
+    // Sem conta, OU conta que nasceu de um convite anterior e nunca foi ativada
+    // (o link expirou). Nos dois casos a pessoa não tem senha, então precisa do
+    // link de definir senha — o Supabase reenvia para e-mail não confirmado.
+    const envio = await enviarLinkDeConvite(email)
+    if ('erro' in envio) return { erro: envio.erro }
+    convidadoUserId = envio.userId
   }
 
   let membershipId: string
@@ -148,20 +176,7 @@ export async function convidarMembro(input: { email: string; papel: string }): P
   // Para conta EXISTENTE o Supabase não envia nada — o aviso sai por nós, via
   // Resend. Depois do INSERT de propósito: o convite vale sem o aviso, e a
   // falha do e-mail vira `avisoErro` na tela em vez de perder o convite.
-  let avisoErro: string | undefined
-  if (usuarioJaExistia) {
-    const [org] = await db
-      .select({ name: organizations.name })
-      .from(organizations)
-      .where(eq(organizations.id, ctx.organizationId))
-      .limit(1)
-    const aviso = emailAvisoDeConvite({
-      empresa: org?.name ?? 'uma empresa',
-      url: `${origemDaRequisicao()}/login?next=/configuracoes`,
-    })
-    const envio = await enviarEmail({ para: email, assunto: aviso.assunto, html: aviso.html })
-    avisoErro = envio.erro
-  }
+  const avisoErro = usuarioJaExistia ? await avisarContaAtiva(ctx.organizationId, email) : undefined
 
   await registrarEventoDeMembro({
     organizationId: ctx.organizationId,
@@ -172,6 +187,49 @@ export async function convidarMembro(input: { email: string; papel: string }): P
 
   revalidatePath('/configuracoes/membros')
   return { usuarioJaExistia, avisoErro }
+}
+
+/**
+ * Reenvia o e-mail de um convite PENDENTE, sem desfazê-lo. O link do Supabase
+ * expira; sem isto, o único caminho era cancelar e convidar de novo.
+ *
+ * Decide pelo estado da conta, não pelo convite: nunca ativada → link novo de
+ * definir senha; ativa → o aviso para entrar.
+ */
+export async function reenviarConvite(membershipId: string): Promise<ResultadoConvite> {
+  const ctx = await contextoComPapel()
+
+  if (!idSchema.safeParse(membershipId).success) return { erro: 'Convite não encontrado.' }
+  const alvo = await carregarAlvo(membershipId, ctx.organizationId)
+  if (!alvo) return { erro: 'Convite não encontrado.' }
+  if (alvo.acceptedAt) return { erro: 'Esta pessoa já aceitou o convite.' }
+
+  const recusa = recusaDeGestao({ papelDoAtor: ctx.papel, papelDoAlvo: alvo.role })
+  if (recusa) return { erro: recusa }
+
+  const conta = alvo.invitedEmail ? await usuarioPorEmail(alvo.invitedEmail) : null
+  // O convite aponta para um user_id; um e-mail que hoje pertence a OUTRA conta
+  // não é este convite — reenviar para ele entregaria o acesso a outra pessoa.
+  if (!alvo.invitedEmail || !conta || conta.id !== alvo.userId) {
+    return { erro: 'Não foi possível identificar o e-mail deste convite. Cancele e convide de novo.' }
+  }
+
+  let avisoErro: string | undefined
+  if (conta.ativada) {
+    avisoErro = await avisarContaAtiva(ctx.organizationId, conta.email)
+  } else {
+    const envio = await enviarLinkDeConvite(conta.email)
+    if ('erro' in envio) return { erro: envio.erro }
+  }
+
+  await registrarEventoDeMembro({
+    organizationId: ctx.organizationId,
+    tipo: 'invite_resent',
+    membershipId: alvo.id,
+    payload: { email: conta.email, por: ctx.userId, contaAtiva: conta.ativada, avisoErro: avisoErro ?? null },
+  })
+
+  return { usuarioJaExistia: conta.ativada, avisoErro }
 }
 
 // ─── Alterar papel e remover ────────────────────────────────────────────────

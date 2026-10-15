@@ -86,13 +86,22 @@ export async function papelNaOrganizacao(
   return m?.role ?? null
 }
 
-/** Usuário do Supabase Auth pelo e-mail (case-insensitive). `null` se não existe conta. */
+/**
+ * Usuário do Supabase Auth pelo e-mail (case-insensitive). `null` se não existe conta.
+ *
+ * `ativada` separa duas contas que "existem" por razões opostas: quem já entrou
+ * (e-mail confirmado) e quem foi convidado e nunca abriu o link — a conta nasce
+ * no `inviteUserByEmail`, ANTES de a pessoa ter senha. Tratar a segunda como a
+ * primeira mandava um link de login para quem não tem com que entrar; o critério
+ * é o mesmo do Supabase, que só recusa reconvidar e-mail CONFIRMADO.
+ */
 export async function usuarioPorEmail(
   email: string,
   exec: Exec = db,
-): Promise<{ id: string; email: string } | null> {
-  const [u] = await exec.execute<{ id: string; email: string }>(sql`
-    SELECT id, email FROM auth.users WHERE lower(email) = lower(${email}) LIMIT 1
+): Promise<{ id: string; email: string; ativada: boolean } | null> {
+  const [u] = await exec.execute<{ id: string; email: string; ativada: boolean }>(sql`
+    SELECT id, email, email_confirmed_at IS NOT NULL AS ativada
+    FROM auth.users WHERE lower(email) = lower(${email}) LIMIT 1
   `)
   return u ?? null
 }
@@ -329,7 +338,7 @@ export async function recusaDeMudanca(
 export async function registrarEventoDeMembro(
   args: {
     organizationId: string
-    tipo: 'member_invited' | 'member_role_changed' | 'member_removed' | 'invite_accepted' | 'invite_declined'
+    tipo: 'member_invited' | 'invite_resent' | 'member_role_changed' | 'member_removed' | 'invite_accepted' | 'invite_declined'
     membershipId: string
     payload: Record<string, unknown>
   },

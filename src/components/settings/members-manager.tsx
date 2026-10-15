@@ -18,7 +18,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { convidarMembro, alterarPapel, removerMembro, type MembrosDaTela } from '@/server/members'
+import { convidarMembro, reenviarConvite, alterarPapel, removerMembro, type MembrosDaTela } from '@/server/members'
 import { PAPEIS, PAPEL_LABEL, PAPEL_DESCRICAO, podeGerirMembros, type Papel } from '@/lib/members-types'
 
 const dataCurta = (iso: string) =>
@@ -68,6 +68,21 @@ export function MembersManager({ membros, meuPapel, meuUserId }: MembrosDaTela) 
       setEmail('')
       setPapel('member')
       router.refresh()
+    })
+  }
+
+  function reenviar(m: (typeof membros)[number]) {
+    iniciar(async () => {
+      const r = await reenviarConvite(m.membershipId)
+      if (r.erro) toast.error(r.erro)
+      else if (r.avisoErro) toast.warning(`O aviso por e-mail não saiu: ${r.avisoErro}`)
+      else {
+        toast.success(
+          r.usuarioJaExistia
+            ? `Aviso reenviado para ${m.email}.`
+            : `Novo link de convite enviado para ${m.email}.`,
+        )
+      }
     })
   }
 
@@ -153,6 +168,18 @@ export function MembersManager({ membros, meuPapel, meuUserId }: MembrosDaTela) 
                   <span className="shrink-0 text-sm text-muted-foreground">
                     {PAPEL_LABEL[m.papel as Papel] ?? m.papel}
                   </span>
+                )}
+
+                {editavel && !m.aceitoEm && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => reenviar(m)}
+                    disabled={pendente}
+                  >
+                    Reenviar convite
+                  </Button>
                 )}
 
                 {editavel && (
