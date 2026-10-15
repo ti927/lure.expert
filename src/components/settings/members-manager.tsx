@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { UserPlus, Clock } from 'lucide-react'
+import { UserPlus, Clock, Link2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -18,7 +18,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { convidarMembro, reenviarConvite, alterarPapel, removerMembro, type MembrosDaTela } from '@/server/members'
+import { convidarMembro, reenviarConvite, linkDoConvite, alterarPapel, removerMembro, type MembrosDaTela } from '@/server/members'
 import { PAPEIS, PAPEL_LABEL, PAPEL_DESCRICAO, podeGerirMembros, type Papel } from '@/lib/members-types'
 
 const dataCurta = (iso: string) =>
@@ -82,6 +82,27 @@ export function MembersManager({ membros, meuPapel, meuUserId }: MembrosDaTela) 
             ? `Aviso reenviado para ${m.email}.`
             : `Novo link de convite enviado para ${m.email}.`,
         )
+      }
+    })
+  }
+
+  function copiarLink(m: (typeof membros)[number]) {
+    iniciar(async () => {
+      const r = await linkDoConvite(m.membershipId)
+      if (r.erro || !r.url) {
+        toast.error(r.erro ?? 'Não foi possível gerar o link.')
+        return
+      }
+      try {
+        await navigator.clipboard.writeText(r.url)
+        toast.success(
+          r.contaAtiva
+            ? `Link copiado. ${m.email} já tem senha — o link leva ao login, e o convite aparece ao entrar.`
+            : `Link copiado. Mande para ${m.email} — ao abrir, a pessoa cria a senha. Links enviados antes deixam de valer.`,
+        )
+      } catch {
+        // Sem permissão de área de transferência: mostra o link para copiar à mão.
+        toast.info(r.url, { duration: 60000 })
       }
     })
   }
@@ -168,6 +189,19 @@ export function MembersManager({ membros, meuPapel, meuUserId }: MembrosDaTela) 
                   <span className="shrink-0 text-sm text-muted-foreground">
                     {PAPEL_LABEL[m.papel as Papel] ?? m.papel}
                   </span>
+                )}
+
+                {editavel && !m.aceitoEm && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => copiarLink(m)}
+                    disabled={pendente}
+                  >
+                    <Link2 className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+                    Copiar link
+                  </Button>
                 )}
 
                 {editavel && !m.aceitoEm && (

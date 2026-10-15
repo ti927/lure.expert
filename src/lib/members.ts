@@ -338,7 +338,7 @@ export async function recusaDeMudanca(
 export async function registrarEventoDeMembro(
   args: {
     organizationId: string
-    tipo: 'member_invited' | 'invite_resent' | 'member_role_changed' | 'member_removed' | 'invite_accepted' | 'invite_declined'
+    tipo: 'member_invited' | 'invite_resent' | 'invite_link_copied' | 'member_role_changed' | 'member_removed' | 'invite_accepted' | 'invite_declined'
     membershipId: string
     payload: Record<string, unknown>
   },

@@ -199,20 +199,9 @@ export async function convidarMembro(input: { email: string; papel: string }): P
 export async function reenviarConvite(membershipId: string): Promise<ResultadoConvite> {
   const ctx = await contextoComPapel()
 
-  if (!idSchema.safeParse(membershipId).success) return { erro: 'Convite não encontrado.' }
-  const alvo = await carregarAlvo(membershipId, ctx.organizationId)
-  if (!alvo) return { erro: 'Convite não encontrado.' }
-  if (alvo.acceptedAt) return { erro: 'Esta pessoa já aceitou o convite.' }
-
-  const recusa = recusaDeGestao({ papelDoAtor: ctx.papel, papelDoAlvo: alvo.role })
-  if (recusa) return { erro: recusa }
-
-  const conta = alvo.invitedEmail ? await usuarioPorEmail(alvo.invitedEmail) : null
-  // O convite aponta para um user_id; um e-mail que hoje pertence a OUTRA conta
-  // não é este convite — reenviar para ele entregaria o acesso a outra pessoa.
-  if (!alvo.invitedEmail || !conta || conta.id !== alvo.userId) {
-    return { erro: 'Não foi possível identificar o e-mail deste convite. Cancele e convide de novo.' }
-  }
+  const r = await convitePendenteGerivel(membershipId, ctx)
+  if ('erro' in r) return { erro: r.erro }
+  const { alvo, conta } = r
 
   let avisoErro: string | undefined
   if (conta.ativada) {
@@ -230,6 +219,75 @@ export async function reenviarConvite(membershipId: string): Promise<ResultadoCo
   })
 
   return { usuarioJaExistia: conta.ativada, avisoErro }
+}
+
+/**
+ * O link do convite, para quem convidou mandar por outro canal (WhatsApp) — o
+ * caminho que não depende de o e-mail chegar. Não envia nada.
+ *
+ * Conta nunca ativada → link novo de definir senha, que INVALIDA o do e-mail
+ * (o Supabase guarda um token por conta; vale o último). Conta ativa → não há
+ * token a gerar: a pessoa já tem senha, e o link é o do login.
+ *
+ * O link leva a `/convite/abrir`, não direto a `/auth/confirm`: o WhatsApp abre
+ * o endereço para montar a pré-visualização, e um GET em `/auth/confirm`
+ * consumiria o token antes de a pessoa clicar. A página intermediária só gasta
+ * o token no clique em "Continuar".
+ */
+export async function linkDoConvite(membershipId: string): Promise<{ url?: string; erro?: string; contaAtiva?: boolean }> {
+  const ctx = await contextoComPapel()
+
+  const r = await convitePendenteGerivel(membershipId, ctx)
+  if ('erro' in r) return { erro: r.erro }
+  const { alvo, conta } = r
+
+  let url: string
+  if (conta.ativada) {
+    url = `${origemDaRequisicao()}/login?next=/configuracoes`
+  } else {
+    const admin = supabaseAdmin()
+    if (!admin) return { erro: 'SUPABASE_SERVICE_ROLE_KEY não está configurada — sem ela não é possível gerar o link.' }
+    const { data, error } = await admin.auth.admin.generateLink({ type: 'invite', email: conta.email })
+    const tokenHash = data?.properties?.hashed_token
+    if (error || !tokenHash) {
+      return { erro: `O Supabase recusou gerar o link: ${error?.message ?? 'resposta vazia'}` }
+    }
+    const destino = new URL('/convite/abrir', origemDaRequisicao())
+    destino.searchParams.set('token_hash', tokenHash)
+    destino.searchParams.set('type', 'invite')
+    url = destino.toString()
+  }
+
+  await registrarEventoDeMembro({
+    organizationId: ctx.organizationId,
+    tipo: 'invite_link_copied',
+    membershipId: alvo.id,
+    payload: { email: conta.email, por: ctx.userId, contaAtiva: conta.ativada },
+  })
+
+  return { url, contaAtiva: conta.ativada }
+}
+
+/** O convite pendente desta organização, a conta dele, e o direito do ator de mexer nele. */
+async function convitePendenteGerivel(
+  membershipId: string,
+  ctx: { organizationId: string; papel: string },
+) {
+  if (!idSchema.safeParse(membershipId).success) return { erro: 'Convite não encontrado.' }
+  const alvo = await carregarAlvo(membershipId, ctx.organizationId)
+  if (!alvo) return { erro: 'Convite não encontrado.' }
+  if (alvo.acceptedAt) return { erro: 'Esta pessoa já aceitou o convite.' }
+
+  const recusa = recusaDeGestao({ papelDoAtor: ctx.papel, papelDoAlvo: alvo.role })
+  if (recusa) return { erro: recusa }
+
+  const conta = alvo.invitedEmail ? await usuarioPorEmail(alvo.invitedEmail) : null
+  // O convite aponta para um user_id; um e-mail que hoje pertence a OUTRA conta
+  // não é este convite — mandar o link para ele entregaria o acesso a outra pessoa.
+  if (!alvo.invitedEmail || !conta || conta.id !== alvo.userId) {
+    return { erro: 'Não foi possível identificar o e-mail deste convite. Cancele e convide de novo.' }
+  }
+  return { alvo, conta }
 }
 
 // ─── Alterar papel e remover ────────────────────────────────────────────────
