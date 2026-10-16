@@ -12,6 +12,46 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Convites: link expirado, "Reenviar" e "Copiar link" (15/out) — hardening, fora de fase
+
+**Origem:** Julio convidou fernando@quickaviacao.com.br na Quick Aviação; o primeiro e-mail chegou,
+o link expirou, e "não estava enviando de novo".
+
+**Diagnóstico (banco + Resend + logs do Supabase Auth), três coisas distintas:**
+1. **Defeito real:** `inviteUserByEmail` cria a conta no Auth na hora do convite. Com o link
+   expirado, o reconvite achava a conta e a tratava como **conta ativa** — mandava só o aviso do
+   Resend com link para `/login`, para quem nunca definiu senha. Beco sem saída para todo convite
+   que expira.
+2. Os dois e-mails para o endereço certo **foram entregues** (Resend `delivered`). Envio nunca foi
+   o problema.
+3. A tentativa seguinte que "não chegou" tinha **typo** no e-mail (`quickavicao`) — Resend
+   `delivery_delayed`, domínio inexistente. Antes de suspeitar de SMTP, olhar o destinatário no
+   `list-emails` do Resend.
+
+**Commits:** `3970acb` (fix + Reenviar) e `8e0b4b7` (Copiar link).
+
+- `lib/members.ts` — `usuarioPorEmail` devolve `ativada` (`email_confirmed_at IS NOT NULL`), o mesmo
+  critério do Supabase, que só recusa reconvidar e-mail confirmado. Eventos novos `invite_resent` e
+  `invite_link_copied`.
+- `server/members.ts` — conta não ativada volta ao caminho do `inviteUserByEmail` (link novo);
+  helpers `enviarLinkDeConvite`, `avisarContaAtiva`, `convitePendenteGerivel` (recusa se o e-mail do
+  convite hoje pertence a OUTRA conta). Actions `reenviarConvite` e `linkDoConvite`
+  (`generateLink({ type: 'invite' })`, não envia nada).
+- `app/convite/abrir/page.tsx` — **página intermediária**: o link copiado cai aqui e só o clique em
+  "Continuar" (form GET) leva a `/auth/confirm`. Motivo: o WhatsApp e antivírus abrem o link para a
+  pré-visualização, e um GET direto em `/auth/confirm` consumiria o token antes da pessoa.
+- `members-manager.tsx` — botões **Copiar link** e **Reenviar convite** em convite pendente.
+
+**Decisão:** Julio pediu senha temporária; ficou "copiar link" — senha temporária troca o problema
+por outro (canal paralelo para a senha, senha conhecida por terceiro) e não protegeria contra o typo.
+
+**Verificado:** tsc/lint/build; script contra o Supabase real com conta descartável (example.com,
+apagada no fim) — 6/6: o 2º `generateLink` em conta não confirmada funciona, **invalida o 1º**, cria
+sessão e não vale duas vezes. **Não verificado:** o clique na tela e o caminho WhatsApp → senha →
+dashboard (fica para o convite real do Fernando).
+
+---
+
 ### ✅ Rateio de natureza — Sessões 3 e 4 (30/set) — branch `feat/rateio-natureza-telas`
 
 Sessões 1 e 2 subiram sozinhas às 01:41 de 30/set (0033 aplicada, 110/110 antes e depois do deploy).
