@@ -12,7 +12,24 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
-### ✅ Rateio visível no drill-down (20/out) — fora de fase
+### ✅ O MCP lê lançamento e descrição (20/out) — R3 + agrupamento por descrição
+
+**Origem:** o expert recusou "lançamentos com a mesma DESCRIÇÃO mas com CATEGORIAS diferentes" — não
+havia agrupamento por descrição nem leitura linha a linha. Decisões do Julio: as duas peças numa sessão,
+descrição exata **e** normalizada, páginas de até 200.
+
+**Arquivos:**
+- `src/lib/descricao-normalizada.ts` (novo) — `descricaoNormalizadaSql` + `normalizarDescricao` (mesma regra, testadas uma contra a outra).
+- `src/lib/query/groupings.ts`, `measures.ts`, `sources/realizado.ts`, `sources/types.ts` — `descricao`, `descricao_normalizada`, `naturezas_distintas`, coluna de filtro `descricao`.
+- `src/lib/query/spec.ts` + `engine.ts` — `filtros.descricaoContem` (`%`/`_` literais) e `descricaoNormalizada` (normaliza os dois lados); `.describe()` em `medidas` e em `agruparPor`.
+- `src/lib/transactions-write.ts` — `filtroLancamentosBase` exportado (a trava de filtro vazio fica só na escrita); `condicoes` exportada com `colunaData` opcional.
+- `src/lib/transactions-read.ts` (novo) — `detalharLancamentos`.
+- `src/lib/mcp/tools.ts` — ferramenta `detalhar_lancamentos` (leitura).
+- `scripts/verify-detalhar-lancamentos.ts` (novo, só leitura) — 31/31. `verify-mcp`/`verify-mcp-write`: contagem de leitura 12 → 13.
+
+**Não verificado:** as suítes HTTP do MCP (não rodadas) e o uso real no claude.ai — reconectar e repetir o pedido.
+
+
 
 **Pedido:** nas janelas de detalhamento da DRE e do Fluxo, destacar a linha que é parte de rateio e
 permitir ver o lançamento real e as outras partes ("um detalhamento do detalhamento").

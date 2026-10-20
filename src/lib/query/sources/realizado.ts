@@ -13,6 +13,7 @@ import { sql } from 'drizzle-orm'
 import { BP_TYPES } from '@/lib/bp-types'
 import type { SourceDescriptor, JoinId } from './types'
 import { filtroDeVisibilidade } from '@/lib/category-visibility'
+import { descricaoNormalizadaSql } from '@/lib/descricao-normalizada'
 
 const t = 'tl'
 const c = 'cat'
@@ -40,6 +41,7 @@ export const realizado: SourceDescriptor = {
     categoria: sql`tl.category_id`,
     conta:     sql`tl.account_id`,
     direcao:   sql`tl.direction`,
+    descricao: sql`tl.description`,
   },
 
   measures: {
@@ -49,6 +51,9 @@ export const realizado: SourceDescriptor = {
     valor_absoluto: { expr: sql`SUM(tl.amount::numeric)` },
     contagem:       { expr: sql`COUNT(DISTINCT tl.transaction_id)` },
     ticket_medio:   { expr: sql`SUM(tl.amount::numeric) / NULLIF(COUNT(DISTINCT tl.transaction_id), 0)` },
+    // Pela LINHA (tl), não pelo lançamento: num rateado a natureza vive na
+    // parte, e a coluna do lançamento é nula por regra (0033).
+    naturezas_distintas: { expr: sql`COUNT(DISTINCT tl.category_id)` },
   },
 
   // mes/trimestre/ano ficam a cargo do motor — ver a nota em types.ts.
@@ -102,6 +107,14 @@ export const realizado: SourceDescriptor = {
     direcao: {
       chave:  sql`tl.direction`,
       rotulo: sql`CASE WHEN tl.direction = 'inflow' THEN 'Entrada' ELSE 'Saída' END`,
+    },
+    descricao: {
+      chave:  sql`tl.description`,
+      rotulo: sql`tl.description`,
+    },
+    descricao_normalizada: {
+      chave:  descricaoNormalizadaSql(sql`tl.description`),
+      rotulo: descricaoNormalizadaSql(sql`tl.description`),
     },
   },
 

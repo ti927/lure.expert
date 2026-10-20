@@ -161,7 +161,7 @@ export async function ensinarRegras(
 // Classificação por FILTRO — o caminho do MCP
 // ─────────────────────────────────────────────────────────────────────────────
 
-const dataIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-DD')
+export const dataIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-DD')
 
 /**
  * O filtro é estreito de propósito, e é UM só para todas as escritas em lote.
@@ -172,7 +172,7 @@ const dataIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-D
  * vocabulário de filtro vale mais que um por operação: quem aprendeu a
  * descrever um lote para classificar já sabe descrevê-lo para ratear.
  */
-export const filtroLancamentosSchema = z.object({
+export const filtroLancamentosBase = z.object({
   descricaoContem: z.string().trim().min(2).max(120).optional()
     .describe('Trecho da descrição, sem diferenciar maiúsculas. Ex.: "UBER".'),
   semNatureza: z.boolean().optional()
@@ -186,7 +186,15 @@ export const filtroLancamentosSchema = z.object({
     .describe('Valor em reais, sempre positivo: o sinal vem do sentido, não do número.'),
   valorMaximo: z.number().nonnegative().optional(),
   contas: z.array(z.string()).max(20).optional(),
-}).refine(
+})
+
+/**
+ * A base acima também serve à LEITURA (`detalhar_lancamentos`, em
+ * `transactions-read.ts`), que estende o vocabulário em vez de inventar outro.
+ * A trava de filtro vazio é só da escrita: ler a base inteira, paginada, é
+ * legítimo; reclassificá-la inteira, não.
+ */
+export const filtroLancamentosSchema = filtroLancamentosBase.refine(
   f => Object.values(f).some(v => v !== undefined),
   // Sem isto, um filtro vazio casaria com a base inteira da organização. É o
   // erro que mais dói e o mais fácil de cometer.
@@ -198,7 +206,15 @@ export type FiltroLancamentos = z.infer<typeof filtroLancamentosSchema>
 /** Teto por operação. O mesmo espírito do limite de 200 do diálogo da tela. */
 export const TETO_CLASSIFICACAO = 500
 
-function condicoes(organizationId: string, f: FiltroLancamentos): SQL[] {
+/**
+ * As condições do filtro. `colunaData` troca a data que `de`/`ate` limitam —
+ * a escrita usa sempre a competência; a leitura aceita o regime de caixa.
+ */
+export function condicoes(
+  organizationId: string,
+  f: z.infer<typeof filtroLancamentosBase>,
+  colunaData?: SQL,
+): SQL[] {
   const cond: SQL[] = [
     eq(transactions.organizationId, organizationId),
     // `pending` é lançamento de importação ainda não aprovada; classificá-lo
@@ -221,8 +237,13 @@ function condicoes(organizationId: string, f: FiltroLancamentos): SQL[] {
       { ids: f.categorias, includeNone: false, includeClassified: false })
     if (porNatureza) cond.push(porNatureza)
   }
-  if (f.de)  cond.push(gte(transactions.date, f.de))
-  if (f.ate) cond.push(lte(transactions.date, f.ate))
+  if (colunaData) {
+    if (f.de)  cond.push(sql`${colunaData} >= ${f.de}::date`)
+    if (f.ate) cond.push(sql`${colunaData} <= ${f.ate}::date`)
+  } else {
+    if (f.de)  cond.push(gte(transactions.date, f.de))
+    if (f.ate) cond.push(lte(transactions.date, f.ate))
+  }
   if (f.direcao) cond.push(eq(transactions.direction, f.direcao))
   if (f.valorMinimo !== undefined) cond.push(gte(transactions.amount, String(f.valorMinimo)))
   if (f.valorMaximo !== undefined) cond.push(lte(transactions.amount, String(f.valorMaximo)))

@@ -17,6 +17,7 @@ import { MEASURES, type MeasureId } from './measures'
 import { SOURCES, type JoinId, type GroupingSql } from './sources'
 import { QueryValidationError } from './errors'
 import { validarFiltros } from './validate-filters'
+import { descricaoNormalizadaSql } from '@/lib/descricao-normalizada'
 import type { QueryScope } from './scope'
 import {
   querySpecSchema, type QueryInput, type QuerySpec, type QueryResult, type QueryRow,
@@ -337,7 +338,7 @@ async function executarUma(scope: QueryScope, spec: QuerySpec): Promise<QueryRes
     if (f) condicoes.push(f)
   }
 
-  const exigeColuna = (chave: 'categoria' | 'conta' | 'direcao', campo: string) => {
+  const exigeColuna = (chave: 'categoria' | 'conta' | 'direcao' | 'descricao', campo: string) => {
     const col = src.filterColumns[chave]
     if (!col) {
       throw new QueryValidationError(`filtros.${campo}`,
@@ -359,6 +360,17 @@ async function executarUma(scope: QueryScope, spec: QuerySpec): Promise<QueryRes
     condicoes.push(sql`${exigeColuna('conta', 'contas')} IN (${
       sql.join(spec.filtros.contas.map(a => sql`${a}`), sql`, `)
     })`)
+  }
+  if (spec.filtros.descricaoContem) {
+    // % e _ do texto do usuário são literais, não curinga.
+    const trecho = spec.filtros.descricaoContem.replace(/[\\%_]/g, c => `\\${c}`)
+    condicoes.push(sql`${exigeColuna('descricao', 'descricaoContem')} ILIKE ${`%${trecho}%`}`)
+  }
+  if (spec.filtros.descricaoNormalizada) {
+    // A normalização roda dos DOIS lados: o modelo pode devolver o rótulo
+    // como recebeu ou reescrito, e o casamento não depende disso.
+    const col = exigeColuna('descricao', 'descricaoNormalizada')
+    condicoes.push(sql`${descricaoNormalizadaSql(col)} = ${descricaoNormalizadaSql(sql`${spec.filtros.descricaoNormalizada}::text`)}`)
   }
   if (spec.filtros.tiposDeCategoria?.length) {
     joins.add('categoria')

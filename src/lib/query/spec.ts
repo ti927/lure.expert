@@ -83,6 +83,12 @@ export const filtrosSchema = z.object({
   contas:             z.array(z.string()).max(50).optional(),
   direcao:            z.enum(['inflow', 'outflow']).optional(),
   versaoOrcamento:    uuid.optional(),
+  descricaoContem:    z.string().trim().min(2).max(120).optional()
+    .describe('Só lançamentos cuja descrição contém este trecho, sem diferenciar maiúsculas. ' +
+      'Só na fonte "realizado".'),
+  descricaoNormalizada: z.string().trim().min(1).max(200).optional()
+    .describe('Só lançamentos cuja descrição normalizada é exatamente esta — use o rótulo que o ' +
+      'agrupamento "descricao_normalizada" devolveu. Só na fonte "realizado".'),
 
   /**
    * Tipos de balanço patrimonial ficam fora por padrão: o app é orientado a
@@ -166,12 +172,20 @@ export const ordenacaoSchema = z.object({
 
 export const querySpecSchema = z.object({
   fonte:      z.enum(SOURCE_IDS).default('realizado'),
-  medidas:    z.array(z.enum(MEASURE_IDS)).min(1).max(MEDIDAS_MAX).default(['valor_liquido']),
+  medidas:    z.array(z.enum(MEASURE_IDS)).min(1).max(MEDIDAS_MAX).default(['valor_liquido'])
+    .describe(
+      'valor_liquido = entradas − saídas, com sinal; entradas/saidas = cada lado, sempre positivo ' +
+      '(use saidas para ranking de despesa); valor_absoluto = volume; contagem = nº de lançamentos ' +
+      '(rateado conta 1); ticket_medio; naturezas_distintas = em quantas naturezas o grupo foi ' +
+      'classificado — agrupando por descrição, acha a mesma descrição classificada de jeitos diferentes.'),
   agruparPor: z.array(z.enum(GROUPING_IDS)).max(AGRUPAR_MAX).default([])
     .describe(
       `Até ${AGRUPAR_MAX} eixos. "opex_capex" separa operacional de não-operacional e vem da ` +
       'natureza PAI — combine com filtros.visibilidade = "caixa", ou as transferências entre ' +
-      'contas próprias caem no balde CAPEX.'),
+      'contas próprias caem no balde CAPEX. "descricao" agrupa pelo texto exato do extrato; ' +
+      '"descricao_normalizada" junta o que só difere em números, datas, acentos e pontuação ' +
+      '("PIX JOAO 12/09" e "PIX JOAO 15/09") — diga ao usuário qual usou, porque a normalizada pode ' +
+      'juntar coisas diferentes. Para ver os lançamentos de um grupo, use detalhar_lancamentos.'),
   periodo:    periodoSchema,
   filtros:    filtrosSchema,
   comparacao: comparacaoSchema.optional()

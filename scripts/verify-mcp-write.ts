@@ -140,7 +140,7 @@ async function main() {
   // 12 dos seis pares + 7 escritas de painel (6 da 5.D + apagar_painel).
   t(catalogoE.length === catalogoL.length + 19,
     `com escrita, o catálogo ganha 12 dos seis pares + 7 de painel (${catalogoL.length} → ${catalogoE.length})`)
-  t(catalogoL.length === 12, `leitura: 9 de consulta + listar_contas + 2 de painel (${catalogoL.length})`)
+  t(catalogoL.length === 13, `leitura: 9 de consulta + listar_contas + detalhar_lancamentos + 2 de painel (${catalogoL.length})`)
   t(catalogoL.some(f => f.name === 'listar_paineis') && catalogoL.some(f => f.name === 'ler_painel'),
     'as duas LEITURAS de painel estão no consentimento de leitura')
   t(!catalogoL.some(f => f.name === 'criar_painel'),

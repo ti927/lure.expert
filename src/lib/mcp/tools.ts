@@ -46,6 +46,7 @@ import {
 } from '@/lib/import-contract'
 import { listarContasUsadas, mapaDeContasManuais } from '@/lib/accounts'
 import { semNaturezaFilter } from '@/lib/sql-dimensions'
+import { detalharSchema, detalharLancamentos, LIMITE_DETALHE } from '@/lib/transactions-read'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import type { BudgetSeriesInput, CopyActualsInput } from '@/lib/budget-types'
 import {
@@ -232,6 +233,34 @@ const explicarConsulta: Ferramenta = {
     // conexão não alcança e devolveria um plano com ar de aprovado.
     await escopoDe(ctx, String(organizationId))
     return explicarQuery(spec as never)
+  },
+}
+
+/**
+ * A leitura linha a linha. Até 20/out o MCP só somava, e o expert respondia
+ * "não tenho acesso à descrição dos lançamentos" a pedidos tão básicos quanto
+ * "mesma descrição com naturezas diferentes" — pendência R3.
+ */
+const detalharLancamentosFerramenta: Ferramenta = {
+  nome: 'detalhar_lancamentos',
+  titulo: 'Detalhar lançamentos',
+  descricao:
+    'Lista lançamentos INDIVIDUAIS do realizado, um por linha, com descrição, data de competência ' +
+    'e de caixa, valor, sentido, conta, natureza, as 4 dimensões, as partes do rateio, se aguarda ' +
+    'revisão e quem classificou. É o que responde "quais são?", "me mostra os lançamentos de X", ' +
+    '"o que tem nessa natureza", "auditar classificação". Filtra por trecho ou descrição exata/' +
+    'normalizada, natureza, sem natureza, tipo, dimensões, conta, sentido, valor e período; ' +
+    `paginado (até ${LIMITE_DETALHE} por chamada; "total" e "temMais" dizem quanto falta). ` +
+    'Para AGREGAR (somar, contar, achar a mesma descrição em naturezas diferentes) use consultar ' +
+    'agrupando por "descricao" ou "descricao_normalizada" com a medida "naturezas_distintas", e ' +
+    'depois volte aqui com filtros.descricaoNormalizada para ver os lançamentos do grupo. Os mesmos ' +
+    'filtros servem a prever_classificacao_em_lote para corrigir o que encontrar.',
+  entrada: detalharSchema.extend(alvo.shape),
+  escopo: 'leitura',
+  async executar(args, ctx) {
+    const { organizationId, ...resto } = args as Record<string, unknown>
+    const scope = await escopoDe(ctx, String(organizationId))
+    return detalharLancamentos(scope.organizationId, resto as never)
   },
 }
 
@@ -1631,6 +1660,7 @@ const CATALOGO: Ferramenta[] = [
   listarRegrasFerramenta,
   consultar,
   explicarConsulta,
+  detalharLancamentosFerramenta,
   preverClassificacao,
   aplicarClassificacao,
   preverRegrasFerramenta,

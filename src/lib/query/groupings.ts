@@ -22,6 +22,8 @@ export const GROUPING_IDS = [
   'conta',
   'direcao',
   'opex_capex',
+  'descricao',
+  'descricao_normalizada',
 ] as const
 
 export type GroupingId = (typeof GROUPING_IDS)[number]
@@ -52,4 +54,9 @@ export const GROUPINGS: Record<GroupingId, GroupingMeta> = {
   conta:              { rotulo: 'Conta',               rotuloVazio: 'Sem conta' },
   direcao:            { rotulo: 'Sentido',             rotuloVazio: '—' },
   opex_capex:         { rotulo: 'OPEX/CAPEX',          rotuloVazio: 'Não classificado' },
+  // Os dois existem lado a lado (pedido de 20/out): a exata é previsível; a
+  // normalizada junta o que só difere em número/data, ao custo de às vezes
+  // juntar coisas diferentes. Ver `lib/descricao-normalizada.ts`.
+  descricao:             { rotulo: 'Descrição',            rotuloVazio: 'Sem descrição' },
+  descricao_normalizada: { rotulo: 'Descrição normalizada', rotuloVazio: 'Sem descrição' },
 }

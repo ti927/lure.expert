@@ -63,7 +63,7 @@ export interface SourceDescriptor {
    * o motor fala `inflow`/`outflow` e `invoices` guarda `saida`/`entrada`. A
    * tradução fica na fonte, e o motor compara sempre do mesmo jeito.
    */
-  filterColumns: Partial<Record<'categoria' | 'conta' | 'direcao', SQL>>
+  filterColumns: Partial<Record<'categoria' | 'conta' | 'direcao' | 'descricao', SQL>>
 
   measures: Partial<Record<MeasureId, MeasureSql>>
 

@@ -10,6 +10,7 @@ export const MEASURE_IDS = [
   'valor_absoluto',
   'contagem',
   'ticket_medio',
+  'naturezas_distintas',
 ] as const
 
 export type MeasureId = (typeof MEASURE_IDS)[number]
@@ -56,5 +57,13 @@ export const MEASURES: Record<MeasureId, MeasureMeta> = {
     rotulo: 'Ticket médio',
     descricao: 'Movimentação dividida pela quantidade de lançamentos.',
     formato: 'moeda',
+  },
+  naturezas_distintas: {
+    rotulo: 'Naturezas distintas',
+    descricao:
+      'Em quantas naturezas diferentes os lançamentos do grupo foram classificados (sem contar ' +
+      '"sem natureza"; num rateio, conta a natureza de cada parte). Agrupando por descrição e ' +
+      'ordenando por esta medida, mostra a mesma descrição classificada de jeitos diferentes.',
+    formato: 'inteiro',
   },
 }
