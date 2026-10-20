@@ -32,6 +32,7 @@ import {
   listarContasManuais,
   mapaDeContasManuais,
   rotuloDaConta,
+  colunasDeConta,
   PROVIDER_MANUAL,
   type ContaManual,
   type ResumoDeContaDoArquivo,
@@ -609,10 +610,11 @@ export async function approveAndInsert(documentId: string) {
         currency: valor.currency,
         direction: valor.direction,
         description: valor.description,
-        accountId: valor.accountId,
-        accountName: valor.accountName,
-        accountType: valor.accountType,
-        accountNumber: valor.accountNumber,
+        // Casou com o cadastro → a conta do CADASTRO (identidade, nome, tipo,
+        // número). Gravar o que o arquivo escreveu partia a conta em duas no
+        // filtro quando o arquivo usava um apelido (nome antigo de uma conta
+        // renomeada) ou outra grafia. A chave de dedup segue a do arquivo.
+        ...colunasDeConta(conta, valor),
         documentId,
         rawData: r.rawData ?? {},
         metadata,

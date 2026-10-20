@@ -12,6 +12,16 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Conta manual editável (20/out)
+
+- `src/lib/accounts.ts` — `aliasesDe`, `metadadosPreservando`, `editarContaManual`, `colunasDeConta`; `garantirContaManual` acha por apelido, devolve a identidade gravada e preserva o metadata; `mapaDeContasManuais` indexa apelidos.
+- `src/server/connections.ts` — `updateManualAccount` (member+), `getManualAccounts` devolve logo assinado e badge (`ContaManualNaTela`).
+- `src/app/(authenticated)/contas/logo-editor.tsx` (novo, extraído de `EditConnectionDialog`), `manual-accounts.tsx` (logo, badge, botão e janela de edição), `contas-client.tsx`.
+- `src/server/staging.ts` e `src/lib/import-write.ts` — colunas de conta do cadastro quando a linha casa.
+- `scripts/verify-editar-conta-manual.ts` (novo, ROLLBACK) — 20/20.
+
+**Pendente conhecido:** a chave de dedup usa o slug do nome escrito no arquivo; reimportar sob o nome NOVO um arquivo já importado sob o antigo não deduplica. **Não verificado:** a tela.
+
 ### ✅ Rótulo de conta: nome, não "OTHER" (20/out)
 
 `rotuloDaConta` (`lib/import-contract.ts`) = nome · tipo · número, omitindo `OTHER`. Aplicado em `transacoes-client.tsx` (coluna, com `title`), `drill-down-dialog.tsx` (coluna e filtro de conta) e `server/connections.ts` (filtro Banco/Conta, nome da conexão). Removidos `ACCT_LABELS` (`transacoes-shared/types.ts`) e `ACCOUNT_TYPE_LABELS` (`connections.ts`). Conferido nas 14 contas da Quick Aviação (só leitura). Não verificado: a tela.

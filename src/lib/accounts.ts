@@ -82,6 +82,34 @@ function tipoDeFonte(tipo: TipoDeConta): string {
   return 'bank'
 }
 
+/**
+ * Os outros nomes pelos quais a conta é reconhecida numa importação.
+ *
+ * A identidade (`accountId`, `arq:<slug>`) nasce do nome e NUNCA muda: ela está
+ * em cada lançamento e na chave de dedup, e trocá-la faria reimportar um arquivo
+ * antigo duplicar tudo. Renomear (20/out) acrescenta o slug do nome novo aqui —
+ * e o do antigo continua valendo, porque a identidade não saiu do lugar. Uma
+ * planilha com "Caixa Av. D" e outra com "Caixa Avenida D" caem na mesma conta.
+ */
+function aliasesDe(meta: Record<string, unknown>): string[] {
+  return Array.isArray(meta.aliases) ? meta.aliases.filter((x): x is string => typeof x === 'string') : []
+}
+
+/** O `metadata` da conta preservando o que não é cadastro (logo, badge, apelidos). */
+function metadadosPreservando(
+  atual: Record<string, unknown>,
+  accountId: string, nome: string, tipo: TipoDeConta, numero: string | null,
+  aliases: string[],
+) {
+  const { aliases: _velhos, ...resto } = atual
+  void _velhos
+  return {
+    ...resto,
+    ...metadadosDaConta(accountId, nome, tipo, numero),
+    ...(aliases.length > 0 ? { aliases } : {}),
+  }
+}
+
 function metadadosDaConta(accountId: string, nome: string, tipo: TipoDeConta, numero: string | null) {
   return {
     manual: true,
@@ -139,7 +167,10 @@ export async function garantirContaManual(
     .where(and(
       eq(dataSources.organizationId, organizationId),
       eq(dataSources.provider, PROVIDER_MANUAL),
-      sql`${dataSources.metadata}->>'accountId' = ${canonica.accountId}`,
+      // Pela identidade OU por um nome que a conta já teve — sem o segundo, a
+      // planilha com o nome antigo de uma conta renomeada criaria uma conta nova.
+      sql`(${dataSources.metadata}->>'accountId' = ${canonica.accountId}
+            OR ${dataSources.metadata}->'aliases' @> jsonb_build_array(${canonica.accountId}::text))`,
     ))
     .limit(1)
 
@@ -151,18 +182,22 @@ export async function garantirContaManual(
     const nomeFinal = existente.name
     const tipoFinal = tipo ? t : lerTipoDeConta(contaAtual?.subtype)
     const numeroFinal = num ?? (contaAtual?.number?.trim() || null)
+    // A identidade é a GRAVADA — achada por apelido, ela difere do slug pedido.
+    const idReal = String(metaAtual.accountId ?? canonica.accountId)
 
     await exec
       .update(dataSources)
       .set({
         name: nomeFinal,
         type: tipoDeFonte(tipoFinal),
-        metadata: metadadosDaConta(canonica.accountId, nomeFinal, tipoFinal, numeroFinal),
+        // Preservando: antes reescrevia o metadata inteiro, e cada importação
+        // que citava a conta apagava o logo e o badge que a pessoa pôs nela.
+        metadata: metadadosPreservando(metaAtual, idReal, nomeFinal, tipoFinal, numeroFinal, aliasesDe(metaAtual)),
         updatedAt: new Date(),
       })
       .where(eq(dataSources.id, existente.id))
     return {
-      dataSourceId: existente.id, accountId: canonica.accountId,
+      dataSourceId: existente.id, accountId: idReal,
       nome: nomeFinal, tipo: tipoFinal, numero: numeroFinal,
     }
   }
@@ -262,9 +297,116 @@ export async function mapaDeContasManuais(
   const mapa = new Map<string, ContaManual>()
   for (const r of rows) {
     const c = contaDeLinha(r.id, r.name, r.metadata)
-    if (c.accountId) mapa.set(c.accountId, c)
+    if (!c.accountId) continue
+    // Apelido primeiro, identidade depois: se um dia colidirem, vence a
+    // identidade de alguém — nunca o nome antigo de outra conta.
+    for (const a of aliasesDe((r.metadata ?? {}) as Record<string, unknown>)) {
+      if (!mapa.has(a)) mapa.set(a, c)
+    }
+    mapa.set(c.accountId, c)
   }
   return mapa
+}
+
+/**
+ * As quatro colunas de conta que um lançamento importado recebe.
+ *
+ * Linha que casou com o cadastro leva a conta DO CADASTRO — a identidade gravada
+ * e o nome atual —, não o que o arquivo escreveu. Sem isto, um arquivo com o
+ * nome antigo de uma conta renomeada (apelido) vinculava à conta certa mas
+ * gravava outra identidade, e o filtro de `/transacoes` partia a conta em duas;
+ * e "caixa av d" em minúsculas virava um rótulo diferente de "Caixa Av. D".
+ * Sem cadastro, fica o que o arquivo disse — "sem conta" é sem VÍNCULO.
+ */
+export function colunasDeConta(
+  conta: ContaManual | null,
+  valor: { accountId: string | null; accountName: string | null; accountType: string | null; accountNumber: string | null },
+) {
+  if (!conta) {
+    return {
+      accountId: valor.accountId, accountName: valor.accountName,
+      accountType: valor.accountType, accountNumber: valor.accountNumber,
+    }
+  }
+  return {
+    accountId: conta.accountId,
+    accountName: conta.nome,
+    accountType: conta.tipo,
+    accountNumber: conta.numero ?? valor.accountNumber,
+  }
+}
+
+/**
+ * Edita nome, tipo e número de uma conta manual — e propaga aos lançamentos.
+ *
+ * As quatro colunas `account_*` de `transactions` são DESNORMALIZADAS (não há FK
+ * nem tabela de conta), então o nome novo só aparece em `/transacoes`, nos
+ * filtros e na DRE se for gravado em cada lançamento. A identidade
+ * (`account_id`) não muda — ver `aliasesDe`. Uma transação só: conta e
+ * lançamentos mudam juntos ou nenhum muda.
+ */
+export async function editarContaManual(
+  organizationId: string,
+  dataSourceId: string,
+  input: { nome: string; tipo: string | null; numero: string | null },
+  exec: typeof db = db,
+): Promise<{ error: string } | { ok: true; lancamentosAtualizados: number }> {
+  const nome = (input.nome ?? '').trim()
+  if (!nome) return { error: 'Informe o nome da conta.' }
+  if (nome.length > 200) return { error: 'O nome da conta é longo demais (máximo 200 caracteres).' }
+  const tipo = lerTipoDeConta(input.tipo)
+  const numero = (input.numero ?? '').trim().slice(0, 60) || null
+  const slugNovo = contaCanonica(nome).accountId
+  if (!slugNovo) return { error: 'Nome de conta inválido.' }
+
+  return exec.transaction(async tx => {
+    const contas = await tx
+      .select({ id: dataSources.id, name: dataSources.name, metadata: dataSources.metadata })
+      .from(dataSources)
+      .where(and(
+        eq(dataSources.organizationId, organizationId),
+        eq(dataSources.provider, PROVIDER_MANUAL),
+      ))
+    const alvo = contas.find(c => c.id === dataSourceId)
+    if (!alvo) return { error: 'Conta não encontrada.' }
+
+    const meta = (alvo.metadata ?? {}) as Record<string, unknown>
+    const accountId = String(meta.accountId ?? '')
+    if (!accountId) return { error: 'Conta sem identidade gravada — não dá para renomear com segurança.' }
+
+    // Outro cadastro que já responde por esse nome tornaria a importação ambígua.
+    const dona = contas.find(c => {
+      if (c.id === dataSourceId) return false
+      const m = (c.metadata ?? {}) as Record<string, unknown>
+      return m.accountId === slugNovo || aliasesDe(m).includes(slugNovo)
+    })
+    if (dona) return { error: `Já existe a conta "${dona.name}" com esse nome. Escolha outro.` }
+
+    const slugAntigo = contaCanonica(alvo.name).accountId
+    const aliases = Array.from(new Set([...aliasesDe(meta), slugAntigo, slugNovo]))
+      .filter((a): a is string => !!a && a !== accountId)
+
+    await tx
+      .update(dataSources)
+      .set({
+        name: nome,
+        type: tipoDeFonte(tipo),
+        metadata: metadadosPreservando(meta, accountId, nome, tipo, numero, aliases),
+        updatedAt: new Date(),
+      })
+      .where(eq(dataSources.id, dataSourceId))
+
+    const atualizados = await tx
+      .update(transactions)
+      .set({ accountName: nome, accountType: tipo, accountNumber: numero })
+      .where(and(
+        eq(transactions.organizationId, organizationId),
+        eq(transactions.accountId, accountId),
+      ))
+      .returning({ id: transactions.id })
+
+    return { ok: true as const, lancamentosAtualizados: atualizados.length }
+  })
 }
 
 /**

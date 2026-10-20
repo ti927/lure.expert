@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useMemo, useRef } from 'react'
+import { useState, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
@@ -45,15 +45,13 @@ import {
   disconnectBank,
   triggerManualSync,
   updateConnectionCustomization,
-  setConnectionLogoPath,
-  removeConnectionLogo,
 } from '@/server/connections'
 import { deleteTransactions } from '@/server/transactions'
-import { createClient } from '@/lib/supabase/client'
 import type { PendingSource, OrgConnection } from '@/server/connections'
 import { AdquirentesTab } from './adquirentes-tab'
 import { ManualAccounts } from './manual-accounts'
-import type { ContaManualComUso } from '@/lib/accounts'
+import { LogoEditor } from './logo-editor'
+import type { ContaManualNaTela } from '@/server/connections'
 import type { AcquirerConnectionWithEntity } from '@/server/acquirer-connections'
 
 const PluggyConnect = dynamic(
@@ -70,7 +68,7 @@ interface ContasClientProps {
   pendingSources: PendingSource[]
   orgId: string
   acquirerConnections: AcquirerConnectionWithEntity[]
-  manualAccounts: ContaManualComUso[]
+  manualAccounts: ContaManualNaTela[]
 }
 
 export function ContasClient({ connections, includeSandbox, reconciliationCount, pendingSources, orgId, acquirerConnections, manualAccounts }: ContasClientProps) {
@@ -240,7 +238,7 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
             </div>
           )}
 
-          <ManualAccounts contas={manualAccounts} />
+          <ManualAccounts contas={manualAccounts} orgId={orgId} />
         </TabsContent>
 
         {/* Aba: Extrato pendente */}
@@ -527,9 +525,6 @@ function ConnectionCard({
 
 // --- EditConnectionDialog ---
 
-const LOGO_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
-const LOGO_MAX_BYTES = 500 * 1024 // 500 KB
-
 function EditConnectionDialog({
   open,
   onOpenChange,
@@ -558,7 +553,6 @@ function EditConnectionDialog({
   const [badge, setBadge] = useState(initialBadge)
   const [isPending, startTransition] = useTransition()
   const [isUploadingLogo, setIsUploadingLogo] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Reinicializa o estado quando o dialog abre
   function handleOpenChange(next: boolean) {
@@ -595,62 +589,6 @@ function EditConnectionDialog({
     persist(null, null, 'Padrão restaurado.')
   }
 
-  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!LOGO_ACCEPTED_TYPES.includes(file.type)) {
-      toast.error('Use PNG, JPG ou WebP.')
-      return
-    }
-    if (file.size > LOGO_MAX_BYTES) {
-      toast.error('Imagem muito grande. Limite: 500 KB.')
-      return
-    }
-
-    setIsUploadingLogo(true)
-    try {
-      const supabase = createClient()
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
-      const uuid = crypto.randomUUID()
-      const storagePath = `${orgId}/connection-logos/${dataSourceId}-${uuid}.${ext}`
-
-      const { error: storageError } = await supabase.storage
-        .from('documents')
-        .upload(storagePath, file, { contentType: file.type, upsert: false })
-
-      if (storageError) {
-        toast.error(`Erro ao enviar imagem: ${storageError.message}`)
-        return
-      }
-
-      const result = await setConnectionLogoPath(dataSourceId, storagePath)
-      if ('error' in result) {
-        // Limpa o arquivo se a server action falhou
-        await supabase.storage.from('documents').remove([storagePath])
-        toast.error(result.error)
-        return
-      }
-
-      toast.success('Logo atualizado.')
-      router.refresh()
-    } finally {
-      setIsUploadingLogo(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }
-
-  function handleRemoveLogo() {
-    startTransition(async () => {
-      const result = await removeConnectionLogo(dataSourceId)
-      if ('error' in result) {
-        toast.error(result.error)
-        return
-      }
-      toast.success('Logo removido.')
-      router.refresh()
-    })
-  }
-
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -661,55 +599,14 @@ function EditConnectionDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Logo</Label>
-            <div className="flex items-center gap-3">
-              {currentLogoUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={currentLogoUrl}
-                  alt="Logo atual"
-                  className="h-12 w-12 rounded border bg-muted object-contain"
-                />
-              ) : (
-                <div className="flex h-12 w-12 items-center justify-center rounded border bg-muted">
-                  <Landmark className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={LOGO_ACCEPTED_TYPES.join(',')}
-                  className="hidden"
-                  onChange={handleLogoUpload}
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploadingLogo || isPending}
-                >
-                  {isUploadingLogo ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : null}
-                  Carregar imagem
-                </Button>
-                {hasCustomLogo && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleRemoveLogo}
-                    disabled={isUploadingLogo || isPending}
-                    className="text-muted-foreground"
-                  >
-                    Remover
-                  </Button>
-                )}
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">PNG, JPG ou WebP — até 500 KB.</p>
-          </div>
+          <LogoEditor
+            dataSourceId={dataSourceId}
+            orgId={orgId}
+            currentLogoUrl={currentLogoUrl}
+            hasCustomLogo={hasCustomLogo}
+            disabled={isPending}
+            onBusyChange={setIsUploadingLogo}
+          />
           <div className="space-y-1.5">
             <Label htmlFor="custom-label">Nome do banco</Label>
             <Input

@@ -47,7 +47,7 @@ import {
 import { findCategoryByText, type LeafCategory } from '@/lib/categorizer'
 import { BP_TYPES } from '@/lib/bp-types'
 import {
-  garantirContaManual, mapaDeContasManuais,
+  garantirContaManual, mapaDeContasManuais, colunasDeConta,
   type ContaManual, type ResumoDeContaDoArquivo,
 } from '@/lib/accounts'
 
@@ -497,10 +497,9 @@ export async function aplicarImportacao(
       // derivado (`arq:<slug>`), o mesmo que a tela produz — é o que faz a
       // mesma conta em arquivos diferentes casar, e o que o filtro de
       // `/transacoes` agrupa.
-      accountId: valor.accountId,
-      accountName: valor.accountName,
-      accountType: valor.accountType,
-      accountNumber: valor.accountNumber,
+      // Casou com o cadastro → identidade e rótulo do CADASTRO (ver
+      // `colunasDeConta`); a chave de dedup segue a do arquivo.
+      ...colunasDeConta(conta, valor),
       rawData: { ...linhas[indice] },
       metadata: {
         sourceType: ehBalanco ? 'balance_sheet' : 'statement', via: 'mcp', origem,

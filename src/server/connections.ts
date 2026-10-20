@@ -13,8 +13,8 @@ import { revalidatePath } from 'next/cache'
 import { rotuloDaConta } from '@/lib/import-contract'
 import { inngest } from '@/lib/inngest'
 import {
-  listarContasManuais, garantirContaManual, apagarContaManual,
-  type ContaManualComUso,
+  listarContasManuais, garantirContaManual, apagarContaManual, editarContaManual,
+  PROVIDER_MANUAL, type ContaManualComUso,
 } from '@/lib/accounts'
 
 function mapConnectorType(connectorType: string): string {
@@ -178,9 +178,52 @@ export async function getDataSourcesWithTransactions(): Promise<DataSourceOption
 // tinham como existir — o único escritor de conta era o sync do Pluggy.
 // Detalhe do desenho em `src/lib/accounts.ts`.
 
-export async function getManualAccounts(): Promise<ContaManualComUso[]> {
+/** A conta manual como `/contas` a desenha: cadastro + uso + logo e badge. */
+export type ContaManualNaTela = ContaManualComUso & {
+  logoUrl: string | null
+  temLogoProprio: boolean
+  badge: string
+}
+
+export async function getManualAccounts(): Promise<ContaManualNaTela[]> {
   const { organizationId } = await getAuthContext()
-  return listarContasManuais(organizationId)
+  const [contas, metas] = await Promise.all([
+    listarContasManuais(organizationId),
+    db.select({ id: dataSources.id, metadata: dataSources.metadata })
+      .from(dataSources)
+      .where(and(eq(dataSources.organizationId, organizationId), eq(dataSources.provider, PROVIDER_MANUAL))),
+  ])
+  const metaPorId = new Map(metas.map(m => [m.id, (m.metadata ?? {}) as Record<string, unknown>]))
+  const supabase = createClient()
+  return Promise.all(contas.map(async c => {
+    const meta = metaPorId.get(c.dataSourceId) ?? {}
+    const path = typeof meta.customLogoPath === 'string' ? meta.customLogoPath : null
+    const logoUrl = path
+      ? (await supabase.storage.from('documents').createSignedUrl(path, 3600)).data?.signedUrl ?? null
+      : null
+    const badge = (meta.customBadge as { text?: string } | undefined)?.text ?? ''
+    return { ...c, logoUrl, temLogoProprio: !!path, badge }
+  }))
+}
+
+/**
+ * Renomeia (e corrige tipo/número de) uma conta manual — e os lançamentos dela.
+ * Operador para cima: muda o rótulo de lançamentos já existentes, que é o
+ * mesmo nível de importar e classificar.
+ */
+export async function updateManualAccount(
+  dataSourceId: string,
+  input: { nome: string; tipo: string | null; numero: string | null },
+): Promise<{ error: string } | { success: true; lancamentosAtualizados: number }> {
+  const { organizationId, papel } = await getAuthContext()
+  const recusa = recusaDePapel(papel, 'member', 'editar contas')
+  if (recusa) return { error: recusa }
+
+  const r = await editarContaManual(organizationId, dataSourceId, input)
+  if ('error' in r) return r
+  revalidatePath('/contas')
+  revalidatePath('/transacoes')
+  return { success: true, lancamentosAtualizados: r.lancamentosAtualizados }
 }
 
 export async function createManualAccount(input: {
