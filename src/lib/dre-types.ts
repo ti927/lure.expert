@@ -127,6 +127,14 @@ export interface DrillDownTransaction {
    */
   allocationId:        string | null
   isAllocated:         boolean
+  /**
+   * Só numa parte de rateio (nulos fora dele): a posição da parte, quantas o
+   * lançamento tem e o valor INTEIRO dele. A linha mostra o valor da parte; sem
+   * o total, "−300" não diz que veio de um TED de −1.000.
+   */
+  allocationSequence:  number | null
+  allocationCount:     number | null
+  transactionAmount:   number | null
   // Contexto da conta bancária (Sessão drill-down v2)
   accountId:           string | null
   accountName:         string | null

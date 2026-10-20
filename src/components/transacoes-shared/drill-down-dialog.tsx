@@ -5,9 +5,9 @@
 // fornece as transações já filtradas pelo escopo apropriado. Edição inline, batch e
 // delete funcionam direto no banco via server actions.
 
-import { useState, useEffect, useMemo } from 'react'
+import { Fragment, useState, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
-import { Loader2, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, Split, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { classifyTransaction, deleteTransactions } from '@/server/transactions'
+import { getAllocations, type AllocationRow } from '@/server/allocations'
+import { fmtMoney } from '@/lib/format'
 import type { DrillDownTransaction, LeafCategory } from '@/lib/dre-types'
 import { DRE_TYPE_LABELS } from '@/lib/dre-types'
 import { BP_TYPE_LABELS } from '@/lib/bp-types'
@@ -26,6 +28,7 @@ import { ColHeader } from './col-header'
 import { MultiSelectFilter, DescFilter, AmountFilter, DirectionFilter } from './filters'
 import { CellCombobox, CategoryCellCombobox } from './cell-combobox'
 import { BatchClassifyDialog } from './batch-classify-dialog'
+import { AllocationDialog } from './allocation-dialog'
 import { ACCT_LABELS } from './types'
 import type { SimpleDimensionItem } from './types'
 
@@ -59,14 +62,44 @@ export interface DrillDownDialogProps {
   businessUnits: BusinessUnit[]
   legalEntities: LegalEntity[]
   contacts: SimpleDimensionItem[]
+  /**
+   * Recarrega a lista do caller. Sem ela, a parte de rateio expandida não
+   * oferece "Editar rateio": mudar as partes muda as linhas desta janela, e
+   * só quem fez a consulta sabe refazê-la.
+   */
+  onReload?: () => void
 }
 
 export function DrillDownDialog({
   open, onOpenChange, title, subtitle,
   data, loading, onDataChange,
   leafCategories, costCenters, businessUnits, legalEntities, contacts,
+  onReload,
 }: DrillDownDialogProps) {
   const [localData, setLocalData] = useState<DrillDownTransaction[]>([])
+
+  // Detalhamento do rateio: a linha expandida é a PARTE (allocationId), e as
+  // partes do lançamento vêm sob demanda — a mesma leitura de /transacoes.
+  const [expandedPart, setExpandedPart] = useState<string | null>(null)
+  const [partsCache, setPartsCache] = useState<Record<string, AllocationRow[]>>({})
+  const [loadingParts, setLoadingParts] = useState(false)
+  const [allocTarget, setAllocTarget] = useState<DrillDownTransaction | null>(null)
+
+  async function toggleParts(tx: DrillDownTransaction) {
+    if (!tx.allocationId) return
+    if (expandedPart === tx.allocationId) { setExpandedPart(null); return }
+    setExpandedPart(tx.allocationId)
+    if (partsCache[tx.id]) return
+    setLoadingParts(true)
+    try {
+      const parts = await getAllocations(tx.id)
+      setPartsCache(prev => ({ ...prev, [tx.id]: parts }))
+    } catch {
+      toast.error('Não foi possível carregar as partes do rateio.')
+    } finally {
+      setLoadingParts(false)
+    }
+  }
 
   // Filtros client-side
   const [search, setSearch] = useState<string | undefined>(undefined)
@@ -92,6 +125,8 @@ export function DrillDownDialog({
     if (data) {
       setLocalData(data)
       setSelectedIds(new Set())
+      // Lista nova pode trazer rateio editado: as partes em cache ficaram velhas.
+      setPartsCache({})
     }
   }, [data])
 
@@ -104,8 +139,26 @@ export function DrillDownDialog({
       setBuFilter(undefined); setLeFilter(undefined); setCtFilter(undefined)
       setAcctFilter(undefined)
       setSelectedIds(new Set()); setSort('date_desc')
+      setExpandedPart(null); setPartsCache({})
     }
   }, [open])
+
+  // Nome por id, para as partes — que podem ter natureza e dimensões que não
+  // aparecem em nenhuma linha desta janela.
+  const nomes = useMemo(() => {
+    const m = (xs: { id: string; name: string }[]) => new Map(xs.map(x => [x.id, x.name]))
+    return {
+      cat: m(leafCategories), cc: m(costCenters), bu: m(businessUnits),
+      le: m(legalEntities), ct: m(contacts),
+    }
+  }, [leafCategories, costCenters, businessUnits, legalEntities, contacts])
+
+  // Partes que esta janela já mostra como linha própria — o resto caiu em
+  // outra natureza ou foi barrado por um filtro de dimensão.
+  const partesVisiveis = useMemo(
+    () => new Set(localData.map(t => t.allocationId).filter((x): x is string => !!x)),
+    [localData],
+  )
 
   const acctOptions = useMemo(() => {
     const seen = new Map<string, string>()
@@ -474,7 +527,11 @@ export function DrillDownDialog({
                       // Com rateio o mesmo lançamento vem em N linhas: a chave
                       // do React e a seleção passam a ser da PARTE, senão as
                       // três compartilhariam identidade.
-                      <tr key={tx.allocationId ?? tx.id} className="group border-b last:border-0 hover:bg-muted/20 transition-colors">
+                      <Fragment key={tx.allocationId ?? tx.id}>
+                      <tr className={cn(
+                        'group border-b last:border-0 hover:bg-muted/20 transition-colors',
+                        tx.isAllocated && 'bg-violet-50/30',
+                      )}>
                         <td className="px-2 py-1.5">
                           <input
                             type="checkbox"
@@ -492,12 +549,31 @@ export function DrillDownDialog({
                           {fmtDate(tx.date)}
                         </td>
                         <td className="px-2 py-1.5 overflow-hidden">
-                          <div className="truncate text-xs">{tx.description}</div>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {tx.isAllocated && (
+                              <button
+                                onClick={() => toggleParts(tx)}
+                                className="inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
+                                title="Ver o lançamento inteiro e as outras partes do rateio"
+                              >
+                                {expandedPart === tx.allocationId
+                                  ? <ChevronDown className="h-3 w-3" />
+                                  : <ChevronRight className="h-3 w-3" />}
+                                Rateio{tx.allocationSequence && tx.allocationCount ? ` ${tx.allocationSequence}/${tx.allocationCount}` : ''}
+                              </button>
+                            )}
+                            <span className="truncate text-xs">{tx.description}</span>
+                          </div>
                         </td>
                         <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
                           <span className={cn('font-medium text-xs', tx.direction === 'inflow' ? 'text-emerald-600' : 'text-rose-600')}>
                             {tx.direction === 'outflow' && '−'}{fmtNum(tx.amount)}
                           </span>
+                          {tx.isAllocated && tx.transactionAmount != null && (
+                            <div className="text-[10px] text-muted-foreground">
+                              de {tx.direction === 'outflow' && '−'}{fmtNum(tx.transactionAmount)}
+                            </div>
+                          )}
                         </td>
                         <td className="px-2 py-1.5 text-xs text-muted-foreground">
                           <div className="flex items-center gap-2 min-w-0">
@@ -578,6 +654,67 @@ export function DrillDownDialog({
                           </button>
                         </td>
                       </tr>
+                      {tx.isAllocated && expandedPart === tx.allocationId && (
+                        <tr className="bg-violet-50/50 border-b">
+                          <td />
+                          <td colSpan={11} className="px-2 py-2">
+                            <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+                              <div className="text-muted-foreground">
+                                <span className="font-medium text-foreground">Lançamento inteiro:</span>{' '}
+                                <span className={cn('font-medium tabular-nums', tx.direction === 'inflow' ? 'text-emerald-700' : 'text-rose-600')}>
+                                  {tx.direction === 'outflow' && '−'}{fmtMoney(tx.transactionAmount ?? tx.amount)}
+                                </span>
+                                {' · '}{fmtDate(tx.date)}
+                                {acctStr && <> · {acctStr}</>}
+                                {tx.allocationCount && <> · rateado em {tx.allocationCount} partes</>}
+                              </div>
+                              {onReload && (
+                                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAllocTarget(tx)}>
+                                  <Split className="h-3.5 w-3.5 mr-1" />
+                                  Editar rateio
+                                </Button>
+                              )}
+                            </div>
+                            {loadingParts && !partsCache[tx.id] ? (
+                              <span className="text-xs text-muted-foreground">Carregando partes…</span>
+                            ) : (
+                              <div className="space-y-1">
+                                {(partsCache[tx.id] ?? []).map(p => {
+                                  const estaLinha = p.id === tx.allocationId
+                                  const naJanela  = partesVisiveis.has(p.id)
+                                  const catNome   = p.categoryId ? nomes.cat.get(p.categoryId) : null
+                                  return (
+                                    <div key={p.id} className={cn('flex items-center gap-3 text-xs', estaLinha && 'font-medium')}>
+                                      <span className="text-muted-foreground">{estaLinha ? '►' : '└'}</span>
+                                      <span className="tabular-nums w-24 text-right">
+                                        {tx.direction === 'outflow' && '−'}{fmtMoney(Number(p.amount))}
+                                      </span>
+                                      <span className={cn('w-56 truncate', !p.categoryId && 'text-amber-600')}>
+                                        {catNome ?? (p.categoryId ? 'natureza fora da lista' : 'sem natureza')}
+                                      </span>
+                                      <span className="flex-1 truncate text-muted-foreground font-normal">
+                                        {[
+                                          p.costCenterId && nomes.cc.get(p.costCenterId),
+                                          p.businessUnitId && nomes.bu.get(p.businessUnitId),
+                                          p.legalEntityId && nomes.le.get(p.legalEntityId),
+                                          p.contactId && nomes.ct.get(p.contactId),
+                                        ].filter(Boolean).join(' · ') || 'sem dimensão'}
+                                      </span>
+                                      <span className={cn(
+                                        'shrink-0 text-[10px] font-normal',
+                                        estaLinha ? 'text-violet-700' : naJanela ? 'text-muted-foreground' : 'text-amber-700',
+                                      )}>
+                                        {estaLinha ? 'esta linha' : naJanela ? 'também nesta janela' : 'fora desta janela'}
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     )
                   })}
                 </tbody>
@@ -608,6 +745,27 @@ export function DrillDownDialog({
           legalEntities={legalEntities.map(c => ({ id: c.id, name: c.name }))}
           contacts={contacts}
           onSuccess={() => { setSelectedIds(new Set()) }}
+        />
+
+        <AllocationDialog
+          open={!!allocTarget}
+          onOpenChange={o => { if (!o) setAllocTarget(null) }}
+          transaction={allocTarget && {
+            id:          allocTarget.id,
+            description: allocTarget.description,
+            amount:      allocTarget.transactionAmount ?? allocTarget.amount,
+            categoryId:  null,
+          }}
+          categories={leafCategories.map(c => ({ id: c.id, name: c.name, code: c.code, type: c.type, parentId: null }))}
+          costCenters={costCenters.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+          businessUnits={businessUnits.map(c => ({ id: c.id, name: c.name, code: c.code }))}
+          legalEntities={legalEntities.map(c => ({ id: c.id, name: c.name }))}
+          contacts={contacts}
+          onSaved={() => {
+            setExpandedPart(null)
+            setPartsCache({})
+            onReload?.()
+          }}
         />
 
         <AlertDialog open={deleteTargetIds.length > 0} onOpenChange={open => { if (!open) setDeleteTargetIds([]) }}>

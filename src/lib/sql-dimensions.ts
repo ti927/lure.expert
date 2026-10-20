@@ -165,6 +165,24 @@ export function naturezasDoRateioSql(txIdColumn: SQL): SQL<string[]> {
   )`
 }
 
+/**
+ * As três colunas que o drill-down mostra numa parte de rateio — posição da
+ * parte, quantas o lançamento tem e o valor inteiro dele —, nulas fora do
+ * rateio. Supõe a view `transaction_lines` com o alias `t`. As subconsultas
+ * usam alias próprio (`a_cnt`, `t_pai`) para a correlação não ser capturada
+ * pelo escopo interno — Decisão 18.
+ */
+export function colunasDoRateioSql(): SQL {
+  return sql.raw(`
+    CASE WHEN t.is_allocated THEN t.sequence END AS allocation_sequence,
+    CASE WHEN t.is_allocated THEN (
+      SELECT COUNT(*) FROM transaction_allocations a_cnt WHERE a_cnt.transaction_id = t.transaction_id
+    ) END AS allocation_count,
+    CASE WHEN t.is_allocated THEN (
+      SELECT t_pai.amount FROM transactions t_pai WHERE t_pai.id = t.transaction_id
+    ) END AS transaction_amount`)
+}
+
 /** Alguma parte do rateio está sem natureza. Coluna qualificada — Decisão 18. */
 export function rateioComParteSemNaturezaSql(txIdColumn: SQL): SQL<boolean> {
   return sql<boolean>`EXISTS (

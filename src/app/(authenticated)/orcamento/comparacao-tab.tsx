@@ -143,7 +143,10 @@ export function ComparacaoTab({
   }, [regime, cellMode, fechadoAte])
 
   // ── Drill-down duplo ──
-  const [txDrill, setTxDrill] = useState<{ title: string; subtitle: string } | null>(null)
+  // `args`: o que abriu a janela, para recarregá-la depois de editar um rateio.
+  const [txDrill, setTxDrill] = useState<{
+    title: string; subtitle: string; args: [string, string, string | null]
+  } | null>(null)
   const [txData, setTxData] = useState<DrillDownTransaction[] | null>(null)
   const [budgetDrill, setBudgetDrill] = useState<{ title: string; subtitle: string } | null>(null)
   const [budgetData, setBudgetData] = useState<BudgetDrillDownEntry[] | null>(null)
@@ -175,7 +178,7 @@ export function ComparacaoTab({
         setBudgetData(await getBudgetDrillDown(version.id, categoryId, regime, range, dimArgs))
       })
     } else {
-      setTxDrill({ title: categoryName, subtitle })
+      setTxDrill({ title: categoryName, subtitle, args: [categoryId, categoryName, month] })
       setTxData(null)
       startDrill(async () => {
         const r = await getDreDrillDown(categoryId, month ?? '', dimArgs, range, regime)
@@ -584,6 +587,7 @@ export function ComparacaoTab({
           data={txData}
           loading={isDrilling}
           onDataChange={setTxData}
+          onReload={() => { fetchData(); openDrill(...txDrill.args) }}
           leafCategories={leafCategories}
           costCenters={costCenters}
           businessUnits={businessUnits}

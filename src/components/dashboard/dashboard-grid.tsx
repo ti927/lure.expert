@@ -338,6 +338,11 @@ export function DashboardGrid({
           data={drillData}
           loading={isDrillLoading}
           onDataChange={setDrillData}
+          onReload={() => {
+            // Rateio editado muda os blocos E a lista desta janela.
+            router.refresh()
+            abrirDrill(drill.categoryIds[0], drill.title)
+          }}
           leafCategories={leafCategories}
           costCenters={costCenters}
           businessUnits={businessUnits}

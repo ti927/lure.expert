@@ -12,6 +12,32 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Rateio visível no drill-down (20/out) — fora de fase
+
+**Pedido:** nas janelas de detalhamento da DRE e do Fluxo, destacar a linha que é parte de rateio e
+permitir ver o lançamento real e as outras partes ("um detalhamento do detalhamento").
+
+**Decisões do Julio (AskUserQuestion):** expandir na linha (padrão de /transacoes), ver + botão
+Editar rateio, e corrigir junto o regime do drill-down do /fluxo.
+
+**Arquivos:**
+- `src/lib/sql-dimensions.ts` — `colunasDoRateioSql()`: `allocation_sequence`, `allocation_count`,
+  `transaction_amount`, nulos fora do rateio; alias `a_cnt`/`t_pai` nas subconsultas (Decisão 18).
+- `src/lib/dre-types.ts` — três campos novos em `DrillDownTransaction`.
+- `src/server/dre.ts`, `dashboard.ts`, `balance-sheet.ts` — as três consultas de drill-down projetam as colunas.
+- `src/components/transacoes-shared/drill-down-dialog.tsx` — selo "Rateio n/N", "de <total>" sob o valor,
+  linha expandida com o lançamento inteiro e as partes (natureza + 4 dimensões, marcadas "esta linha" /
+  "também nesta janela" / "fora desta janela"), `AllocationDialog` embutido, prop opcional `onReload`.
+- `dre-client`, `fluxo-client`, `comparacao-tab`, `dashboard-grid` — passam `onReload` (matriz + janela).
+  `/balanco` não passa: lá a expansão funciona, sem o botão de editar.
+- `fluxo-client` — `getDreDrillDown(..., 'caixa')`. Antes filtrava por competência e a tabela soma por caixa;
+  193 lançamentos da base têm as datas diferentes.
+
+**Verificação:** 8/8 contra a produção, só leitura (274 partes, 132 lançamentos, 2 a 4 partes; contagem e
+valor do pai conferidos contra a soma das partes ao centavo). tsc, lint e build limpos.
+**Não verificado:** a tela (sem sessão autenticada). A coluna de data da janela do Fluxo continua mostrando
+a competência — a lista é por caixa, a data exibida não.
+
 ### ✅ Convites: link expirado, "Reenviar" e "Copiar link" (15/out) — hardening, fora de fase
 
 **Origem:** Julio convidou fernando@quickaviacao.com.br na Quick Aviação; o primeiro e-mail chegou,

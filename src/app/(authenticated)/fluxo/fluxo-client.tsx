@@ -196,7 +196,9 @@ export function FluxoClient({
         costCenterIds:   selCc.length ? selCc : undefined,
         businessUnitIds: selBu.length ? selBu : undefined,
         legalEntityIds:  selLe.length ? selLe : undefined,
-      }, dateRange)
+      // A tabela do Fluxo soma pela data de CAIXA; sem o regime, a janela
+      // listaria por competência e não fecharia com a célula clicada.
+      }, dateRange, 'caixa')
       setDrillDownData(result.transactions)
     })
   }
@@ -572,6 +574,11 @@ export function FluxoClient({
           data={drillDownData}
           loading={isDrillLoading}
           onDataChange={setDrillDownData}
+          onReload={() => {
+            // Rateio editado muda a matriz E a lista desta janela.
+            fetchData()
+            if (drillDown) openDrillDown(drillDown.categoryId, drillDown.categoryName, drillDown.month, drillDown.dateRange)
+          }}
           leafCategories={leafCategories}
           costCenters={costCenters}
           businessUnits={businessUnits}

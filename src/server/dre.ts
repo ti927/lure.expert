@@ -14,7 +14,7 @@ import type {
 } from '@/lib/dre-types'
 import { BP_TYPES } from '@/lib/dre-types'
 import { generateMonthRange, computeSubtotals } from '@/lib/dre-calc'
-import { dimensionFilters } from '@/lib/sql-dimensions'
+import { dimensionFilters, colunasDoRateioSql } from '@/lib/sql-dimensions'
 import { filtroDeVisibilidade } from '@/lib/category-visibility'
 
 // Re-exporta tipos para uso em server e client components
@@ -166,6 +166,9 @@ export async function getDreDrillDown(
     contact_name:       string | null
     allocation_id:      string | null
     is_allocated:       boolean
+    allocation_sequence: number | null
+    allocation_count:   string | number | null
+    transaction_amount: string | null
     account_id:         string | null
     account_name:       string | null
     account_type:       string | null
@@ -179,6 +182,7 @@ export async function getDreDrillDown(
       t.transaction_id::text   AS id,
       t.allocation_id::text    AS allocation_id,
       t.is_allocated           AS is_allocated,
+      ${colunasDoRateioSql()},
       t.date                   AS date,
       t.description            AS description,
       t.direction              AS direction,
@@ -268,6 +272,9 @@ export async function getDreDrillDown(
       contactName:        r.contact_name ?? null,
       allocationId:       r.allocation_id ?? null,
       isAllocated:        r.is_allocated === true,
+      allocationSequence: r.allocation_sequence ?? null,
+      allocationCount:    r.allocation_count != null ? Number(r.allocation_count) : null,
+      transactionAmount:  r.transaction_amount != null ? Number(r.transaction_amount) : null,
       accountId:          r.account_id ?? null,
       accountName:        r.account_name ?? null,
       accountType:        r.account_type ?? null,
