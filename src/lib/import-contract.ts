@@ -62,7 +62,7 @@ export type TipoDeRelatorio = (typeof TIPOS_DE_RELATORIO)[number]
  * Conjunto FECHADO de tipo de conta.
  *
  * Os três primeiros vieram de `account.subtype` do Pluggy e viraram esquema do
- * produto por acidente (`ACCT_LABELS` só conhece esses três). `ACQUIRER` já é
+ * produto por acidente (o mapa antigo da tela só conhecia esses três). `ACQUIRER` já é
  * escrito por `sync-acquirer-item` e não está no mapa — quando a Fase 8 voltar,
  * a tela mostraria a string crua. `OTHER` é a saída honesta para arquivo que não
  * diz.
@@ -89,6 +89,26 @@ const ALIAS_DE_TIPO_DE_CONTA: Record<string, TipoDeConta> = {
   'credito': 'CREDIT_CARD',
   'adquirente': 'ACQUIRER', 'maquininha': 'ACQUIRER',
   'outra': 'OTHER', 'outro': 'OTHER',
+}
+
+/**
+ * O rótulo de uma conta em tela e em filtro: **nome · tipo · número**.
+ *
+ * Era só tipo + número, e conta de caixa — tipo `OTHER`, sem número — saía como
+ * a palavra "OTHER", com "Caixa Av. D" e "Caixa Espécie" indistinguíveis no
+ * filtro. O nome é a identidade da conta; o tipo genérico ("Outra") não diz
+ * nada e fica de fora. Tipo fora do conjunto aparece cru, para não sumir.
+ */
+export function rotuloDaConta(c: {
+  accountName?: string | null
+  accountType?: string | null
+  accountNumber?: string | null
+}): string | null {
+  const tipo = c.accountType && c.accountType !== 'OTHER'
+    ? (ROTULO_DE_CONTA[c.accountType as TipoDeConta] ?? c.accountType)
+    : null
+  const partes = [c.accountName?.trim() || null, tipo, c.accountNumber?.trim() || null].filter(Boolean)
+  return partes.length > 0 ? partes.join(' · ') : null
 }
 
 export function lerTipoDeConta(texto: string | null | undefined): TipoDeConta {

@@ -10,6 +10,7 @@ import type { DataSource } from '@/db/schema'
 import { eq, and, ne, inArray, desc } from 'drizzle-orm'
 import { getPluggyClient, createConnectToken as pluggyCreateToken, isGenericPluggyConnector } from '@/lib/pluggy'
 import { revalidatePath } from 'next/cache'
+import { rotuloDaConta } from '@/lib/import-contract'
 import { inngest } from '@/lib/inngest'
 import {
   listarContasManuais, garantirContaManual, apagarContaManual,
@@ -116,17 +117,6 @@ export interface DataSourceOption {
   txCount: number
 }
 
-// ACQUIRER já é escrito por `sync-acquirer-item` desde a Fase 8 e faltava aqui —
-// o filtro mostraria a string crua. OTHER é o tipo das contas que não são de
-// banco nem de cartão (caixa, por exemplo), possíveis desde que conta manual
-// passou a existir.
-const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  CHECKING_ACCOUNT: 'C. Corrente',
-  SAVINGS_ACCOUNT:  'Poupança',
-  CREDIT_CARD:      'Cartão',
-  ACQUIRER:         'Adquirente',
-  OTHER:            'Outra',
-}
 
 export async function getDataSourcesWithTransactions(): Promise<DataSourceOption[]> {
   const { organizationId } = await getAuthContext()
@@ -167,12 +157,16 @@ export async function getDataSourcesWithTransactions(): Promise<DataSourceOption
     // passava despercebido — a instituição sempre existe. Para conta que veio de
     // arquivo, não: a fonte não tem `institutionName` e o rótulo saía como a
     // palavra "Banco", literal. O nome da conta é a identidade dela.
-    const bank      = r.institution_name ?? r.account_name ?? 'Banco'
-    const typeLabel = r.account_type ? (ACCOUNT_TYPE_LABELS[r.account_type] ?? r.account_type) : ''
-    const numLabel  = r.account_number ? ` · ${r.account_number}` : ''
+    // No filtro, o nome é o da CONEXÃO (customLabel/instituição) — no Pluggy é
+    // o banco, curto; numa conta manual é o próprio nome da conta. A regra de
+    // rótulo é a mesma da coluna (`rotuloDaConta`): tipo genérico fica de fora.
     return {
       accountId: r.account_id,
-      label:     [bank, typeLabel].filter(Boolean).join(' · ') + numLabel,
+      label: rotuloDaConta({
+        accountName:   r.institution_name ?? r.account_name,
+        accountType:   r.account_type,
+        accountNumber: r.account_number,
+      }) ?? 'Conta',
       txCount:   Number(r.tx_count),
     }
   })

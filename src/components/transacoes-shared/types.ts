@@ -19,11 +19,6 @@ export const CATEGORY_TYPE_LABELS: Record<string, string> = {
   patrimonio_liquido:        'Patrimônio Líquido',
 }
 
-export const ACCT_LABELS: Record<string, string> = {
-  CHECKING_ACCOUNT: 'C. Corrente',
-  SAVINGS_ACCOUNT:  'Poupança',
-  CREDIT_CARD:      'Cartão',
-}
 
 export interface DimensionOption {
   id: string

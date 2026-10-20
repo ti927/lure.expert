@@ -27,7 +27,7 @@ import { BatchClassifyDialog } from '@/components/transacoes-shared/batch-classi
 import { AllocationDialog } from '@/components/transacoes-shared/allocation-dialog'
 import { BatchAllocationDialog } from '@/components/transacoes-shared/batch-allocation-dialog'
 import { getAllocations, type AllocationRow } from '@/server/allocations'
-import { ACCT_LABELS } from '@/components/transacoes-shared/types'
+import { rotuloDaConta } from '@/lib/import-contract'
 import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import type { DataSourceOption } from '@/server/connections'
 import type { Transaction } from '@/db/schema/transactions'
@@ -558,10 +558,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                   // partes (0026 e 0033), e o banco recusa gravá-las aqui. As
                   // células viram leitura; edita-se pelo diálogo de rateio.
                   const dimLocked = tx.isAllocated === true
-                  const acctLabel = tx.accountType ? (ACCT_LABELS[tx.accountType] ?? tx.accountType) : null
-                  const acctStr = acctLabel
-                    ? (tx.accountNumber ? `${acctLabel} · ${tx.accountNumber}` : acctLabel)
-                    : null
+                  const acctStr = rotuloDaConta(tx)
 
                   return (
                     <Fragment key={tx.id}>
@@ -587,7 +584,7 @@ export default function TransacoesClient({ data, options, dataSources, searchPar
                             <img src={tx.connectionLogoUrl} alt="" className="h-5 w-5 rounded object-contain shrink-0" />
                           ) : null}
                           <div className="flex flex-col gap-0.5 min-w-0">
-                            <span className="truncate">{acctStr ?? '—'}</span>
+                            <span className="truncate" title={acctStr ?? undefined}>{acctStr ?? '—'}</span>
                             {tx.connectionBadge && (
                               <span className="inline-flex items-center self-start rounded px-1 py-0 text-[10px] font-medium bg-slate-100 text-slate-700 ring-1 ring-slate-200">
                                 {tx.connectionBadge}

@@ -12,6 +12,10 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Rótulo de conta: nome, não "OTHER" (20/out)
+
+`rotuloDaConta` (`lib/import-contract.ts`) = nome · tipo · número, omitindo `OTHER`. Aplicado em `transacoes-client.tsx` (coluna, com `title`), `drill-down-dialog.tsx` (coluna e filtro de conta) e `server/connections.ts` (filtro Banco/Conta, nome da conexão). Removidos `ACCT_LABELS` (`transacoes-shared/types.ts`) e `ACCOUNT_TYPE_LABELS` (`connections.ts`). Conferido nas 14 contas da Quick Aviação (só leitura). Não verificado: a tela.
+
 ### ✅ O MCP lê lançamento e descrição (20/out) — R3 + agrupamento por descrição
 
 **Origem:** o expert recusou "lançamentos com a mesma DESCRIÇÃO mas com CATEGORIAS diferentes" — não

@@ -29,7 +29,7 @@ import { MultiSelectFilter, DescFilter, AmountFilter, DirectionFilter } from './
 import { CellCombobox, CategoryCellCombobox } from './cell-combobox'
 import { BatchClassifyDialog } from './batch-classify-dialog'
 import { AllocationDialog } from './allocation-dialog'
-import { ACCT_LABELS } from './types'
+import { rotuloDaConta } from '@/lib/import-contract'
 import type { SimpleDimensionItem } from './types'
 
 // Mapeamento unificado tipo → label (cobre DRE e BP).
@@ -165,9 +165,7 @@ export function DrillDownDialog({
     for (const tx of localData) {
       if (!tx.accountId) continue
       if (seen.has(tx.accountId)) continue
-      const label = tx.accountType
-        ? `${ACCT_LABELS[tx.accountType] ?? tx.accountType}${tx.accountNumber ? ` · ${tx.accountNumber}` : ''}`
-        : tx.accountName ?? 'Conta'
+      const label = rotuloDaConta(tx) ?? 'Conta'
       seen.set(tx.accountId, label)
     }
     return Array.from(seen.entries()).map(([id, label]) => ({ id, label }))
@@ -518,10 +516,7 @@ export function DrillDownDialog({
                 <tbody>
                   {sorted.map(tx => {
                     const isClassifying = classifyingId === tx.id
-                    const acctLabel = tx.accountType ? (ACCT_LABELS[tx.accountType] ?? tx.accountType) : null
-                    const acctStr = acctLabel
-                      ? (tx.accountNumber ? `${acctLabel} · ${tx.accountNumber}` : acctLabel)
-                      : null
+                    const acctStr = rotuloDaConta(tx)
 
                     return (
                       // Com rateio o mesmo lançamento vem em N linhas: a chave
@@ -582,7 +577,7 @@ export function DrillDownDialog({
                               <img src={tx.connectionLogoUrl} alt="" className="h-5 w-5 rounded object-contain shrink-0" />
                             ) : null}
                             <div className="flex flex-col gap-0.5 min-w-0">
-                              <span className="truncate">{acctStr ?? '—'}</span>
+                              <span className="truncate" title={acctStr ?? undefined}>{acctStr ?? '—'}</span>
                               {tx.connectionBadge && (
                                 <span className="inline-flex items-center self-start rounded px-1 py-0 text-[10px] font-medium bg-slate-100 text-slate-700 ring-1 ring-slate-200">
                                   {tx.connectionBadge}
