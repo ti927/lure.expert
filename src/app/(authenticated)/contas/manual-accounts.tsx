@@ -31,7 +31,7 @@ import {
   createManualAccount, deleteManualAccount, updateManualAccount, updateConnectionCustomization,
   type ContaManualNaTela,
 } from '@/server/connections'
-import { TIPOS_DE_CONTA, ROTULO_DE_CONTA, type TipoDeConta } from '@/lib/import-contract'
+import { TIPOS_DE_CONTA, ROTULO_DE_CONTA, temSaldoCorrido, type TipoDeConta } from '@/lib/import-contract'
 import { LogoEditor } from './logo-editor'
 
 export function ManualAccounts({ contas, orgId }: { contas: ContaManualNaTela[]; orgId: string }) {
@@ -117,7 +117,7 @@ export function ManualAccounts({ contas, orgId }: { contas: ContaManualNaTela[];
                 </div>
               </div>
               <div className="flex items-center gap-1">
-              {c.tipo !== 'CREDIT_CARD' && (
+              {temSaldoCorrido(c.tipo) && (
                 <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:text-primary gap-1.5"
                   title="Conferir o saldo desta conta com o extrato do banco">
                   <Link href={`/contas/${encodeURIComponent(c.accountId)}`}>

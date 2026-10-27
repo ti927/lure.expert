@@ -66,9 +66,14 @@ export type TipoDeRelatorio = (typeof TIPOS_DE_RELATORIO)[number]
  * escrito por `sync-acquirer-item` e não está no mapa — quando a Fase 8 voltar,
  * a tela mostraria a string crua. `OTHER` é a saída honesta para arquivo que não
  * diz.
+ *
+ * `PREPAID_CARD` (27/out) não vem do Pluggy: é o cartão pré-pago (Pagseguro e
+ * afins) — recarga entra, compra sai, e ele TEM saldo, como uma conta. Separá-lo
+ * do cartão de crédito é o que deixa a conferência de saldo valer para um e não
+ * para o outro (o "saldo" do crédito é fatura). Decisão 30.
  */
 export const TIPOS_DE_CONTA = [
-  'CHECKING_ACCOUNT', 'SAVINGS_ACCOUNT', 'CREDIT_CARD', 'ACQUIRER', 'OTHER',
+  'CHECKING_ACCOUNT', 'SAVINGS_ACCOUNT', 'CREDIT_CARD', 'PREPAID_CARD', 'ACQUIRER', 'OTHER',
 ] as const
 export type TipoDeConta = (typeof TIPOS_DE_CONTA)[number]
 
@@ -76,17 +81,27 @@ export type TipoDeConta = (typeof TIPOS_DE_CONTA)[number]
 export const ROTULO_DE_CONTA: Record<TipoDeConta, string> = {
   CHECKING_ACCOUNT: 'C. Corrente',
   SAVINGS_ACCOUNT:  'Poupança',
-  CREDIT_CARD:      'Cartão',
+  CREDIT_CARD:      'Cartão de crédito',
+  PREPAID_CARD:     'Cartão pré-pago',
   ACQUIRER:         'Adquirente',
   OTHER:            'Outra',
 }
 
+/** Tipos com saldo corrido na conferência de saldo — o crédito confere por fatura. */
+export function temSaldoCorrido(tipo: string | null | undefined): boolean {
+  return tipo !== 'CREDIT_CARD'
+}
+
+// Chaves já passadas por `norm` (minúsculas, sem acento).
 const ALIAS_DE_TIPO_DE_CONTA: Record<string, TipoDeConta> = {
   'c. corrente': 'CHECKING_ACCOUNT', 'conta corrente': 'CHECKING_ACCOUNT',
   'cc': 'CHECKING_ACCOUNT', 'corrente': 'CHECKING_ACCOUNT',
   'poupanca': 'SAVINGS_ACCOUNT', 'poupança': 'SAVINGS_ACCOUNT',
+  // "Cartão" sozinho segue sendo crédito: é o que as planilhas já escritas dizem.
   'cartao': 'CREDIT_CARD', 'cartão': 'CREDIT_CARD', 'cartao de credito': 'CREDIT_CARD',
   'credito': 'CREDIT_CARD',
+  'cartao pre-pago': 'PREPAID_CARD', 'cartao pre pago': 'PREPAID_CARD', 'cartao prepago': 'PREPAID_CARD',
+  'pre-pago': 'PREPAID_CARD', 'pre pago': 'PREPAID_CARD', 'prepago': 'PREPAID_CARD',
   'adquirente': 'ACQUIRER', 'maquininha': 'ACQUIRER',
   'outra': 'OTHER', 'outro': 'OTHER',
 }

@@ -64,10 +64,22 @@ async function main() {
 
   try {
     await db.transaction(async (tx) => {
+      // Roda contra a PRODUÇÃO: nunca esperar trava nem segurar uma por muito tempo.
+      // Em 27/out uma execução reaplicou a 0034 sobre a tabela em uso, pegou trava
+      // EXCLUSIVA e, quando o processo morreu, a sessão ficou órfã no pooler
+      // segurando-a — e a conferência de saldo travou para todo mundo.
+      await tx.execute(sql`SET LOCAL lock_timeout = '3s'`)
+      await tx.execute(sql`SET LOCAL idle_in_transaction_session_timeout = '60s'`)
       console.log('── 1. estrutura ──')
-      await tx.execute(sql.raw(MIGRATION))
-      await tx.execute(sql.raw(MIGRATION)) // idempotente
-      t(true, 'a 0034 aplica duas vezes sem erro')
+      // Antes da 0034 subir, ela era aplicada aqui (duas vezes, para provar a
+      // idempotência). Aplicada, NÃO se reaplica: o DROP POLICY/TRIGGER pede trava
+      // exclusiva numa tabela em uso e estoura o statement timeout.
+      const [{ ja }] = await tx.execute<{ ja: boolean }>(sql`SELECT to_regclass('account_opening_balances') IS NOT NULL AS ja`)
+      if (!ja) {
+        await tx.execute(sql.raw(MIGRATION))
+        await tx.execute(sql.raw(MIGRATION)) // idempotente
+      }
+      t(true, ja ? 'a 0034 já está aplicada' : 'a 0034 aplica duas vezes sem erro')
       const [est] = await tx.execute<{ rls: boolean; pol: number; trg: number; unq: number }>(sql`
         SELECT (SELECT relrowsecurity FROM pg_class WHERE relname = 'account_opening_balances') AS rls,
                (SELECT COUNT(*)::int FROM pg_policies WHERE tablename = 'account_opening_balances') AS pol,
@@ -88,6 +100,9 @@ async function main() {
       const ancoraData = datas[Math.min(5, datas.length - 1)]
       const ancoraValor = 12345.67
 
+      // A tabela já tem saldos reais: um saldo que alguém tenha informado nesta
+      // conta é tirado DENTRO da transação (volta no ROLLBACK).
+      await apagarSaldoInicial(alvo.org, alvo.conta, tx)
       console.log('\n── 7a. sem âncora ──')
       const sem = await extratoInteiro(tx, alvo.org, alvo.conta)
       t(sem.linhas.length === alvo.n, `lê os ${alvo.n} lançamentos`)
@@ -97,7 +112,7 @@ async function main() {
       console.log('\n── 2/3. com âncora ──')
       const g = await gravarSaldoInicial(alvo.org, alvo.conta, { data: ancoraData, valor: ancoraValor, nota: 'teste' }, null, tx)
       t('ok' in g, `grava o saldo inicial (${ancoraData}, ${ancoraValor})`)
-      const g2 = await gravarSaldoInicial(alvo.org, alvo.conta, { data: ancoraData, valor: ancoraValor }, null, tx)
+      const g2 = await gravarSaldoInicial(alvo.org, alvo.conta, { data: ancoraData, valor: ancoraValor, nota: 'teste' }, null, tx)
       const [{ n: nAncoras }] = await tx.execute<{ n: number }>(sql`
         SELECT COUNT(*)::int AS n FROM account_opening_balances WHERE organization_id = ${alvo.org}::uuid AND account_id = ${alvo.conta}`)
       t('ok' in g2 && nAncoras === 1, 'gravar de novo substitui (uma âncora por conta)')
@@ -196,9 +211,9 @@ async function main() {
       await tx.execute(sql`SAVEPOINT rls2`)
       await tx.execute(sql`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: membro.u, role: 'authenticated' })}, true)`)
       await tx.execute(sql`SET LOCAL ROLE authenticated`)
-      const [{ n: doMembro }] = await tx.execute<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM account_opening_balances`)
+      const [{ n: doMembro }] = await tx.execute<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM account_opening_balances WHERE account_id = ${alvo.conta} AND note = 'teste'`)
       await tx.execute(sql`ROLLBACK TO SAVEPOINT rls2`)
-      t(doMembro === 1, 'RLS: um membro da organização enxerga a âncora')
+      t(doMembro === 1, 'RLS: um membro da organização enxerga a âncora de teste (a tabela já tem saldos reais)')
 
       await apagarSaldoInicial(alvo.org, alvo.conta, tx)
       t((await lerSaldoInicial(alvo.org, alvo.conta, tx)) == null, 'apagar remove a âncora')
@@ -218,6 +233,30 @@ async function main() {
         const [{ n: velho }] = await tx.execute<{ n: number }>(sql`
           SELECT COUNT(*)::int AS n FROM transactions WHERE organization_id = ${alvo.org}::uuid AND ${crua}`)
         t(Number(novo) === Number(velho), `${nome}: ${novo} = ${velho}`)
+      }
+
+      console.log('\n── 10. pré-pago e implantação de saldo (27/out, sessão 2) ──')
+      const { lerTipoDeConta, temSaldoCorrido, ROTULO_DE_CONTA } = await import('@/lib/import-contract')
+      t(['Cartão pré-pago', 'cartao pre pago', 'Pré-pago', 'PREPAID_CARD'].every(x => lerTipoDeConta(x) === 'PREPAID_CARD'),
+        'planilha: "Cartão pré-pago", "pre pago", "Pré-pago" viram PREPAID_CARD')
+      t(['Cartão', 'cartão de crédito', ROTULO_DE_CONTA.CREDIT_CARD].every(x => lerTipoDeConta(x) === 'CREDIT_CARD'),
+        '"Cartão" sozinho continua sendo crédito (as planilhas já escritas)')
+      t(temSaldoCorrido('PREPAID_CARD') && temSaldoCorrido('OTHER') && !temSaldoCorrido('CREDIT_CARD'),
+        'pré-pago tem saldo corrido; crédito não')
+      const [pp] = await tx.execute<{ org: string; conta: string; data: string }>(sql`
+        SELECT organization_id::text AS org, account_id AS conta, MIN(COALESCE(effective_date, date))::text AS data
+          FROM transactions WHERE upper(description) LIKE '%IMPLANTA%SALDO%' AND account_id IS NOT NULL
+         GROUP BY 1, 2 LIMIT 1`)
+      if (pp) {
+        await gravarSaldoInicial(pp.org, pp.conta, { data: pp.data, valor: 0 }, null, tx)
+        const noDia = await lerExtratoDaConta(pp.org, pp.conta, {}, tx)
+        t(noDia.resumo.saldosDuplicados.length >= 1, `âncora no dia da implantação (${pp.data}): avisa da duplicidade`)
+        const seguinte = new Date(`${pp.data}T12:00:00Z`); seguinte.setUTCDate(seguinte.getUTCDate() + 1)
+        await gravarSaldoInicial(pp.org, pp.conta, { data: seguinte.toISOString().slice(0, 10), valor: 0 }, null, tx)
+        const depois = await lerExtratoDaConta(pp.org, pp.conta, {}, tx)
+        t(depois.resumo.saldosDuplicados.length === 0, 'âncora no dia seguinte: sem aviso')
+      } else {
+        t(false, 'não achei lançamento de implantação de saldo para testar')
       }
 
       throw new Reverter()

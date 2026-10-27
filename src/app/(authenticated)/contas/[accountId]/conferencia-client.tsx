@@ -20,7 +20,7 @@ import { EmptyState } from '@/components/states/empty-state'
 import { PartialDataBanner } from '@/components/states/partial-data-banner'
 import { cn } from '@/lib/utils'
 import { parseAmount } from '@/lib/format'
-import { rotuloDaConta } from '@/lib/import-contract'
+import { rotuloDaConta, temSaldoCorrido } from '@/lib/import-contract'
 import { COLUNAS_CONFERENCIA } from '@/lib/column-widths'
 import { salvarSaldoInicial, removerSaldoInicial } from '@/server/account-ledger'
 import {
@@ -91,7 +91,7 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
 
   const rotulo = rotuloDaConta({ accountName: conta.nome, accountType: conta.tipo, accountNumber: conta.numero })
     ?? conta.accountId
-  const ehCartao = conta.tipo === 'CREDIT_CARD'
+  const ehCartao = !temSaldoCorrido(conta.tipo)
 
   function abrirEdicao() {
     setData(ancora?.data ?? r.ultimaData ?? '')
@@ -195,6 +195,15 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
 
   const avisos = (
     <>
+      {ancora && r.saldosDuplicados.length > 0 && (
+        <div className="shrink-0 px-6 pb-2">
+          <PartialDataBanner
+            variant="warning"
+            message={`O saldo pode estar contado duas vezes: ${r.saldosDuplicados.map(d =>
+              `"${d.descricao}" de ${dataBR(d.data)} (${formatBRL(d.valor)})`).join(', ')} ${r.saldosDuplicados.length > 1 ? 'são lançamentos' : 'é um lançamento'} de saldo de abertura, na data do saldo inicial ou depois dela. Informe o saldo inicial no dia seguinte a ${r.saldosDuplicados.length > 1 ? 'eles' : 'ele'}, ou zero no dia ${r.saldosDuplicados.length > 1 ? 'deles' : 'dele'}.`}
+          />
+        </div>
+      )}
       {ancora && r.antesDoSaldoInicial > 0 && (
         <div className="shrink-0 px-6 pb-2">
           <PartialDataBanner

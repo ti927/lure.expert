@@ -217,7 +217,20 @@ export interface ResumoDoExtrato {
   ultimaData: string | null
   /** Lançamentos da conta anteriores ao saldo inicial — aparecem sem saldo. */
   antesDoSaldoInicial: number
+  /**
+   * Lançamentos que SÃO um saldo de abertura ("IMPLANTAÇÃO DE SALDO", "saldo
+   * anterior") na data do saldo inicial ou depois dela: somados à âncora, contam
+   * o mesmo saldo duas vezes. Visto no Pagseguro 3651 (27/out).
+   */
+  saldosDuplicados: { data: string; valor: number; descricao: string }[]
 }
+
+/**
+ * Descrição de lançamento que é, na verdade, um saldo de abertura. Sobre a
+ * descrição sem acento e em minúsculas — o banco não tem `unaccent`.
+ */
+const PARECE_SALDO_DE_ABERTURA =
+  `translate(lower(description), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc') ~ '(implanta[a-z]* (de |do )?saldo|saldo (inicial|anterior|de abertura)|abertura de saldo)'`
 
 /**
  * O extrato da conta, paginado, com o saldo de cada linha.
@@ -276,7 +289,7 @@ export async function lerExtratoDaConta(
   const where = and(daConta, ...condicoesDaListagem(filtros, { regime: 'caixa' }))
   const inverter = sort === 'date_desc'
 
-  const [rows, [{ total }], [totals], [resumo]] = await Promise.all([
+  const [rows, [{ total }], [totals], [resumo], duplicados] = await Promise.all([
     exec
       .select({
         ...getTableColumns(transactions),
@@ -318,6 +331,16 @@ export async function lerExtratoDaConta(
       ultimaData: sql<string | null>`MAX(${caixa})::text`,
       antes: sql<number>`COUNT(*) FILTER (WHERE NOT ${apos})::int`,
     }).from(transactions).where(daConta),
+    ancora
+      ? exec.select({
+          data: sql<string>`${caixa}::text`,
+          valor: sql<string>`(CASE WHEN ${transactions.direction} = 'inflow' THEN ${transactions.amount} ELSE -${transactions.amount} END)::text`,
+          descricao: transactions.description,
+        }).from(transactions)
+          .where(and(daConta, apos, sql.raw(PARECE_SALDO_DE_ABERTURA)))
+          .orderBy(asc(caixa))
+          .limit(5)
+      : Promise.resolve([]),
   ])
 
   const entradas = Number(resumo.entradas)
@@ -330,6 +353,7 @@ export async function lerExtratoDaConta(
     ultimaData: resumo.ultimaData,
     // Sem âncora, "antes" não tem sentido — não há data de corte.
     antesDoSaldoInicial: ancora ? Number(resumo.antes) : 0,
+    saldosDuplicados: duplicados.map(d => ({ data: d.data, valor: Number(d.valor), descricao: d.descricao })),
   }
 
   return {

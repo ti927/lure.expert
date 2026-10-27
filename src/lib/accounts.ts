@@ -78,6 +78,7 @@ export interface ContaManualComUso extends ContaManual {
  */
 function tipoDeFonte(tipo: TipoDeConta): string {
   if (tipo === 'CREDIT_CARD') return 'credit_card'
+  // Pré-pago é conta de saldo (recarga entra, compra sai), não fatura: 'bank'.
   if (tipo === 'ACQUIRER') return 'acquirer'
   return 'bank'
 }
