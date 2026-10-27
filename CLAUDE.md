@@ -301,7 +301,7 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, branch `feat/conferencia-manual`.**
+**Última sessão — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, no ar** (merge `538be34`; a tela aguarda o olho do Julio).
 Sem migration. Ver **Decisão 30**. Quatro entregas:
 
 | Entrega | O quê |
