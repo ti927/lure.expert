@@ -1734,3 +1734,58 @@ modelo" no diálogo individual grava `null` (natureza do lançamento) quando a n
 a herdada — senão um modelo feito para dividir centro de custo carregaria a natureza de quem o
 originou para todo lançamento em que fosse aplicado.
 
+
+---
+
+## Decisão 29 — O saldo volta, ancorado, e só para conferir (27/out)
+
+**Pedido do Julio:** um lugar, separado de `/transacoes`, para checar se o saldo bate com o banco —
+`/contas/[conta]`, a mesma tabela de transações, com um saldo inicial e uma coluna de saldo do dia.
+
+**Por que isto não contradiz a Decisão 23.** A 23 tirou o saldo porque ele **somava movimento e
+chamava de posição**: sem saldo inicial, "Saldo Atual" era a soma dos meses importados. O defeito
+não era mostrar saldo; era mostrar saldo **sem âncora**. Aqui a âncora existe e é informada por quem
+confere, contra o extrato: `account_opening_balances` (migration 0034), uma linha por conta, com
+data, valor, autor e observação. Sem ela, a tela não mostra saldo nenhum — pede o saldo inicial.
+O `/dashboard` e o `/fluxo` continuam sem saldo; a pendência "o saldo bancário deve passar a existir
+de verdade" (âncora automática pelo Pluggy) segue aberta.
+
+**As regras, e o porquê de cada uma:**
+
+1. **A data é a de CAIXA** (`COALESCE(effective_date, date)`), filtro de período inclusive. É a do
+   extrato; pela competência, os 193 lançamentos em que as duas diferem fariam o dia não fechar.
+2. **O saldo é calculado ANTES dos filtros.** O saldo corrido é uma janela (`SUM … OVER`) numa
+   subconsulta sobre todos os lançamentos da conta; a consulta de fora filtra e pagina. Filtrar uma
+   natureza esconde linhas e não muda o saldo de nenhuma — senão o número deixaria de bater com o
+   banco, que é o propósito da tela. Janela roda antes do LIMIT: a página 3 já chega certa.
+3. **Dois saldos por linha.** O **corrido** (depois desta linha, na ordem escolhida) e o
+   **fechamento do dia** (`RANGE` pela data: todas as linhas do dia). Dentro do dia a ordem é
+   escolha da tela (valor, descrição, natureza…), e o corrido muda com ela; o fechamento não muda
+   nunca, e é ele que se compara com o banco. A tela o mostra na **última linha VISÍVEL** do dia —
+   calculada depois dos filtros (`LEAD`), para continuar aparecendo quando a última linha real do
+   dia está escondida.
+4. **Âncora = saldo no INÍCIO do dia** (a linha "saldo anterior" do extrato). Lançamentos anteriores
+   ficam sem saldo, e a tela diz quantos.
+5. **Naturezas ocultas no Fluxo e transferências entram.** O extrato do banco tem tudo.
+6. **Cartão fica fora da v1.** O saldo de cartão é fatura — compras e pagamento —, outra lógica.
+
+**A conta é `transactions.account_id`**, não a conexão: um item do Pluggy traz corrente e cartão
+juntos. Manual = `arq:<slug>`. **O que não entra em conta nenhuma:** os lançamentos importados por
+arquivo antes da 4.5, sem `account_id` — a tela avisa quantos são, porque um deles pode ser desta
+conta e o saldo não bater por isso.
+
+**Correção de passagem ao CLAUDE.md:** ele dizia que "o Pluggy já traz a posição das contas em
+`data_sources.metadata.accounts`". Não traz: o `fetchAccounts` devolve `balance`, e o sync grava só
+nome, tipo, subtipo e número. A âncora automática exigiria passar a gravá-lo.
+
+**Movido, não copiado:** a tabela de `/transacoes` virou
+`components/transacoes-shared/transactions-table.tsx` (com `contas` opcional e `modoSaldo`), e os
+filtros de `getTransactions` viraram `lib/transactions-list-filters.ts` — as duas telas filtram
+pela mesma regra.
+
+**Migration:** `0034_account_opening_balances.sql` · reversa `0034_down_account_opening_balances.sql`
+**Verificado:** `scripts/verify-conferencia-saldo.ts` 48/48 contra a produção numa transação revertida
+(0034 aplicada dentro dela), sobre a conta Sicredi com 1.762 lançamentos: fechamento de 61 dias contra
+cálculo independente, corrido andando pelo movimento de cada linha, 4 ordens do dia com fechamento
+idêntico, 4 filtros sem mudar saldo, paginação, RLS nos dois sentidos, e o filtro de `/transacoes`
+igual ao SQL antigo.

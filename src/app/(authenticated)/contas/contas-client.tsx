@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useTransition, useMemo } from 'react'
+import { useState, useTransition, useMemo, Fragment } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
@@ -393,7 +394,24 @@ function ConnectionCard({
             )}
           </p>
           {accountSummary && (
-            <p className="text-xs text-muted-foreground/70 mt-0.5">{accountSummary}</p>
+            <p className="text-xs text-muted-foreground/70 mt-0.5">
+              {/* Cada conta abre a conferência de saldo dela — menos cartão, cujo
+                  saldo é fatura e fica fora da v1. */}
+              {(meta.accounts ?? []).map((a, i) => {
+                const label = SUBTYPE_LABEL[a.subtype] ?? a.name
+                const texto = a.number ? `${label} • ${a.number}` : label
+                return (
+                  <Fragment key={a.id}>
+                    {i > 0 && ' · '}
+                    {a.subtype === 'CREDIT_CARD' ? texto : (
+                      <Link href={`/contas/${encodeURIComponent(a.id)}`} className="hover:text-primary hover:underline" title="Conferir saldo">
+                        {texto}
+                      </Link>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </p>
           )}
         </div>
       </div>

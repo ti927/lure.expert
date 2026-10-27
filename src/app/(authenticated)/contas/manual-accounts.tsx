@@ -19,7 +19,8 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Wallet, Plus, Trash2, Loader2, Pencil } from 'lucide-react'
+import Link from 'next/link'
+import { Wallet, Plus, Trash2, Loader2, Pencil, Scale } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -116,6 +117,14 @@ export function ManualAccounts({ contas, orgId }: { contas: ContaManualNaTela[];
                 </div>
               </div>
               <div className="flex items-center gap-1">
+              {c.tipo !== 'CREDIT_CARD' && (
+                <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:text-primary gap-1.5"
+                  title="Conferir o saldo desta conta com o extrato do banco">
+                  <Link href={`/contas/${encodeURIComponent(c.accountId)}`}>
+                    <Scale className="h-4 w-4" />Conferir saldo
+                  </Link>
+                </Button>
+              )}
               <Button
                 variant="ghost" size="sm"
                 className="text-muted-foreground hover:text-primary"

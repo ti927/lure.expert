@@ -145,3 +145,14 @@ export const COLUNAS_TRANSACOES: readonly ColunaRedimensionavel[] = [
   { id: 'contact',      largura: 150 },
   { id: 'acoes',        largura: 36,  fixa: true },
 ]
+
+/**
+ * A conferência de saldo (`/contas/[conta]`): a tabela de `/transacoes` sem a
+ * coluna de conta (a tela já é de uma conta só) e com a de Saldo logo depois
+ * do Valor, onde o olho compara com o extrato do banco.
+ */
+export const COLUNAS_CONFERENCIA: readonly ColunaRedimensionavel[] = [
+  ...COLUNAS_TRANSACOES.slice(0, 4),
+  { id: 'saldo',        largura: 130 },
+  ...COLUNAS_TRANSACOES.slice(5),
+]
