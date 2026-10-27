@@ -1,10 +1,14 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { getExtratoDaConta } from '@/server/account-ledger'
-import { getCategories } from '@/server/categories'
-import { getCostCenters, getBusinessUnits, getLegalEntities, getContactOptions } from '@/server/dimensions'
+import { CreditCard } from 'lucide-react'
+import { getExtratoDaConta, getContaParaConferencia, getFaturasDaConta } from '@/server/account-ledger'
+import { temSaldoCorrido } from '@/lib/import-contract'
+import { EmptyState } from '@/components/states/empty-state'
 import type { TransactionsSearchParams } from '@/components/transacoes-shared/transactions-table'
 import ConferenciaClient from './conferencia-client'
+import FaturasClient from './faturas-client'
+import { CabecalhoDaConta } from './cabecalho-da-conta'
+import { decodificar, opcoesDaTabela } from './pagina-da-conta'
 
 export const metadata: Metadata = { title: 'Conferência de saldo' }
 export const dynamic = 'force-dynamic'
@@ -14,17 +18,38 @@ interface Props {
   searchParams: Omit<TransactionsSearchParams, 'accountId'>
 }
 
-/** O id da conta chega codificado na URL (`arq:caixa` → `arq%3Acaixa`). */
-function decodificar(s: string): string {
-  try { return decodeURIComponent(s) } catch { return s }
-}
-
 export default async function ConferenciaPage({ params, searchParams }: Props) {
   const accountId = decodificar(params.accountId)
+  const conta = await getContaParaConferencia(accountId)
+  if (!conta) notFound()
+
+  // Cartão de crédito confere por FATURA (Decisão 30). Os do Pluggy ainda não:
+  // o vencimento deles não está na data de caixa (o sync grava a da compra).
+  if (!temSaldoCorrido(conta.tipo)) {
+    if (!conta.manual) {
+      return (
+        <div className="h-full flex flex-col overflow-hidden">
+          <CabecalhoDaConta conta={conta} contexto="Cartão de crédito conectado" />
+          <EmptyState
+            icon={<CreditCard className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
+            title="Conferência de cartão conectado ainda não disponível"
+            description="A conferência por fatura vale hoje para cartões cadastrados à mão, importados com o vencimento na coluna Data de caixa."
+          />
+        </div>
+      )
+    }
+    const faturas = await getFaturasDaConta(accountId)
+    return (
+      <div className="h-full flex flex-col overflow-hidden">
+        <FaturasClient conta={conta} faturas={faturas} />
+      </div>
+    )
+  }
+
   const page = Math.max(1, Number(searchParams.page) || 1)
   const pageSize = Number(searchParams.pageSize) || undefined
 
-  const [dados, cats, ccs, bus, les, cts] = await Promise.all([
+  const [dados, options] = await Promise.all([
     getExtratoDaConta(accountId, {
       page,
       pageSize,
@@ -43,11 +68,7 @@ export default async function ConferenciaPage({ params, searchParams }: Props) {
       amountMin: searchParams.amountMin,
       amountMax: searchParams.amountMax,
     }),
-    getCategories(),
-    getCostCenters(),
-    getBusinessUnits(),
-    getLegalEntities(),
-    getContactOptions(),
+    opcoesDaTabela(),
   ])
 
   if (!dados) notFound()
@@ -58,13 +79,7 @@ export default async function ConferenciaPage({ params, searchParams }: Props) {
         conta={dados.conta}
         extrato={dados.extrato}
         semConta={dados.semConta}
-        options={{
-          categories: cats.filter(c => c.isActive),
-          costCenters: ccs.filter(c => c.isActive),
-          businessUnits: bus.filter(c => c.isActive),
-          legalEntities: les.filter(c => c.isActive),
-          contacts: cts,
-        }}
+        options={options}
         searchParams={searchParams}
       />
     </div>

@@ -240,12 +240,14 @@ interface Props {
   contas?: { id: string; label: string }[]
   /** Conferência de saldo: data de caixa + coluna Saldo. */
   modoSaldo?: { temSaldoInicial: boolean }
+  /** Sem o filtro de período — numa fatura de cartão o período É a fatura. */
+  semFiltroDeData?: boolean
   cabecalho: React.ReactNode
   antesDaTabela?: React.ReactNode
 }
 
 export function TransactionsTable({
-  basePath, storageKey, widthsKey, colunas, data, options, searchParams, contas, modoSaldo,
+  basePath, storageKey, widthsKey, colunas, data, options, searchParams, contas, modoSaldo, semFiltroDeData,
   cabecalho, antesDaTabela,
 }: Props) {
   const router = useRouter()
@@ -402,7 +404,7 @@ export function TransactionsTable({
         </div>
         <div className="ml-auto flex items-center gap-2">
           {/* Datas — ficam aqui pois precisam de dois campos */}
-          <div className="flex items-center gap-1.5">
+          <div className={cn('flex items-center gap-1.5', semFiltroDeData && 'hidden')}>
             <span className="text-xs text-muted-foreground">{modoSaldo ? 'Caixa de' : 'De'}</span>
             <div className="relative">
               <input

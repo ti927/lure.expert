@@ -156,3 +156,6 @@ export const COLUNAS_CONFERENCIA: readonly ColunaRedimensionavel[] = [
   { id: 'saldo',        largura: 130 },
   ...COLUNAS_TRANSACOES.slice(5),
 ]
+
+/** Os lançamentos de uma fatura de cartão: a tabela de `/transacoes` sem a conta. */
+export const COLUNAS_FATURA: readonly ColunaRedimensionavel[] = COLUNAS_TRANSACOES.filter(c => c.id !== 'account')

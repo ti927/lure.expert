@@ -259,6 +259,65 @@ async function main() {
         t(false, 'não achei lançamento de implantação de saldo para testar')
       }
 
+      console.log('\n── 11. cartão de crédito: conferência por fatura ──')
+      const { lerFaturasDaConta } = await import('@/lib/account-ledger')
+      const cartoes = await tx.execute<{ org: string; conta: string; nome: string }>(sql`
+        SELECT DISTINCT t.organization_id::text AS org, t.account_id AS conta, t.account_name AS nome
+          FROM transactions t JOIN data_sources ds ON ds.id = t.data_source_id
+         WHERE ds.provider = 'manual' AND t.account_type = 'CREDIT_CARD' AND t.status <> 'pending'`)
+      t(cartoes.length > 0, `${cartoes.length} cartões de crédito manuais para testar`)
+      for (const c of cartoes) {
+        const fs = await lerFaturasDaConta(c.org, c.conta, tx)
+        const [cru] = await tx.execute<{ compras: string; creditos: string; n: number; grupos: number }>(sql`
+          SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'outflow'), 0)::text AS compras,
+                 COALESCE(SUM(amount) FILTER (WHERE direction = 'inflow'), 0)::text AS creditos,
+                 COUNT(*)::int AS n, COUNT(DISTINCT COALESCE(effective_date, date))::int AS grupos
+            FROM transactions WHERE organization_id = ${c.org}::uuid AND account_id = ${c.conta} AND status <> 'pending'`)
+        const somaC = fs.reduce((s, f) => s + Math.round(f.valorCompras * 100), 0)
+        const somaP = fs.reduce((s, f) => s + Math.round(f.valorCreditos * 100), 0)
+        t(fs.length === cru.grupos && somaC === cent(cru.compras) && somaP === cent(cru.creditos),
+          `${c.nome}: ${fs.length} faturas somam as compras e os créditos da conta, ao centavo`)
+        t(cent(fs[fs.length - 1].saldoDevedor) === cent(cru.compras)! - cent(cru.creditos)!,
+          `${c.nome}: saldo devedor final = compras − créditos (${fs[fs.length - 1].saldoDevedor})`)
+        t(fs.every((f, i) => i === 0 || fs[i - 1].vencimento < f.vencimento), `${c.nome}: faturas em ordem de vencimento`)
+        // A fatura aberta: a leitura da tabela presa no vencimento traz exatamente os lançamentos dela.
+        let todosBatem = true
+        for (const f of fs) {
+          const e = await lerExtratoDaConta(c.org, c.conta, { from: f.vencimento, to: f.vencimento, pageSize: 1000 }, tx)
+          if (e.total !== f.compras + f.creditos) todosBatem = false
+          if (cent(e.totals.outflow) !== cent(f.valorCompras) || cent(e.totals.inflow) !== cent(f.valorCreditos)) todosBatem = false
+          if (!e.rows.every((r, i) => i === 0 || e.rows[i - 1].date <= r.date)) todosBatem = false
+        }
+        t(todosBatem, `${c.nome}: cada fatura aberta traz os lançamentos dela, ordenados pela data da compra`)
+      }
+      // Conta manual: o tipo vem do CADASTRO, não do lançamento — é o tipo que
+      // escolhe entre saldo e fatura.
+      const divergentes = await tx.execute<{ org: string; conta: string; cadastro: string; lancamento: string }>(sql`
+        SELECT ds.organization_id::text AS org, ds.metadata->>'accountId' AS conta,
+               ds.metadata->'accounts'->0->>'subtype' AS cadastro,
+               (SELECT t.account_type FROM transactions t WHERE t.organization_id = ds.organization_id
+                  AND t.account_id = ds.metadata->>'accountId' ORDER BY t.date DESC, t.created_at DESC LIMIT 1) AS lancamento
+          FROM data_sources ds WHERE ds.provider = 'manual'`)
+      let cadastroManda = true
+      for (const d of divergentes) {
+        const c = await descreverConta(d.org, d.conta, tx)
+        if (c?.tipo !== d.cadastro) cadastroManda = false
+      }
+      const ndiv = divergentes.filter(d => d.lancamento && d.lancamento !== d.cadastro).length
+      t(cadastroManda, `conta manual: o tipo vem do cadastro (${divergentes.length} contas, ${ndiv} com lançamento de tipo diferente)`)
+
+      const qck = cartoes.find(c => c.conta === 'arq:cartao-qck')
+      if (qck) {
+        const fs = await lerFaturasDaConta(qck.org, qck.conta, tx)
+        t(fs.every(f => f.diferenca === 0 && !f.semVencimento), 'Cartão QCK: toda fatura paga exatamente e com vencimento')
+      }
+      const quick = cartoes.find(c => c.conta === 'arq:cartao-quick')
+      if (quick) {
+        const fs = await lerFaturasDaConta(quick.org, quick.conta, tx)
+        t(fs.filter(f => f.semVencimento).length >= 1 && !fs.find(f => f.vencimento === '2026-09-10')?.semVencimento,
+          `Cartão Quick: ${fs.filter(f => f.semVencimento).length} grupos sem vencimento marcados; 10/09 é fatura de verdade`)
+      }
+
       throw new Reverter()
     })
   } catch (e) {
