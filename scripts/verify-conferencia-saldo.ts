@@ -226,8 +226,14 @@ async function main() {
     if (!(e instanceof Reverter)) throw e
   }
 
+  // Antes da 0034 a prova era "a tabela não existe"; depois dela, que o saldo
+  // inicial de teste não ficou gravado.
   const [{ existe }] = await db.execute<{ existe: boolean }>(sql`SELECT to_regclass('account_opening_balances') IS NOT NULL AS existe`)
-  t(!existe, 'ROLLBACK: nada persistiu')
+  const sobra = existe
+    ? (await db.execute<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM account_opening_balances
+        WHERE organization_id = ${alvo.org}::uuid AND account_id = ${alvo.conta} AND note = 'teste'`))[0].n
+    : 0
+  t(sobra === 0, 'ROLLBACK: nada persistiu')
   console.log(`\n${ok} ok, ${falhas} falha(s)\n`)
   process.exit(falhas ? 1 : 0)
 }
