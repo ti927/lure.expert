@@ -142,6 +142,7 @@ Fase 3 daqui (Categorização).
 - `/components/transacoes-shared` — o que /transacoes, /dre, /fluxo e /balanco compartilham:
   `DrillDownDialog`, `ColHeader`, filtros (`MultiSelectFilter`, `DescFilter`, `AmountFilter`,
   `DirectionFilter`), `DimFilter`, `CellCombobox`, `CategoryCellCombobox`, `BatchClassifyDialog`,
+  **`TransactionsTable`** (a tabela inteira de `/transacoes`, também usada pela conferência de saldo),
   e o rateio: `AllocationDialog`, `BatchAllocationDialog`, `WeightRowsEditor` (a tabela peso +
   4 dimensões, do lote e do editor de modelos), `AllocationTemplateBar`; mais `column-resize`
   (`useColumnWidths` + `ResizeHandle`), a largura de coluna arrastável — **opt-in**, ver
@@ -200,6 +201,8 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `query/sources/` | um descritor por fonte. **A fonte não escreve a cláusula de organização**; o motor a emite a partir de `orgColumn` |
 | `query/derive.ts` | `withSubtotals` — a cascata do P&L sobre o resultado do motor, envolvendo `computeSubtotals` |
 | `dashboard/block-spec.ts` | `blockSpecSchema` — a spec de bloco, que **embute `querySpecSchema`**. Validada na escrita E na leitura |
+| `transactions-list-filters.ts` | `condicoesDaListagem` — os filtros da URL da tabela de lançamentos, com `regime` (competência em `/transacoes`, caixa na conferência); `dataDeCaixaSql` |
+| `account-ledger.ts` | a conferência de saldo: saldo inicial (`gravarSaldoInicial`), `lerExtratoDaConta` (saldo corrido + fechamento do dia por janela, **antes** dos filtros), `descreverConta`. Decisão 29 |
 
 **A regra que separa leitura analítica de operacional** (Fase 1):
 
@@ -297,7 +300,30 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 20/out: quatro entregas avulsas, todas no ar** (detalhe na tabela de histórico):
+**Última sessão — 27/out: CONFERÊNCIA DE SALDO, no ar** (0034 aplicada por Julio, merge no `main`). Pedido do Julio: um lugar separado de `/transacoes` para checar se o saldo bate com o
+banco. `/contas/[accountId]` (o `account_id` do lançamento — Pluggy ou `arq:<slug>`) mostra a tabela
+de transações pela **data de caixa**, com o **saldo inicial** informado por quem confere e a coluna
+**Saldo**: corrido em toda linha e **fechamento do dia** destacado na última linha visível. A data é
+sempre a ordem principal; clicar em Valor/Descrição/Natureza ordena **dentro do dia**. Filtros são os
+de `/transacoes` menos o de conta, e **não mudam o saldo** (calculado antes deles). Decisões do Julio:
+saldo inicial digitado e salvo; saldo em toda linha + fechamento; saldo real sob filtro; data de
+caixa. Cartão fica fora da v1. Ver **Decisão 29**.
+
+| Sessão | Entrega | Estado |
+|---|---|---|
+| 1 | Migration **0034** (`account_opening_balances`) + reversa; `lib/account-ledger.ts`; filtros de `getTransactions` movidos para `lib/transactions-list-filters.ts`. **48/48** contra a produção numa transação revertida | ✅ `beb9665` |
+| 2 | A tabela de `/transacoes` movida para `components/transacoes-shared/transactions-table.tsx` (`contas` opcional, `modoSaldo`); `/transacoes` virou casca, mesmas chaves de `localStorage` | ✅ |
+| 3 | `/contas/[accountId]` (página, `loading`, `error`, os 5 estados), `server/account-ledger.ts`, links "Conferir saldo" em `/contas` | ✅ `next build` limpo |
+| 4 | Decisão 29, este arquivo | ✅ |
+
+**Subiu na ordem certa:** 0034 primeiro, merge depois — ao contrário a página quebraria, porque
+lê a tabela nova. O auto mode do Claude Code **bloqueia aplicar migration na produção** mesmo com
+autorização na conversa; quem aplicou foi o Julio, pelo Studio. **Nesta máquina não há Docker, psql nem o dump** — o banco local do rateio
+não existe aqui; a validação foi com ROLLBACK contra a produção, e os scripts precisam da URL do
+**pooler** (a direta do `.env.local` dá `ENOENT`). **O que falta é o olho do Julio:** `/transacoes`
+tem de estar idêntica (a tabela mudou de arquivo), e a conferência ainda não foi vista renderizada.
+
+**Sessão de 20/out: quatro entregas avulsas, todas no ar** (detalhe na tabela de histórico):
 
 | Entrega | Commit | Estado |
 |---|---|---|
@@ -387,9 +413,12 @@ incompleto** (R5) e **higiene de schema** (R8) — cabem numa sessão e matam fa
 aparecem todo começo de mês.
 
 **Pendência de produto nova, aberta pela Decisão 23:** o app tirou o saldo porque não o controla.
-Passar a controlá-lo é possível e não foi decidido — o Pluggy já traz a posição das contas em
-`data_sources.metadata.accounts`, e ancorar nela daria um saldo **de verdade** para as contas
-conectadas (não para as importadas por arquivo, que continuariam sem âncora). Isso é fase própria,
+Passar a controlá-lo é possível e não foi decidido — a API do Pluggy devolve o saldo das contas
+(`fetchAccounts` → `balance`), mas **o sync o descarta** (grava em `metadata.accounts` só nome,
+tipo e número; corrigido em 27/out, ver Decisão 29). Gravá-lo e ancorar nele daria um saldo **de
+verdade** para as contas conectadas (não para as importadas por arquivo, que continuariam sem
+âncora). **Desde 27/out existe a âncora MANUAL**, na conferência de saldo — a automática seria o
+passo seguinte dela. Isso é fase própria,
 não um cartão de volta: exige decidir o que mostrar para quem tem as duas origens misturadas.
 
 **As 4 configurações de painel que a 4.A exigia FORAM FEITAS em 25/ago** e estão registradas na
@@ -967,6 +996,10 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ Layer 0 de categorização — match determinístico do CSV antes do LLM. Parser detecta colunas autoritativas (`Categoria/Natureza Pai/Filho`, `Conta Contábil`, `Plano de Contas`, `Tipo Natureza`) por regex no header. `findCategoryByCsvMapping` faz lookup normalizado (lowercase + sem acento + colapsa dash/barra/parênteses em espaço). Desempate cumulativo: nome → tipo (`TIPO_ALIASES`: `Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc) → pai. `approveAndInsert` pré-classifica no INSERT (linhas casadas não entram no evento Inngest). Resultado: CSVs de ERP com plano alinhado importam zero-Haiku. Commits `d587644` / `d72ec37` / `35400e6`. Decisão arquitetural em `docs/SCHEMA_DECISIONS.md` Decisão 12.
 
 **Migrations aplicadas no Supabase Studio:**
+- ✅ `db/migrations/rls/0034_account_opening_balances.sql` — **aplicada por Julio em 27/out** e
+  conferida (`scripts/confere-0034.ts`: tabela, RLS com 4 policies, gatilho `updated_at`,
+  unicidade por conta). O saldo inicial da conferência de saldo. Validada 48/48 com ROLLBACK antes
+  e depois. Reversa: `0034_down_account_opening_balances.sql` (perde os saldos informados).
 - ✅ `db/migrations/rls/0033_rateio_de_natureza.sql` — **aplicada em 30/set 01:40** (por mim, via
   `psql -1` pelo pooler, autorizado pelo Julio), junto do merge `ba22049`. `category_id` em
   `transaction_allocations` e `allocation_template_lines`, índice, função e gatilho da invariante
@@ -1033,6 +1066,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Conferência de saldo (27/out)** | `/contas/[accountId]`: a tabela de transações pela data de caixa, com saldo inicial informado e salvo (migration **0034**, aplicada) e coluna Saldo — corrido por linha + fechamento do dia, este independente da ordem dentro do dia. Saldo calculado por janela **antes** dos filtros e da paginação. A tabela de `/transacoes` foi movida para `components/transacoes-shared/transactions-table.tsx` e os filtros para `lib/transactions-list-filters.ts`. Decisão 29. Verificado 48/48 com ROLLBACK contra a produção (conta Sicredi, 1.762 lançamentos), `next build` limpo, larguras 37/37 |
 | **Conta manual editável: nome, tipo, número, badge e logo (20/out)** | Pedido do Julio: conta manual configurável como as do Pluggy. Logo e badge já funcionavam no servidor (as actions não distinguem provedor) — faltava a tela; o envio de logo saiu da janela do Pluggy para `contas/logo-editor.tsx`, usado pelas duas. **Renomear é de verdade** (decisão dele): `editarContaManual` (`lib/accounts.ts`) muda cadastro E as colunas `account_*` dos lançamentos numa transação, **sem mudar a identidade** (`arq:<slug>` está em cada lançamento e na chave de dedup); o slug do nome novo (e do antigo) vira **apelido** em `metadata.aliases`, e `garantirContaManual`/`mapaDeContasManuais` passam a achar por ele — planilha com o nome antigo ou novo cai na mesma conta. Nome de outra conta é recusado. **Dois defeitos achados de passagem:** (1) `garantirContaManual` reescrevia o metadata inteiro a cada importação que citava a conta — teria apagado logo e badge; agora preserva; (2) as duas portas de arquivo gravavam no lançamento a conta **escrita no arquivo**, não a do cadastro — com apelido, partiria a conta em duas no filtro; agora `colunasDeConta` grava a do cadastro (a chave de dedup segue a do arquivo, regra de 1/set). Verificado: **20/20** contra a produção numa transação revertida (renomeando "Cartão QCK", 174 lançamentos), `verify-conta-por-linha` 52/52, `verify-staging-import` 69/70 — a falha é a asserção que esperava o Haiku **perder** "Data de caixa" num cabeçalho fora do padrão, e ele achou (depende do modelo, não desta sessão). **Validada por Julio na tela em 20/out** |
 | **Rótulo de conta: nome, não "OTHER" (20/out)** | Na Quick Aviação as contas de caixa ("Caixa Av. D", "Caixa Espécie") apareciam como "OTHER" na coluna de `/transacoes` e na janela de detalhamento, e o filtro de conta da janela as tornava indistinguíveis: o rótulo era só tipo + número, e caixa tem tipo `OTHER` e nenhum número. Uma regra só, `rotuloDaConta` em `lib/import-contract.ts` (client-safe): **nome · tipo · número**, sem o tipo genérico. Usada na coluna, no filtro da janela e no filtro "Banco/Conta" de `/transacoes` (este com o nome da conexão, como antes, para o Pluggy). `ACCT_LABELS` e o mapa duplicado de `connections.ts` saíram. Conferido sobre as 14 contas da Quick: nenhum "OTHER", nenhum rótulo repetido entre contas |
 | **O MCP passa a ler lançamento e descrição (20/out)** | Julio pediu ao expert "lançamentos com a mesma descrição e naturezas diferentes" e ouviu que as ferramentas não deixavam ver a descrição — verdade: `consultar` só agrupava por natureza/dimensão/conta/período e nada devolvia lançamento individual (R3). **Duas peças, uma sessão:** (A) **`detalhar_lancamentos`** (`lib/transactions-read.ts`), leitura OPERACIONAL — uma linha por lançamento, rateado uma vez com as partes dentro, natureza/dimensão perguntadas às linhas —, paginada até 200 com `total`/`totais`/`temMais` por COUNT, e o filtro **estende** `filtroLancamentosBase` das escritas em lote (o mesmo filtro corrige o que a leitura achou), com regime, descrição exata/normalizada, tipo, as 4 dimensões com `__null__`, revisão e rateado; ids passam por `validarFiltros` (achado 10). (B) no motor, agrupamentos **`descricao`** e **`descricao_normalizada`** (`lib/descricao-normalizada.ts`: minúsculas, sem acento por `translate` — o banco não tem `unaccent` —, só letras) e a medida **`naturezas_distintas`** (`COUNT(DISTINCT tl.category_id)`, pela linha), mais `filtros.descricaoContem`/`descricaoNormalizada`; fontes sem descrição recusam. Tudo com `.describe()`. Catálogo 31 → **32** (13 de leitura). Verificado: **31/31** contra a produção, só leitura — normalização SQL × TS sobre 902 descrições reais, cada grupo do motor contra cálculo independente, o detalhe contra o motor (71 lançamentos e 6 naturezas em "ted pagamento fornecedor"), paginação sem repetir nem pular, partes somando ao centavo; motor 39/39; build limpo. **Não rodadas:** as suítes HTTP do MCP (exigem `next start` e gravam numa org descartável; o banco local estava fora, Docker parado) — contagens delas atualizadas para 13. Na Quick Aviação, **62 descrições** estão em 2+ naturezas |
