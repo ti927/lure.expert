@@ -8,10 +8,12 @@ import type { ContaNaTela } from '@/server/account-ledger'
  * voltar, logo, rótulo, badge e uma linha de contexto. `voltarPara` muda o
  * destino da seta — da fatura aberta, volta para a lista de faturas.
  */
-export function CabecalhoDaConta({ conta, contexto, voltarPara = '/contas', children }: {
+export function CabecalhoDaConta({ conta, contexto, voltarPara = '/contas', acoes, children }: {
   conta: ContaNaTela
   contexto: string
   voltarPara?: string
+  /** Botões à direita do título (lançar, apagados). */
+  acoes?: React.ReactNode
   children?: React.ReactNode
 }) {
   const rotulo = rotuloDaConta({ accountName: conta.nome, accountType: conta.tipo, accountNumber: conta.numero })
@@ -30,7 +32,7 @@ export function CabecalhoDaConta({ conta, contexto, voltarPara = '/contas', chil
             <Landmark className="h-4 w-4 text-muted-foreground" strokeWidth={1.5} />
           </div>
         )}
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
             <span className="truncate">{rotulo}</span>
             {conta.badge && (
@@ -43,6 +45,7 @@ export function CabecalhoDaConta({ conta, contexto, voltarPara = '/contas', chil
             {contexto}{conta.conexao && conta.conexao !== conta.nome ? ` · ${conta.conexao}` : ''}
           </p>
         </div>
+        {acoes && <div className="flex shrink-0 items-center gap-2">{acoes}</div>}
       </div>
       {children}
     </div>

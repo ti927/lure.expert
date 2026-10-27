@@ -28,6 +28,7 @@ interface SearchParams {
   reportType?: string
   amountMin?: string
   amountMax?: string
+  origem?: string
 }
 
 interface Props {
@@ -57,6 +58,7 @@ export default async function TransacoesPage({ searchParams }: Props) {
       reportType: searchParams.reportType,
       amountMin: searchParams.amountMin,
       amountMax: searchParams.amountMax,
+      origem: searchParams.origem,
     }),
     getCategories(),
     getCostCenters(),
@@ -71,7 +73,8 @@ export default async function TransacoesPage({ searchParams }: Props) {
     searchParams.direction || searchParams.category || searchParams.costCenter ||
     searchParams.businessUnit || searchParams.legalEntity || searchParams.contact ||
     searchParams.documentId ||
-    searchParams.accountId || searchParams.reportType || searchParams.amountMin || searchParams.amountMax)
+    searchParams.accountId || searchParams.reportType || searchParams.amountMin || searchParams.amountMax ||
+    searchParams.origem)
 
   if (txData.total === 0 && !hasAnyFilter) {
     return (

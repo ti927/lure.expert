@@ -40,6 +40,7 @@ export default async function FaturaPage({ params, searchParams }: Props) {
       reportType: searchParams.reportType,
       amountMin: searchParams.amountMin,
       amountMax: searchParams.amountMax,
+      origem: searchParams.origem,
     }),
     getFaturasDaConta(accountId),
     opcoesDaTabela(),

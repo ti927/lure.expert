@@ -15,8 +15,10 @@ import { formatBRL } from '@/components/transacoes-shared/transactions-table'
 import type { Fatura } from '@/lib/account-ledger'
 import type { ContaNaTela } from '@/server/account-ledger'
 import { CabecalhoDaConta, Cartao, dataBR } from './cabecalho-da-conta'
+import { LancarManual, ManuaisApagados } from './lancamento-manual'
+import type { Category } from '@/db/schema/categories'
 
-export default function FaturasClient({ conta, faturas }: { conta: ContaNaTela; faturas: Fatura[] }) {
+export default function FaturasClient({ conta, faturas, categories }: { conta: ContaNaTela; faturas: Fatura[]; categories: Category[] }) {
   const router = useRouter()
   const base = `/contas/${encodeURIComponent(conta.accountId)}`
   const ultima = faturas[faturas.length - 1]
@@ -29,7 +31,8 @@ export default function FaturasClient({ conta, faturas }: { conta: ContaNaTela; 
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <CabecalhoDaConta conta={conta} contexto={`Conferência por fatura · ${faturas.length} vencimento${faturas.length !== 1 ? 's' : ''}`}>
+      <CabecalhoDaConta conta={conta} contexto={`Conferência por fatura · ${faturas.length} vencimento${faturas.length !== 1 ? 's' : ''}`}
+      acoes={conta.manual ? <><ManuaisApagados accountId={conta.accountId} /><LancarManual accountId={conta.accountId} categories={categories} /></> : undefined}>
         {faturas.length > 0 && (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Cartao titulo="Compras no período" valor={formatBRL(totalCompras)} tom="negativo" />

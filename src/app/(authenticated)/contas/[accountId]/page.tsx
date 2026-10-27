@@ -38,10 +38,10 @@ export default async function ConferenciaPage({ params, searchParams }: Props) {
         </div>
       )
     }
-    const faturas = await getFaturasDaConta(accountId)
+    const [faturas, options] = await Promise.all([getFaturasDaConta(accountId), opcoesDaTabela()])
     return (
       <div className="h-full flex flex-col overflow-hidden">
-        <FaturasClient conta={conta} faturas={faturas} />
+        <FaturasClient conta={conta} faturas={faturas} categories={options.categories} />
       </div>
     )
   }
@@ -67,6 +67,7 @@ export default async function ConferenciaPage({ params, searchParams }: Props) {
       reportType: searchParams.reportType,
       amountMin: searchParams.amountMin,
       amountMax: searchParams.amountMax,
+      origem: searchParams.origem,
     }),
     opcoesDaTabela(),
   ])

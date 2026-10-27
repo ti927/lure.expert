@@ -18,6 +18,7 @@ import {
 } from '@/lib/transactions-write'
 import { recusaDePapel } from '@/lib/members-types'
 import { condicoesDaListagem } from '@/lib/transactions-list-filters'
+import { registrarApagamentoDeManuais } from '@/lib/lancamento-manual'
 
 interface GetTransactionsParams {
   page?: number
@@ -37,11 +38,12 @@ interface GetTransactionsParams {
   reportType?: string
   amountMin?: string
   amountMax?: string
+  origem?: string
 }
 
 export async function getTransactions(params: GetTransactionsParams = {}) {
   const { organizationId } = await getAuthContext()
-  const { page = 1, pageSize, q, from, to, direction, category, costCenter, businessUnit, legalEntity, contact, documentId, accountId, sort, reportType, amountMin, amountMax } = params
+  const { page = 1, pageSize, q, from, to, direction, category, costCenter, businessUnit, legalEntity, contact, documentId, accountId, sort, reportType, amountMin, amountMax, origem } = params
   const size = sanitizePageSize(pageSize)
   const offset = (page - 1) * size
 
@@ -51,7 +53,7 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
     // Os filtros moram em `/lib` porque a conferência de saldo usa os mesmos.
     ...condicoesDaListagem({
       q, from, to, direction, category, costCenter, businessUnit, legalEntity, contact,
-      documentId, accountId, reportType, amountMin, amountMax,
+      documentId, accountId, reportType, amountMin, amountMax, origem,
     }),
   ]
 
@@ -207,7 +209,7 @@ export async function classifyTransaction(id: string, data: DimensionData) {
 }
 
 export async function deleteTransactions(ids: string[]) {
-  const { organizationId, papel } = await getAuthContext()
+  const { organizationId, userId, papel } = await getAuthContext()
 
   // Ponto v1 da matriz (4.B): apagar em lote é destrutivo — admin para cima.
   const recusa = recusaDePapel(papel, 'admin', 'apagar lançamentos')
@@ -216,9 +218,17 @@ export async function deleteTransactions(ids: string[]) {
   if (ids.length === 0) return { error: 'Nenhuma transação selecionada.' }
   if (ids.length > 1000) return { error: 'Máximo de 1000 transações por operação.' }
 
-  await db
-    .delete(transactions)
-    .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
+  // Lançamento manual apagado não tem de onde voltar (não há banco para
+  // ressincronizar nem arquivo para reimportar): o retrato dele vai para
+  // `agent_events` na MESMA transação do DELETE, e a conferência da conta
+  // oferece "Restaurar". Ver `lib/lancamento-manual.ts`.
+  const { data: { user } } = await createClient().auth.getUser()
+  await db.transaction(async (tx) => {
+    await registrarApagamentoDeManuais(organizationId, ids, { userId, email: user?.email ?? null }, tx)
+    await tx
+      .delete(transactions)
+      .where(and(eq(transactions.organizationId, organizationId), inArray(transactions.id, ids)))
+  })
 
   revalidatePath('/transacoes')
   revalidatePath('/contas')

@@ -25,6 +25,7 @@ import {
 } from '@/components/transacoes-shared/transactions-table'
 import type { ResumoDoExtrato } from '@/lib/account-ledger'
 import { CabecalhoDaConta, Cartao, dataBR } from './cabecalho-da-conta'
+import { LancarManual, ManuaisApagados } from './lancamento-manual'
 
 interface Props {
   conta: ContaNaTela
@@ -82,7 +83,8 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
   }
 
   const cabecalho = (
-    <CabecalhoDaConta conta={conta} contexto={`Conferência de saldo · ${extrato.total} lançamento${extrato.total !== 1 ? 's' : ''}`}>
+    <CabecalhoDaConta conta={conta} contexto={`Conferência de saldo · ${extrato.total} lançamento${extrato.total !== 1 ? 's' : ''}`}
+      acoes={conta.manual ? <><ManuaisApagados accountId={conta.accountId} /><LancarManual accountId={conta.accountId} categories={options.categories} /></> : undefined}>
       {ancora ? (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Cartao

@@ -202,7 +202,8 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `query/derive.ts` | `withSubtotals` — a cascata do P&L sobre o resultado do motor, envolvendo `computeSubtotals` |
 | `dashboard/block-spec.ts` | `blockSpecSchema` — a spec de bloco, que **embute `querySpecSchema`**. Validada na escrita E na leitura |
 | `transactions-list-filters.ts` | `condicoesDaListagem` — os filtros da URL da tabela de lançamentos, com `regime` (competência em `/transacoes`, caixa na conferência); `dataDeCaixaSql` |
-| `account-ledger.ts` | a conferência de saldo: saldo inicial (`gravarSaldoInicial`), `lerExtratoDaConta` (saldo corrido + fechamento do dia por janela, **antes** dos filtros), `descreverConta`. Decisão 29 |
+| `account-ledger.ts` | a conferência de saldo: saldo inicial (`gravarSaldoInicial`), `lerExtratoDaConta` (saldo corrido + fechamento do dia por janela, **antes** dos filtros), `lerFaturasDaConta` (cartão de crédito, por vencimento), `descreverConta` (conta manual: do cadastro). Decisões 29 e 30 |
+| `lancamento-manual.ts` | criar lançamento à mão (só conta manual, autoria no `metadata`), `registrarApagamentoDeManuais` (retrato antes do DELETE), `restaurarLancamentoManual`, `descreverUserAgent`. O que é puro e vai ao navegador mora em `lancamento-manual-types.ts` |
 
 **A regra que separa leitura analítica de operacional** (Fase 1):
 
@@ -300,7 +301,21 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 27/out: CONFERÊNCIA DE SALDO, no ar** (0034 aplicada por Julio, merge no `main`). Pedido do Julio: um lugar separado de `/transacoes` para checar se o saldo bate com o
+**Última sessão — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, branch `feat/conferencia-manual`.**
+Sem migration. Ver **Decisão 30**. Quatro entregas:
+
+| Entrega | O quê |
+|---|---|
+| Tipo **"Cartão pré-pago"** (`PREPAID_CARD`) | Os 4 Pagseguro são pré-pagos (recarga entra, compra sai) e estavam como "Cartão". Julio reclassifica pelo lápis em `/contas`. Regra única `temSaldoCorrido`. Conta manual lê o tipo do **cadastro** |
+| Aviso de **saldo de abertura duplicado** | "IMPLANTAÇÃO DE SALDO" na data do saldo inicial ou depois soma o saldo duas vezes |
+| **Fatura** no cartão de crédito manual | `/contas/[conta]` vira lista de vencimentos (compras, pagamentos, diferença, saldo devedor); `/contas/[conta]/fatura/[vencimento]` abre os lançamentos. Grupos **sem vencimento** marcados. Cartão do **Pluggy** fica fora (frente: `billId` + API de faturas) |
+| **Lançamento à mão** (só conta manual) | Botão "Lançar" nas telas da conta; autoria no `metadata` (quem, quando, navegador/sistema, IP, id do navegador); selo **"Manual"** + filtro de **origem** em `/transacoes` e na conferência; apagar guarda o retrato e **"Apagados" → Restaurar** (90 dias, mesmo id, com o rateio) |
+
+Verificado: conferência 81/81, lançamento manual 36/36, larguras 37/37, build limpo. **Lição:** um
+script reaplicou a 0034 sobre a tabela em uso e deixou sessão órfã com trava exclusiva — Julio
+rodou `pg_terminate_backend`. Scripts contra a produção usam `lock_timeout` curto.
+
+**Antes dela — 27/out: CONFERÊNCIA DE SALDO, no ar** (0034 aplicada por Julio, merge no `main`). Pedido do Julio: um lugar separado de `/transacoes` para checar se o saldo bate com o
 banco. `/contas/[accountId]` (o `account_id` do lançamento — Pluggy ou `arq:<slug>`) mostra a tabela
 de transações pela **data de caixa**, com o **saldo inicial** informado por quem confere e a coluna
 **Saldo**: corrido em toda linha e **fechamento do dia** destacado na última linha visível. A data é
@@ -912,6 +927,8 @@ aberto, e as afirmações abaixo foram **conferidas contra o banco**, não aceit
 | **Ver/ocultar e reordenar coluna** (avulsa) | **A v1.1 do que Julio pediu em 1/set** — a v1 entregou só o arrasto, a pedido dele. Esconder a coluna que não se usa resolve o cabeçalho truncado melhor que redimensionar, e o encanamento já está pronto: mesma lista `COLUNAS_TRANSACOES`, mesmo `localStorage`, mesma chave. Reordenar é o passo seguinte e custa mais (a ordem entra no `<colgroup>` E na ordem dos `<td>` de cada linha) | curta |
 | **Largura de coluna por USUÁRIO** (v2 da mesma frente) | Hoje é por navegador, porque não existe tabela de preferência de usuário — `memberships` guarda papel e convite, sem jsonb. Exige migration + RLS + teste, e a decisão de onde morar (coluna `settings` em `memberships`, que a torna por usuário-E-organização, ou tabela própria) | média |
 | **`vercel.json` com `regions`** | versionar a região `gru1`, hoje só no painel (ver Infraestrutura) | trivial |
+| **Fatura de cartão do Pluggy** (27/out) | 9 cartões conectados sem conferência: o sync grava a compra como caixa. O lançamento traz `raw_data.creditCardMetadata.billId` (em parte deles) e a API `fetchCreditCardBills` dá vencimento e **total oficial do banco** — conferência mais forte que a do manual | média |
+| **Lixeira para todo lançamento** (27/out) | Hoje só o manual apagado é restaurável. O do Pluggy volta por ressincronização, mas sem classificação; o importado, reimportando | média |
 
 Recomendação registrada: **contato pela NF-e** tem a melhor relação custo/benefício agora — é curta
 e faz o cadastro de contatos crescer sozinho, que hoje depende de digitação. Se a prioridade for
@@ -1066,6 +1083,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Conta manual na conferência (27/out)** | Tipo "Cartão pré-pago"; aviso de saldo de abertura duplicado; cartão de crédito manual confere por **fatura** (lista de vencimentos + fatura aberta); **lançamento à mão** só em conta manual, com autoria no `metadata`, selo "Manual", filtro de origem e restauração do apagado. Decisão 30. Sem migration. 81/81 + 36/36 contra a produção, revertidos |
 | **Conferência de saldo (27/out)** | `/contas/[accountId]`: a tabela de transações pela data de caixa, com saldo inicial informado e salvo (migration **0034**, aplicada) e coluna Saldo — corrido por linha + fechamento do dia, este independente da ordem dentro do dia. Saldo calculado por janela **antes** dos filtros e da paginação. A tabela de `/transacoes` foi movida para `components/transacoes-shared/transactions-table.tsx` e os filtros para `lib/transactions-list-filters.ts`. Decisão 29. Verificado 48/48 com ROLLBACK contra a produção (conta Sicredi, 1.762 lançamentos), `next build` limpo, larguras 37/37 |
 | **Conta manual editável: nome, tipo, número, badge e logo (20/out)** | Pedido do Julio: conta manual configurável como as do Pluggy. Logo e badge já funcionavam no servidor (as actions não distinguem provedor) — faltava a tela; o envio de logo saiu da janela do Pluggy para `contas/logo-editor.tsx`, usado pelas duas. **Renomear é de verdade** (decisão dele): `editarContaManual` (`lib/accounts.ts`) muda cadastro E as colunas `account_*` dos lançamentos numa transação, **sem mudar a identidade** (`arq:<slug>` está em cada lançamento e na chave de dedup); o slug do nome novo (e do antigo) vira **apelido** em `metadata.aliases`, e `garantirContaManual`/`mapaDeContasManuais` passam a achar por ele — planilha com o nome antigo ou novo cai na mesma conta. Nome de outra conta é recusado. **Dois defeitos achados de passagem:** (1) `garantirContaManual` reescrevia o metadata inteiro a cada importação que citava a conta — teria apagado logo e badge; agora preserva; (2) as duas portas de arquivo gravavam no lançamento a conta **escrita no arquivo**, não a do cadastro — com apelido, partiria a conta em duas no filtro; agora `colunasDeConta` grava a do cadastro (a chave de dedup segue a do arquivo, regra de 1/set). Verificado: **20/20** contra a produção numa transação revertida (renomeando "Cartão QCK", 174 lançamentos), `verify-conta-por-linha` 52/52, `verify-staging-import` 69/70 — a falha é a asserção que esperava o Haiku **perder** "Data de caixa" num cabeçalho fora do padrão, e ele achou (depende do modelo, não desta sessão). **Validada por Julio na tela em 20/out** |
 | **Rótulo de conta: nome, não "OTHER" (20/out)** | Na Quick Aviação as contas de caixa ("Caixa Av. D", "Caixa Espécie") apareciam como "OTHER" na coluna de `/transacoes` e na janela de detalhamento, e o filtro de conta da janela as tornava indistinguíveis: o rótulo era só tipo + número, e caixa tem tipo `OTHER` e nenhum número. Uma regra só, `rotuloDaConta` em `lib/import-contract.ts` (client-safe): **nome · tipo · número**, sem o tipo genérico. Usada na coluna, no filtro da janela e no filtro "Banco/Conta" de `/transacoes` (este com o nome da conexão, como antes, para o Pluggy). `ACCT_LABELS` e o mapa duplicado de `connections.ts` saíram. Conferido sobre as 14 contas da Quick: nenhum "OTHER", nenhum rótulo repetido entre contas |

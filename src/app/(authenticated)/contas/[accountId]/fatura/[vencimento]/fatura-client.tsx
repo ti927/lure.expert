@@ -15,6 +15,7 @@ import {
 import type { Fatura } from '@/lib/account-ledger'
 import type { ContaNaTela } from '@/server/account-ledger'
 import { CabecalhoDaConta, Cartao, dataBR } from '../../cabecalho-da-conta'
+import { LancarManual, ManuaisApagados } from '../../lancamento-manual'
 
 interface Props {
   conta: ContaNaTela
@@ -31,6 +32,7 @@ export default function FaturaClient({ conta, fatura, anterior, proxima, extrato
 
   const cabecalho = (
     <CabecalhoDaConta conta={conta} voltarPara={base}
+      acoes={conta.manual ? <><ManuaisApagados accountId={conta.accountId} /><LancarManual accountId={conta.accountId} categories={options.categories} dataPadrao={{ caixa: fatura.vencimento }} /></> : undefined}
       contexto={`Fatura com vencimento em ${dataBR(fatura.vencimento)}`}>
       <div className="flex items-center gap-2">
         <Button asChild={!!anterior} variant="outline" size="sm" disabled={!anterior}>
