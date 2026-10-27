@@ -9,38 +9,61 @@ import { createClient } from '@/lib/supabase/server'
 import { recusaDePapel } from '@/lib/members-types'
 import {
   lerExtratoDaConta, descreverConta, gravarSaldoInicial, apagarSaldoInicial,
-  contarLancamentosSemConta, type ExtratoParams,
+  contarLancamentosSemConta, lerFaturasDaConta, type ExtratoParams, type ContaDoExtrato,
 } from '@/lib/account-ledger'
 
-export async function getExtratoDaConta(accountId: string, params: ExtratoParams) {
-  const { organizationId } = await getAuthContext()
-  const conta = await descreverConta(organizationId, accountId)
-  if (!conta) return null
+export interface ContaNaTela {
+  accountId: string
+  nome: string | null
+  tipo: string | null
+  numero: string | null
+  logoUrl: string | null
+  badge: string | null
+  conexao: string | null
+  /** Conta manual (cadastro próprio) — não vem de conexão bancária. */
+  manual: boolean
+}
 
-  const [extrato, semConta] = await Promise.all([
-    lerExtratoDaConta(organizationId, accountId, params),
-    contarLancamentosSemConta(organizationId),
-  ])
-
-  // Logo da conta: o enviado pelo usuário (assinado) vence o automático do banco.
+/** O cabeçalho da conta: logo (o enviado pelo usuário vence o do banco), badge, conexão. */
+async function contaNaTela(conta: ContaDoExtrato): Promise<ContaNaTela> {
   const meta = conta.metadata ?? {}
   let logoUrl = typeof meta.institutionImageUrl === 'string' ? meta.institutionImageUrl : null
   if (typeof meta.customLogoPath === 'string') {
     const { data } = await createClient().storage.from('documents').createSignedUrl(meta.customLogoPath, 3600)
     if (data?.signedUrl) logoUrl = data.signedUrl
   }
-  const badge = (meta.customBadge as { text?: string } | undefined)?.text || null
-  const conexao = (typeof meta.customLabel === 'string' && meta.customLabel.trim())
-    || (typeof meta.institutionName === 'string' ? meta.institutionName : null)
-
   return {
-    conta: {
-      accountId: conta.accountId, nome: conta.nome, tipo: conta.tipo, numero: conta.numero,
-      logoUrl, badge, conexao,
-    },
-    extrato,
-    semConta,
+    accountId: conta.accountId, nome: conta.nome, tipo: conta.tipo, numero: conta.numero,
+    logoUrl,
+    badge: (meta.customBadge as { text?: string } | undefined)?.text || null,
+    conexao: (typeof meta.customLabel === 'string' && meta.customLabel.trim())
+      || (typeof meta.institutionName === 'string' ? meta.institutionName : null),
+    manual: meta.manual === true,
   }
+}
+
+export async function getContaParaConferencia(accountId: string): Promise<ContaNaTela | null> {
+  const { organizationId } = await getAuthContext()
+  const conta = await descreverConta(organizationId, accountId)
+  return conta ? contaNaTela(conta) : null
+}
+
+export async function getExtratoDaConta(accountId: string, params: ExtratoParams) {
+  const { organizationId } = await getAuthContext()
+  const conta = await descreverConta(organizationId, accountId)
+  if (!conta) return null
+
+  const [extrato, semConta, tela] = await Promise.all([
+    lerExtratoDaConta(organizationId, accountId, params),
+    contarLancamentosSemConta(organizationId),
+    contaNaTela(conta),
+  ])
+  return { conta: tela, extrato, semConta }
+}
+
+export async function getFaturasDaConta(accountId: string) {
+  const { organizationId } = await getAuthContext()
+  return lerFaturasDaConta(organizationId, accountId)
 }
 
 /** Saldo inicial: escrita comum (member+), como classificar — não destrói nada. */

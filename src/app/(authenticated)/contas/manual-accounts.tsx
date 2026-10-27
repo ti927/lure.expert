@@ -31,7 +31,7 @@ import {
   createManualAccount, deleteManualAccount, updateManualAccount, updateConnectionCustomization,
   type ContaManualNaTela,
 } from '@/server/connections'
-import { TIPOS_DE_CONTA, ROTULO_DE_CONTA, type TipoDeConta } from '@/lib/import-contract'
+import { TIPOS_DE_CONTA, ROTULO_DE_CONTA, temSaldoCorrido, type TipoDeConta } from '@/lib/import-contract'
 import { LogoEditor } from './logo-editor'
 
 export function ManualAccounts({ contas, orgId }: { contas: ContaManualNaTela[]; orgId: string }) {
@@ -117,14 +117,15 @@ export function ManualAccounts({ contas, orgId }: { contas: ContaManualNaTela[];
                 </div>
               </div>
               <div className="flex items-center gap-1">
-              {c.tipo !== 'CREDIT_CARD' && (
-                <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:text-primary gap-1.5"
-                  title="Conferir o saldo desta conta com o extrato do banco">
-                  <Link href={`/contas/${encodeURIComponent(c.accountId)}`}>
-                    <Scale className="h-4 w-4" />Conferir saldo
-                  </Link>
-                </Button>
-              )}
+              {/* Conta com saldo confere pelo saldo corrido; cartão de crédito, pela fatura. */}
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:text-primary gap-1.5"
+                title={temSaldoCorrido(c.tipo)
+                  ? 'Conferir o saldo desta conta com o extrato do banco'
+                  : 'Conferir as faturas deste cartão com as do banco'}>
+                <Link href={`/contas/${encodeURIComponent(c.accountId)}`}>
+                  <Scale className="h-4 w-4" />{temSaldoCorrido(c.tipo) ? 'Conferir saldo' : 'Conferir faturas'}
+                </Link>
+              </Button>
               <Button
                 variant="ghost" size="sm"
                 className="text-muted-foreground hover:text-primary"

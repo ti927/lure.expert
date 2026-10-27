@@ -43,6 +43,7 @@ import { AllocationDialog } from '@/components/transacoes-shared/allocation-dial
 import { BatchAllocationDialog } from '@/components/transacoes-shared/batch-allocation-dialog'
 import { getAllocations, type AllocationRow } from '@/server/allocations'
 import { rotuloDaConta } from '@/lib/import-contract'
+import { ehManual, descreverAutoria } from '@/lib/lancamento-manual-types'
 import type { SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import type { Transaction } from '@/db/schema/transactions'
 import type { Category } from '@/db/schema/categories'
@@ -68,6 +69,8 @@ export interface TransactionsSearchParams {
   reportType?: string
   amountMin?: string
   amountMax?: string
+  /** `manual` | `importado` — a origem do lançamento. */
+  origem?: string
 }
 
 export interface DimensionOptions {
@@ -205,7 +208,7 @@ function ThRedim({
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
-const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'contact', 'documentId', 'accountId', 'sort', 'reportType', 'amountMin', 'amountMax', 'pageSize'] as const
+const FILTER_KEYS = ['q', 'from', 'to', 'direction', 'category', 'costCenter', 'businessUnit', 'legalEntity', 'contact', 'documentId', 'accountId', 'sort', 'reportType', 'amountMin', 'amountMax', 'origem', 'pageSize'] as const
 
 function saveFiltersToStorage(key: string, sp: TransactionsSearchParams) {
   try {
@@ -240,12 +243,14 @@ interface Props {
   contas?: { id: string; label: string }[]
   /** Conferência de saldo: data de caixa + coluna Saldo. */
   modoSaldo?: { temSaldoInicial: boolean }
+  /** Sem o filtro de período — numa fatura de cartão o período É a fatura. */
+  semFiltroDeData?: boolean
   cabecalho: React.ReactNode
   antesDaTabela?: React.ReactNode
 }
 
 export function TransactionsTable({
-  basePath, storageKey, widthsKey, colunas, data, options, searchParams, contas, modoSaldo,
+  basePath, storageKey, widthsKey, colunas, data, options, searchParams, contas, modoSaldo, semFiltroDeData,
   cabecalho, antesDaTabela,
 }: Props) {
   const router = useRouter()
@@ -401,8 +406,19 @@ export function TransactionsTable({
           <span className="text-xs text-muted-foreground">Líquido <span className={cn('font-medium tabular-nums', net >= 0 ? 'text-emerald-600' : 'text-rose-600')}>{net >= 0 ? '' : '−'}{formatBRL(Math.abs(net))}</span></span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {/* Origem: o lançamento manual é destacado e filtrável (Decisão 30). */}
+          <select
+            value={searchParams.origem ?? ''}
+            onChange={e => updateFilters({ origem: e.target.value || undefined, page: undefined })}
+            className={cn('h-7 rounded-md border border-input bg-background px-2 text-xs cursor-pointer', searchParams.origem && 'border-primary text-primary')}
+            title="Origem do lançamento"
+          >
+            <option value="">Todas as origens</option>
+            <option value="manual">Lançados à mão</option>
+            <option value="importado">Importados e sincronizados</option>
+          </select>
           {/* Datas — ficam aqui pois precisam de dois campos */}
-          <div className="flex items-center gap-1.5">
+          <div className={cn('flex items-center gap-1.5', semFiltroDeData && 'hidden')}>
             <span className="text-xs text-muted-foreground">{modoSaldo ? 'Caixa de' : 'De'}</span>
             <div className="relative">
               <input
@@ -602,7 +618,15 @@ export function TransactionsTable({
                         ) : formatDate(tx.date)}
                       </td>
                       <td className="px-2 py-1.5 overflow-hidden">
-                        <div className="truncate text-xs">{tx.description}</div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {ehManual(tx.metadata) && (
+                            <span className="shrink-0 inline-flex items-center rounded px-1 py-0 text-[10px] font-medium bg-amber-100 text-amber-800 ring-1 ring-amber-200 cursor-help"
+                              title={descreverAutoria(tx.metadata)}>
+                              Manual
+                            </span>
+                          )}
+                          <div className="truncate text-xs">{tx.description}</div>
+                        </div>
                       </td>
                       <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
                         <span className={cn('font-medium text-xs', tx.direction === 'inflow' ? 'text-emerald-600' : 'text-rose-600')}>

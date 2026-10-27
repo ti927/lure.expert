@@ -120,13 +120,34 @@ export interface ContaDoExtrato {
 }
 
 /**
- * Nome, tipo e número da conta — do lançamento MAIS RECENTE (conta renomeada
- * mostra o nome de hoje). Conta manual ainda sem lançamento vem do cadastro.
+ * Nome, tipo e número da conta. **Conta manual: do CADASTRO** — é ele que o
+ * usuário edita, e o tipo decide a tela (saldo × fatura); os lançamentos podem
+ * carregar o tipo de uma importação antiga (visto no Pagseguro 6028, 27/out).
+ * Conta de conexão: do lançamento MAIS RECENTE (renomeada mostra o nome de hoje).
  * `null` = a conta não existe nesta organização.
  */
 export async function descreverConta(
   organizationId: string, accountId: string, exec: Pick<typeof db, 'select'> = db,
 ): Promise<ContaDoExtrato | null> {
+  const [ds] = await exec
+    .select({ id: dataSources.id, name: dataSources.name, metadata: dataSources.metadata })
+    .from(dataSources)
+    .where(and(
+      eq(dataSources.organizationId, organizationId),
+      eq(dataSources.provider, 'manual'),
+      sql`${dataSources.metadata}->>'accountId' = ${accountId}`,
+    ))
+    .limit(1)
+  if (ds) {
+    const meta = (ds.metadata ?? {}) as Record<string, unknown>
+    const conta = (Array.isArray(meta.accounts) ? meta.accounts[0] : null) as
+      { subtype?: string; number?: string } | null
+    return {
+      accountId, nome: ds.name, tipo: conta?.subtype ?? null, numero: conta?.number?.trim() || null,
+      dataSourceId: ds.id, metadata: meta,
+    }
+  }
+
   const [t] = await exec
     .select({
       nome: transactions.accountName,
@@ -143,29 +164,10 @@ export async function descreverConta(
     ))
     .orderBy(desc(transactions.date), desc(transactions.createdAt))
     .limit(1)
-  if (t) {
-    return {
-      accountId, nome: t.nome, tipo: t.tipo, numero: t.numero,
-      dataSourceId: t.dataSourceId, metadata: (t.metadata ?? null) as Record<string, unknown> | null,
-    }
-  }
-
-  // Conta manual sem lançamento: só o cadastro sabe que ela existe.
-  const [ds] = await exec
-    .select({ id: dataSources.id, name: dataSources.name, metadata: dataSources.metadata })
-    .from(dataSources)
-    .where(and(
-      eq(dataSources.organizationId, organizationId),
-      sql`${dataSources.metadata}->>'accountId' = ${accountId}`,
-    ))
-    .limit(1)
-  if (!ds) return null
-  const meta = (ds.metadata ?? {}) as Record<string, unknown>
-  const conta = (Array.isArray(meta.accounts) ? meta.accounts[0] : null) as
-    { subtype?: string; number?: string } | null
+  if (!t) return null
   return {
-    accountId, nome: ds.name, tipo: conta?.subtype ?? null, numero: conta?.number?.trim() || null,
-    dataSourceId: ds.id, metadata: meta,
+    accountId, nome: t.nome, tipo: t.tipo, numero: t.numero,
+    dataSourceId: t.dataSourceId, metadata: (t.metadata ?? null) as Record<string, unknown> | null,
   }
 }
 
@@ -173,8 +175,9 @@ export async function descreverConta(
 
 /**
  * A ordem DENTRO do dia. As chaves são as mesmas de `/transacoes` (o cabeçalho
- * da coluna alterna `_asc`/`_desc`), menos data e conta. O padrão é a ordem de
- * chegada, que no extrato importado é a ordem do banco.
+ * da coluna alterna `_asc`/`_desc`), menos data e conta. O padrão é a data da
+ * compra (competência) e depois a ordem de chegada, que no extrato importado é a
+ * ordem do banco.
  */
 function ordemDentroDoDia(sort: string | undefined): SQL[] {
   switch (sort) {
@@ -196,7 +199,9 @@ function ordemDentroDoDia(sort: string | undefined): SQL[] {
     case 'legalentity_desc':  return [sql`${legalEntities.name} DESC`]
     case 'contact_asc':       return [sql`${contacts.name} ASC`]
     case 'contact_desc':      return [sql`${contacts.name} DESC`]
-    default:                  return [sql`${transactions.createdAt} ASC`]
+    // Dentro de uma fatura (caixa = vencimento) é a data da compra que ordena;
+    // na conta, a competência quase sempre é a própria data de caixa.
+    default:                  return [sql`${transactions.date} ASC`, sql`${transactions.createdAt} ASC`]
   }
 }
 
@@ -217,7 +222,20 @@ export interface ResumoDoExtrato {
   ultimaData: string | null
   /** Lançamentos da conta anteriores ao saldo inicial — aparecem sem saldo. */
   antesDoSaldoInicial: number
+  /**
+   * Lançamentos que SÃO um saldo de abertura ("IMPLANTAÇÃO DE SALDO", "saldo
+   * anterior") na data do saldo inicial ou depois dela: somados à âncora, contam
+   * o mesmo saldo duas vezes. Visto no Pagseguro 3651 (27/out).
+   */
+  saldosDuplicados: { data: string; valor: number; descricao: string }[]
 }
+
+/**
+ * Descrição de lançamento que é, na verdade, um saldo de abertura. Sobre a
+ * descrição sem acento e em minúsculas — o banco não tem `unaccent`.
+ */
+const PARECE_SALDO_DE_ABERTURA =
+  `translate(lower(description), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc') ~ '(implanta[a-z]* (de |do )?saldo|saldo (inicial|anterior|de abertura)|abertura de saldo)'`
 
 /**
  * O extrato da conta, paginado, com o saldo de cada linha.
@@ -276,7 +294,7 @@ export async function lerExtratoDaConta(
   const where = and(daConta, ...condicoesDaListagem(filtros, { regime: 'caixa' }))
   const inverter = sort === 'date_desc'
 
-  const [rows, [{ total }], [totals], [resumo]] = await Promise.all([
+  const [rows, [{ total }], [totals], [resumo], duplicados] = await Promise.all([
     exec
       .select({
         ...getTableColumns(transactions),
@@ -318,6 +336,16 @@ export async function lerExtratoDaConta(
       ultimaData: sql<string | null>`MAX(${caixa})::text`,
       antes: sql<number>`COUNT(*) FILTER (WHERE NOT ${apos})::int`,
     }).from(transactions).where(daConta),
+    ancora
+      ? exec.select({
+          data: sql<string>`${caixa}::text`,
+          valor: sql<string>`(CASE WHEN ${transactions.direction} = 'inflow' THEN ${transactions.amount} ELSE -${transactions.amount} END)::text`,
+          descricao: transactions.description,
+        }).from(transactions)
+          .where(and(daConta, apos, sql.raw(PARECE_SALDO_DE_ABERTURA)))
+          .orderBy(asc(caixa))
+          .limit(5)
+      : Promise.resolve([]),
   ])
 
   const entradas = Number(resumo.entradas)
@@ -330,6 +358,7 @@ export async function lerExtratoDaConta(
     ultimaData: resumo.ultimaData,
     // Sem âncora, "antes" não tem sentido — não há data de corte.
     antesDoSaldoInicial: ancora ? Number(resumo.antes) : 0,
+    saldosDuplicados: duplicados.map(d => ({ data: d.data, valor: Number(d.valor), descricao: d.descricao })),
   }
 
   return {
@@ -341,6 +370,81 @@ export async function lerExtratoDaConta(
     totals: { inflow: totals.inflow, outflow: totals.outflow },
     resumo: r,
   }
+}
+
+// ─── Cartão de crédito: conferência por FATURA ─────────────────────────────
+//
+// No crédito, saldo corrido pela data de caixa não diz nada: as compras do ciclo
+// caem todas no vencimento (a data de caixa da fatura, princípio 13) junto com o
+// pagamento, e o saldo do dia fica perto de zero. O que se confere com o banco é
+// a FATURA: quanto foi comprado em cada vencimento, quanto foi pago, e o saldo
+// devedor que sobra. Decisão 30.
+//
+// A fatura é a DATA DE CAIXA — é o que a planilha de cartão traz como vencimento.
+// Compra importada sem vencimento fica com caixa = data da compra e vira uma
+// "fatura" de um dia só; a tela marca essas (`semVencimento`).
+
+export interface Fatura {
+  /** A data de caixa do grupo — o vencimento, quando a planilha o trouxe. */
+  vencimento: string
+  compras: number
+  valorCompras: number
+  /** Pagamentos, estornos, créditos — tudo o que entra no cartão. */
+  creditos: number
+  valorCreditos: number
+  primeiraCompra: string | null
+  ultimaCompra: string | null
+  /** Compras − créditos desta fatura. Zero = paga exatamente. */
+  diferenca: number
+  /** O acumulado das diferenças até aqui: o que se deve depois desta fatura. */
+  saldoDevedor: number
+  /** Todas as compras têm caixa = data da compra: não é fatura, é compra sem vencimento. */
+  semVencimento: boolean
+}
+
+export async function lerFaturasDaConta(
+  organizationId: string, accountId: string, exec: Pick<typeof db, 'execute'> = db,
+): Promise<Fatura[]> {
+  const linhas = await exec.execute<{
+    vencimento: string; compras: number; valor_compras: string; creditos: number; valor_creditos: string
+    primeira: string | null; ultima: string | null; com_vencimento: number
+  }>(sql`
+    SELECT COALESCE(t.effective_date, t.date)::text AS vencimento,
+      COUNT(*) FILTER (WHERE t.direction = 'outflow')::int AS compras,
+      COALESCE(SUM(t.amount) FILTER (WHERE t.direction = 'outflow'), 0)::text AS valor_compras,
+      COUNT(*) FILTER (WHERE t.direction = 'inflow')::int AS creditos,
+      COALESCE(SUM(t.amount) FILTER (WHERE t.direction = 'inflow'), 0)::text AS valor_creditos,
+      MIN(t.date) FILTER (WHERE t.direction = 'outflow')::text AS primeira,
+      MAX(t.date) FILTER (WHERE t.direction = 'outflow')::text AS ultima,
+      COUNT(*) FILTER (WHERE t.direction = 'outflow'
+        AND t.effective_date IS NOT NULL AND t.effective_date <> t.date)::int AS com_vencimento
+    FROM transactions t
+    WHERE t.organization_id = ${organizationId}::uuid
+      AND t.account_id = ${accountId}
+      AND t.status <> 'pending'
+    GROUP BY 1
+    ORDER BY 1
+  `)
+
+  // Em centavos, para o acumulado não carregar resto de ponto flutuante.
+  let devedor = 0
+  return linhas.map(l => {
+    const compras = Math.round(Number(l.valor_compras) * 100)
+    const creditos = Math.round(Number(l.valor_creditos) * 100)
+    devedor += compras - creditos
+    return {
+      vencimento: l.vencimento,
+      compras: Number(l.compras),
+      valorCompras: compras / 100,
+      creditos: Number(l.creditos),
+      valorCreditos: creditos / 100,
+      primeiraCompra: l.primeira,
+      ultimaCompra: l.ultima,
+      diferenca: (compras - creditos) / 100,
+      saldoDevedor: devedor / 100,
+      semVencimento: Number(l.compras) > 0 && Number(l.com_vencimento) === 0,
+    }
+  })
 }
 
 /**

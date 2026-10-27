@@ -64,10 +64,22 @@ async function main() {
 
   try {
     await db.transaction(async (tx) => {
+      // Roda contra a PRODUÇÃO: nunca esperar trava nem segurar uma por muito tempo.
+      // Em 27/out uma execução reaplicou a 0034 sobre a tabela em uso, pegou trava
+      // EXCLUSIVA e, quando o processo morreu, a sessão ficou órfã no pooler
+      // segurando-a — e a conferência de saldo travou para todo mundo.
+      await tx.execute(sql`SET LOCAL lock_timeout = '3s'`)
+      await tx.execute(sql`SET LOCAL idle_in_transaction_session_timeout = '60s'`)
       console.log('── 1. estrutura ──')
-      await tx.execute(sql.raw(MIGRATION))
-      await tx.execute(sql.raw(MIGRATION)) // idempotente
-      t(true, 'a 0034 aplica duas vezes sem erro')
+      // Antes da 0034 subir, ela era aplicada aqui (duas vezes, para provar a
+      // idempotência). Aplicada, NÃO se reaplica: o DROP POLICY/TRIGGER pede trava
+      // exclusiva numa tabela em uso e estoura o statement timeout.
+      const [{ ja }] = await tx.execute<{ ja: boolean }>(sql`SELECT to_regclass('account_opening_balances') IS NOT NULL AS ja`)
+      if (!ja) {
+        await tx.execute(sql.raw(MIGRATION))
+        await tx.execute(sql.raw(MIGRATION)) // idempotente
+      }
+      t(true, ja ? 'a 0034 já está aplicada' : 'a 0034 aplica duas vezes sem erro')
       const [est] = await tx.execute<{ rls: boolean; pol: number; trg: number; unq: number }>(sql`
         SELECT (SELECT relrowsecurity FROM pg_class WHERE relname = 'account_opening_balances') AS rls,
                (SELECT COUNT(*)::int FROM pg_policies WHERE tablename = 'account_opening_balances') AS pol,
@@ -88,6 +100,9 @@ async function main() {
       const ancoraData = datas[Math.min(5, datas.length - 1)]
       const ancoraValor = 12345.67
 
+      // A tabela já tem saldos reais: um saldo que alguém tenha informado nesta
+      // conta é tirado DENTRO da transação (volta no ROLLBACK).
+      await apagarSaldoInicial(alvo.org, alvo.conta, tx)
       console.log('\n── 7a. sem âncora ──')
       const sem = await extratoInteiro(tx, alvo.org, alvo.conta)
       t(sem.linhas.length === alvo.n, `lê os ${alvo.n} lançamentos`)
@@ -97,7 +112,7 @@ async function main() {
       console.log('\n── 2/3. com âncora ──')
       const g = await gravarSaldoInicial(alvo.org, alvo.conta, { data: ancoraData, valor: ancoraValor, nota: 'teste' }, null, tx)
       t('ok' in g, `grava o saldo inicial (${ancoraData}, ${ancoraValor})`)
-      const g2 = await gravarSaldoInicial(alvo.org, alvo.conta, { data: ancoraData, valor: ancoraValor }, null, tx)
+      const g2 = await gravarSaldoInicial(alvo.org, alvo.conta, { data: ancoraData, valor: ancoraValor, nota: 'teste' }, null, tx)
       const [{ n: nAncoras }] = await tx.execute<{ n: number }>(sql`
         SELECT COUNT(*)::int AS n FROM account_opening_balances WHERE organization_id = ${alvo.org}::uuid AND account_id = ${alvo.conta}`)
       t('ok' in g2 && nAncoras === 1, 'gravar de novo substitui (uma âncora por conta)')
@@ -196,9 +211,9 @@ async function main() {
       await tx.execute(sql`SAVEPOINT rls2`)
       await tx.execute(sql`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: membro.u, role: 'authenticated' })}, true)`)
       await tx.execute(sql`SET LOCAL ROLE authenticated`)
-      const [{ n: doMembro }] = await tx.execute<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM account_opening_balances`)
+      const [{ n: doMembro }] = await tx.execute<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM account_opening_balances WHERE account_id = ${alvo.conta} AND note = 'teste'`)
       await tx.execute(sql`ROLLBACK TO SAVEPOINT rls2`)
-      t(doMembro === 1, 'RLS: um membro da organização enxerga a âncora')
+      t(doMembro === 1, 'RLS: um membro da organização enxerga a âncora de teste (a tabela já tem saldos reais)')
 
       await apagarSaldoInicial(alvo.org, alvo.conta, tx)
       t((await lerSaldoInicial(alvo.org, alvo.conta, tx)) == null, 'apagar remove a âncora')
@@ -218,6 +233,89 @@ async function main() {
         const [{ n: velho }] = await tx.execute<{ n: number }>(sql`
           SELECT COUNT(*)::int AS n FROM transactions WHERE organization_id = ${alvo.org}::uuid AND ${crua}`)
         t(Number(novo) === Number(velho), `${nome}: ${novo} = ${velho}`)
+      }
+
+      console.log('\n── 10. pré-pago e implantação de saldo (27/out, sessão 2) ──')
+      const { lerTipoDeConta, temSaldoCorrido, ROTULO_DE_CONTA } = await import('@/lib/import-contract')
+      t(['Cartão pré-pago', 'cartao pre pago', 'Pré-pago', 'PREPAID_CARD'].every(x => lerTipoDeConta(x) === 'PREPAID_CARD'),
+        'planilha: "Cartão pré-pago", "pre pago", "Pré-pago" viram PREPAID_CARD')
+      t(['Cartão', 'cartão de crédito', ROTULO_DE_CONTA.CREDIT_CARD].every(x => lerTipoDeConta(x) === 'CREDIT_CARD'),
+        '"Cartão" sozinho continua sendo crédito (as planilhas já escritas)')
+      t(temSaldoCorrido('PREPAID_CARD') && temSaldoCorrido('OTHER') && !temSaldoCorrido('CREDIT_CARD'),
+        'pré-pago tem saldo corrido; crédito não')
+      const [pp] = await tx.execute<{ org: string; conta: string; data: string }>(sql`
+        SELECT organization_id::text AS org, account_id AS conta, MIN(COALESCE(effective_date, date))::text AS data
+          FROM transactions WHERE upper(description) LIKE '%IMPLANTA%SALDO%' AND account_id IS NOT NULL
+         GROUP BY 1, 2 LIMIT 1`)
+      if (pp) {
+        await gravarSaldoInicial(pp.org, pp.conta, { data: pp.data, valor: 0 }, null, tx)
+        const noDia = await lerExtratoDaConta(pp.org, pp.conta, {}, tx)
+        t(noDia.resumo.saldosDuplicados.length >= 1, `âncora no dia da implantação (${pp.data}): avisa da duplicidade`)
+        const seguinte = new Date(`${pp.data}T12:00:00Z`); seguinte.setUTCDate(seguinte.getUTCDate() + 1)
+        await gravarSaldoInicial(pp.org, pp.conta, { data: seguinte.toISOString().slice(0, 10), valor: 0 }, null, tx)
+        const depois = await lerExtratoDaConta(pp.org, pp.conta, {}, tx)
+        t(depois.resumo.saldosDuplicados.length === 0, 'âncora no dia seguinte: sem aviso')
+      } else {
+        t(false, 'não achei lançamento de implantação de saldo para testar')
+      }
+
+      console.log('\n── 11. cartão de crédito: conferência por fatura ──')
+      const { lerFaturasDaConta } = await import('@/lib/account-ledger')
+      const cartoes = await tx.execute<{ org: string; conta: string; nome: string }>(sql`
+        SELECT DISTINCT t.organization_id::text AS org, t.account_id AS conta, t.account_name AS nome
+          FROM transactions t JOIN data_sources ds ON ds.id = t.data_source_id
+         WHERE ds.provider = 'manual' AND t.account_type = 'CREDIT_CARD' AND t.status <> 'pending'`)
+      t(cartoes.length > 0, `${cartoes.length} cartões de crédito manuais para testar`)
+      for (const c of cartoes) {
+        const fs = await lerFaturasDaConta(c.org, c.conta, tx)
+        const [cru] = await tx.execute<{ compras: string; creditos: string; n: number; grupos: number }>(sql`
+          SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'outflow'), 0)::text AS compras,
+                 COALESCE(SUM(amount) FILTER (WHERE direction = 'inflow'), 0)::text AS creditos,
+                 COUNT(*)::int AS n, COUNT(DISTINCT COALESCE(effective_date, date))::int AS grupos
+            FROM transactions WHERE organization_id = ${c.org}::uuid AND account_id = ${c.conta} AND status <> 'pending'`)
+        const somaC = fs.reduce((s, f) => s + Math.round(f.valorCompras * 100), 0)
+        const somaP = fs.reduce((s, f) => s + Math.round(f.valorCreditos * 100), 0)
+        t(fs.length === cru.grupos && somaC === cent(cru.compras) && somaP === cent(cru.creditos),
+          `${c.nome}: ${fs.length} faturas somam as compras e os créditos da conta, ao centavo`)
+        t(cent(fs[fs.length - 1].saldoDevedor) === cent(cru.compras)! - cent(cru.creditos)!,
+          `${c.nome}: saldo devedor final = compras − créditos (${fs[fs.length - 1].saldoDevedor})`)
+        t(fs.every((f, i) => i === 0 || fs[i - 1].vencimento < f.vencimento), `${c.nome}: faturas em ordem de vencimento`)
+        // A fatura aberta: a leitura da tabela presa no vencimento traz exatamente os lançamentos dela.
+        let todosBatem = true
+        for (const f of fs) {
+          const e = await lerExtratoDaConta(c.org, c.conta, { from: f.vencimento, to: f.vencimento, pageSize: 1000 }, tx)
+          if (e.total !== f.compras + f.creditos) todosBatem = false
+          if (cent(e.totals.outflow) !== cent(f.valorCompras) || cent(e.totals.inflow) !== cent(f.valorCreditos)) todosBatem = false
+          if (!e.rows.every((r, i) => i === 0 || e.rows[i - 1].date <= r.date)) todosBatem = false
+        }
+        t(todosBatem, `${c.nome}: cada fatura aberta traz os lançamentos dela, ordenados pela data da compra`)
+      }
+      // Conta manual: o tipo vem do CADASTRO, não do lançamento — é o tipo que
+      // escolhe entre saldo e fatura.
+      const divergentes = await tx.execute<{ org: string; conta: string; cadastro: string; lancamento: string }>(sql`
+        SELECT ds.organization_id::text AS org, ds.metadata->>'accountId' AS conta,
+               ds.metadata->'accounts'->0->>'subtype' AS cadastro,
+               (SELECT t.account_type FROM transactions t WHERE t.organization_id = ds.organization_id
+                  AND t.account_id = ds.metadata->>'accountId' ORDER BY t.date DESC, t.created_at DESC LIMIT 1) AS lancamento
+          FROM data_sources ds WHERE ds.provider = 'manual'`)
+      let cadastroManda = true
+      for (const d of divergentes) {
+        const c = await descreverConta(d.org, d.conta, tx)
+        if (c?.tipo !== d.cadastro) cadastroManda = false
+      }
+      const ndiv = divergentes.filter(d => d.lancamento && d.lancamento !== d.cadastro).length
+      t(cadastroManda, `conta manual: o tipo vem do cadastro (${divergentes.length} contas, ${ndiv} com lançamento de tipo diferente)`)
+
+      const qck = cartoes.find(c => c.conta === 'arq:cartao-qck')
+      if (qck) {
+        const fs = await lerFaturasDaConta(qck.org, qck.conta, tx)
+        t(fs.every(f => f.diferenca === 0 && !f.semVencimento), 'Cartão QCK: toda fatura paga exatamente e com vencimento')
+      }
+      const quick = cartoes.find(c => c.conta === 'arq:cartao-quick')
+      if (quick) {
+        const fs = await lerFaturasDaConta(quick.org, quick.conta, tx)
+        t(fs.filter(f => f.semVencimento).length >= 1 && !fs.find(f => f.vencimento === '2026-09-10')?.semVencimento,
+          `Cartão Quick: ${fs.filter(f => f.semVencimento).length} grupos sem vencimento marcados; 10/09 é fatura de verdade`)
       }
 
       throw new Reverter()

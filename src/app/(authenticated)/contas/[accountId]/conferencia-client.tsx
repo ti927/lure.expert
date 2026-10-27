@@ -6,10 +6,9 @@
 // Decisão 29 (por que o saldo volta ao app, agora com âncora).
 
 import { useState, useTransition } from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Landmark, Pencil, Scale, CreditCard, Loader2 } from 'lucide-react'
+import { Pencil, Scale, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,26 +17,18 @@ import {
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/states/empty-state'
 import { PartialDataBanner } from '@/components/states/partial-data-banner'
-import { cn } from '@/lib/utils'
 import { parseAmount } from '@/lib/format'
-import { rotuloDaConta } from '@/lib/import-contract'
 import { COLUNAS_CONFERENCIA } from '@/lib/column-widths'
-import { salvarSaldoInicial, removerSaldoInicial } from '@/server/account-ledger'
+import { salvarSaldoInicial, removerSaldoInicial, type ContaNaTela } from '@/server/account-ledger'
 import {
   TransactionsTable, formatBRL, type TxRow, type DimensionOptions, type TransactionsSearchParams,
 } from '@/components/transacoes-shared/transactions-table'
 import type { ResumoDoExtrato } from '@/lib/account-ledger'
+import { CabecalhoDaConta, Cartao, dataBR } from './cabecalho-da-conta'
+import { LancarManual, ManuaisApagados } from './lancamento-manual'
 
 interface Props {
-  conta: {
-    accountId: string
-    nome: string | null
-    tipo: string | null
-    numero: string | null
-    logoUrl: string | null
-    badge: string | null
-    conexao: string | null
-  }
+  conta: ContaNaTela
   extrato: {
     rows: TxRow[]
     total: number
@@ -51,34 +42,6 @@ interface Props {
   searchParams: TransactionsSearchParams
 }
 
-function dataBR(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const [a, m, d] = iso.split('-')
-  return `${d}/${m}/${a}`
-}
-
-function Cartao({ titulo, valor, detalhe, tom, acao }: {
-  titulo: string
-  valor: string
-  detalhe?: string
-  tom?: 'positivo' | 'negativo' | 'neutro'
-  acao?: React.ReactNode
-}) {
-  return (
-    <div className="rounded-lg border bg-card px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">{titulo}</p>
-        {acao}
-      </div>
-      <p className={cn('mt-1 text-lg font-semibold tabular-nums',
-        tom === 'positivo' && 'text-emerald-600', tom === 'negativo' && 'text-rose-600')}>
-        {valor}
-      </p>
-      {detalhe && <p className="text-[11px] text-muted-foreground">{detalhe}</p>}
-    </div>
-  )
-}
-
 export default function ConferenciaClient({ conta, extrato, semConta, options, searchParams }: Props) {
   const router = useRouter()
   const r = extrato.resumo
@@ -88,10 +51,6 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
   const [valor, setValor] = useState(ancora ? ancora.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '')
   const [nota, setNota] = useState(ancora?.nota ?? '')
   const [salvando, startSalvar] = useTransition()
-
-  const rotulo = rotuloDaConta({ accountName: conta.nome, accountType: conta.tipo, accountNumber: conta.numero })
-    ?? conta.accountId
-  const ehCartao = conta.tipo === 'CREDIT_CARD'
 
   function abrirEdicao() {
     setData(ancora?.data ?? r.ultimaData ?? '')
@@ -124,36 +83,9 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
   }
 
   const cabecalho = (
-    <div className="shrink-0 px-6 pt-5 pb-3 space-y-4">
-      <div className="flex items-center gap-3">
-        <Link href="/contas" className="text-muted-foreground hover:text-foreground" title="Voltar para Contas">
-          <ArrowLeft className="h-4 w-4" />
-        </Link>
-        {conta.logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={conta.logoUrl} alt="" className="h-8 w-8 rounded object-contain" />
-        ) : (
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-muted">
-            <Landmark className="h-4 w-4 text-muted-foreground" strokeWidth={1.5} />
-          </div>
-        )}
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
-            <span className="truncate">{rotulo}</span>
-            {conta.badge && (
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-700 ring-1 ring-slate-200">
-                {conta.badge}
-              </span>
-            )}
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            Conferência de saldo{conta.conexao && conta.conexao !== conta.nome ? ` · ${conta.conexao}` : ''}
-            {' · '}{extrato.total} lançamento{extrato.total !== 1 ? 's' : ''}
-          </p>
-        </div>
-      </div>
-
-      {!ehCartao && (ancora ? (
+    <CabecalhoDaConta conta={conta} contexto={`Conferência de saldo · ${extrato.total} lançamento${extrato.total !== 1 ? 's' : ''}`}
+      acoes={conta.manual ? <><ManuaisApagados accountId={conta.accountId} /><LancarManual accountId={conta.accountId} categories={options.categories} /></> : undefined}>
+      {ancora ? (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Cartao
             titulo={`Saldo inicial · início de ${dataBR(ancora.data)}`}
@@ -189,12 +121,21 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
           </div>
           <Button size="sm" onClick={abrirEdicao}>Informar saldo inicial</Button>
         </div>
-      ))}
-    </div>
+      )}
+    </CabecalhoDaConta>
   )
 
   const avisos = (
     <>
+      {ancora && r.saldosDuplicados.length > 0 && (
+        <div className="shrink-0 px-6 pb-2">
+          <PartialDataBanner
+            variant="warning"
+            message={`O saldo pode estar contado duas vezes: ${r.saldosDuplicados.map(d =>
+              `"${d.descricao}" de ${dataBR(d.data)} (${formatBRL(d.valor)})`).join(', ')} ${r.saldosDuplicados.length > 1 ? 'são lançamentos' : 'é um lançamento'} de saldo de abertura, na data do saldo inicial ou depois dela. Informe o saldo inicial no dia seguinte a ${r.saldosDuplicados.length > 1 ? 'eles' : 'ele'}, ou zero no dia ${r.saldosDuplicados.length > 1 ? 'deles' : 'dele'}.`}
+          />
+        </div>
+      )}
       {ancora && r.antesDoSaldoInicial > 0 && (
         <div className="shrink-0 px-6 pb-2">
           <PartialDataBanner
@@ -258,20 +199,6 @@ export default function ConferenciaClient({ conta, extrato, semConta, options, s
       </DialogContent>
     </Dialog>
   )
-
-  // Cartão de crédito: o "saldo" dele é fatura — outra lógica, fora da v1.
-  if (ehCartao) {
-    return (
-      <div className="flex flex-col h-full overflow-hidden">
-        {cabecalho}
-        <EmptyState
-          icon={<CreditCard className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
-          title="Conferência de cartão ainda não disponível"
-          description="Num cartão, o saldo é a fatura: compras no período e o pagamento dela. A conferência por saldo corrido vale para conta corrente, poupança e caixa."
-        />
-      </div>
-    )
-  }
 
   if (extrato.total === 0 && !Object.values(searchParams).some(Boolean)) {
     return (

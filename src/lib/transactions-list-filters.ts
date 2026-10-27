@@ -38,6 +38,8 @@ export interface FiltrosDaListagem {
   reportType?: string
   amountMin?: string
   amountMax?: string
+  /** `manual` = lançado à mão (`metadata.origem`); `importado` = todo o resto. */
+  origem?: string
 }
 
 /** A data de caixa: quando o dinheiro se moveu. Em branco = a competência. */
@@ -84,6 +86,9 @@ export function condicoesDaListagem(
 
   const acctFilter = parseMultiFilter(f.accountId)
   if (acctFilter.ids.length > 0) conditions.push(inArray(transactions.accountId, acctFilter.ids))
+
+  if (f.origem === 'manual') conditions.push(sql`${transactions.metadata}->>'origem' = 'manual'`)
+  else if (f.origem === 'importado') conditions.push(sql`${transactions.metadata}->>'origem' IS DISTINCT FROM 'manual'`)
 
   if (f.reportType === 'balance_sheet') {
     conditions.push(eq(documents.reportType, 'balance_sheet'))

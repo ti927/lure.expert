@@ -151,7 +151,7 @@ de caixa no dia errado.
 | Sentido | ✅ | `Entrada` ou `Saída` |
 | Moeda | | Em branco = BRL |
 | Conta | | Nome da conta ou cartão. Vence o cabeçalho, e precisa já existir no cadastro |
-| Tipo de conta | | `C. Corrente`, `Poupança`, `Cartão`, `Adquirente`, `Outra` |
+| Tipo de conta | | `C. Corrente`, `Poupança`, `Cartão de crédito` (ou só `Cartão`), `Cartão pré-pago`, `Adquirente`, `Outra` |
 | Número da conta | | Agência/conta, ou final do cartão |
 | Natureza | | Código ou nome do plano de contas |
 | Centro de custo | | *(reservada)* |

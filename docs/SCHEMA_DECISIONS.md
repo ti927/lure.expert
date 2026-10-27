@@ -1789,3 +1789,66 @@ pela mesma regra.
 cálculo independente, corrido andando pelo movimento de cada linha, 4 ordens do dia com fechamento
 idêntico, 4 filtros sem mudar saldo, paginação, RLS nos dois sentidos, e o filtro de `/transacoes`
 igual ao SQL antigo.
+
+---
+
+## Decisão 30 — Conta manual: pré-pago, fatura e lançamento à mão (27/out)
+
+**Pedido do Julio:** o mecanismo de conferência de saldo (Decisão 29) para as contas criadas à mão.
+O levantamento no banco mostrou que o problema não era o dado — as 8 contas manuais da Quick Aviação
+têm todos os lançamentos vinculados — e sim o **tipo**: 5 estavam como "Cartão", e a v1 bloqueava
+cartão. Desses 5, quatro (Pagseguro) são **pré-pagos** — recarga entra, compra sai — e só dois são
+crédito de verdade (QCK, Quick).
+
+**1. Tipo novo `PREPAID_CARD` ("Cartão pré-pago").** O pré-pago tem saldo como uma conta, e a
+conferência por saldo serve sem mudança. Uma regra só decide a tela: `temSaldoCorrido(tipo)` em
+`import-contract.ts` — crédito não tem, todo o resto tem. "Cartão" sozinho na planilha **continua
+sendo crédito**: é o que as planilhas já escritas dizem. O rótulo do crédito passou a "Cartão de
+crédito". **Conta manual lê o tipo do CADASTRO**, não do lançamento mais recente: o tipo escolhe a
+tela, e o lançamento pode carregar o tipo de uma importação antiga.
+
+**2. Saldo de abertura contado duas vezes.** O Pagseguro 3651 tem um lançamento "IMPLANTAÇÃO DE
+SALDO". Âncora no dia dele (ou antes) soma o mesmo saldo duas vezes. A conferência avisa quando um
+lançamento com cara de saldo de abertura cai na data do saldo inicial ou depois.
+
+**3. Cartão de crédito confere por FATURA.** Pela data de caixa, todas as compras de um ciclo caem
+no vencimento junto com o pagamento — o saldo diário fica perto de zero e não diz nada. A tela vira
+uma lista de vencimentos (a data de caixa é o vencimento, princípio 13): compras, pagamentos e
+créditos, diferença e **saldo devedor acumulado**. Cada fatura abre em
+`/contas/[conta]/fatura/[vencimento]`, na tabela de transações. No QCK toda fatura fecha exata; no
+Quick, compras importadas sem vencimento caem em "faturas" de um dia — marcadas **sem vencimento**,
+com aviso. **Cartão de crédito do Pluggy fica fora**: o sync grava a data da compra como caixa. O
+Pluggy traz o `billId` de cada lançamento (em parte deles) e tem a API de faturas com **vencimento e
+total oficial do banco** — é o caminho para eles, e é frente própria.
+
+**4. Lançamento à mão, só em conta manual.** Na conta do Pluggy o banco manda os lançamentos (um
+manual ali viraria duplicata), e o lançamento do Pluggy apagado **volta** por ressincronização com
+data de corte (o sync deduplica pelo id do Pluggy, e o apagado deixa de existir) — mas volta cru,
+sem a classificação, e só dentro do histórico que o banco guarda. O manual não tem de onde voltar.
+
+- **A autoria mora no `metadata` do lançamento** (`origem: 'manual'`, quem, quando, navegador e
+  sistema, IP, identificador do navegador), carimbada pelo **servidor**. O identificador do
+  navegador é um código aleatório lembrado no `localStorage`: diferencia aparelhos, não os prova, e
+  é dito assim. Nenhum site identifica a máquina física.
+- **`external_id = man:<uuid>`** — prefixo próprio, nunca colide com a dedup de arquivo (`arq:`).
+- **Selo "Manual"** na tabela (em `/transacoes` também), com a autoria ao passar o mouse, e filtro
+  de **origem** (manual × importados e sincronizados) nas duas telas.
+- **Apagar guarda o retrato.** `deleteTransactions` registra, na mesma transação do DELETE, o
+  evento `lancamento_manual.apagado` com a linha inteira e as partes do rateio — só dos manuais.
+  **Restaurar** (90 dias) devolve com o **mesmo id** via `jsonb_populate_record`, então todas as
+  colunas voltam idênticas e restaurar duas vezes é recusado pela chave primária.
+- `agent_events` registra criação, apagamento e restauração. Ele não tem coluna de usuário: o autor
+  vai no `payload`.
+
+**Sem migration.** O tipo de conta é texto, a fatura é leitura, a autoria é `metadata`.
+
+**Verificado:** `verify-conferencia-saldo` 81/81 (faturas dos 6 cartões manuais somando compras e
+créditos ao centavo, cada fatura aberta trazendo os seus lançamentos) e `verify-lancamento-manual`
+36/36 (User-Agent, autoria, recusas, filtro de origem sem mudar saldo, apagar e restaurar com o
+rateio), os dois contra a produção em transação revertida.
+
+**Lição operacional da sessão.** Uma execução do script de verificação reaplicou a 0034 sobre a
+tabela já em uso: o `DROP POLICY` pegou trava EXCLUSIVA, o processo morreu e a sessão ficou órfã no
+pooler (`ClientRead`), travando a conferência em produção até o Julio rodar `pg_terminate_backend`.
+Os scripts contra a produção agora começam com `SET LOCAL lock_timeout = '3s'` e não reaplicam
+migration já aplicada.
