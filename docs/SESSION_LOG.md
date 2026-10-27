@@ -12,6 +12,31 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Conta manual na conferência: pré-pago, fatura, lançamento à mão (27/out) — Decisão 30
+
+Merge `538be34`, sem migration. Branch `feat/conferencia-manual`, 3 commits (uma sessão cada).
+
+- **Pré-pago:** `lib/import-contract.ts` — `PREPAID_CARD` em `TIPOS_DE_CONTA`, rótulo "Cartão pré-pago", apelidos ("pré-pago", "pre pago"), `temSaldoCorrido` (regra única crédito × resto); rótulo do crédito vira "Cartão de crédito", "Cartão" sozinho segue crédito. `lib/accounts.ts` — pré-pago é `data_sources.type='bank'`.
+- **Saldo de abertura duplicado:** `lerExtratoDaConta` devolve `resumo.saldosDuplicados` (regex sobre a descrição sem acento: implantação/saldo inicial/anterior/abertura, na data da âncora ou depois). Aviso na conferência.
+- **Fatura:** `lerFaturasDaConta` (agrupa pela data de caixa; diferença e saldo devedor em centavos; `semVencimento` quando nenhuma compra tem caixa ≠ compra). Telas `faturas-client.tsx` e `fatura/[vencimento]/` (page + client, com anterior/próxima). `descreverConta` lê o tipo da conta manual do **cadastro**. A ordem padrão dentro do dia passou a ser a data da compra e depois a chegada.
+- **Lançamento à mão:** `lib/lancamento-manual.ts` (criar, `registrarApagamentoDeManuais`, `listarManuaisApagados`, `restaurarLancamentoManual` via `jsonb_populate_record`, `descreverUserAgent`), `lib/lancamento-manual-types.ts` (client-safe: `ehManual`, `descreverAutoria`), `server/lancamento-manual.ts` (IP de `x-forwarded-for`, UA dos headers, e-mail do Supabase Auth), `contas/[accountId]/lancamento-manual.tsx` (Lançar + Apagados). `deleteTransactions` guarda o retrato na mesma transação do DELETE. Filtro `origem` em `lib/transactions-list-filters.ts`, selo "Manual" e seletor de origem em `TransactionsTable`.
+- **Refatorações:** `cabecalho-da-conta.tsx` (cabeçalho + `Cartao` + `dataBR`, com `acoes`), `pagina-da-conta.ts` (o Next só aceita exports conhecidos em `page.tsx`), `server/account-ledger.ts` com `ContaNaTela`/`contaNaTela`.
+- **Verificado:** `verify-conferencia-saldo` 81/81, `verify-lancamento-manual` (novo) 36/36, larguras 37/37, contrato de importação, conta por linha 52/52 e edição de conta 20/20 — contra a produção, revertidos.
+
+**Incidente:** uma execução do script de conferência reaplicou a 0034 sobre a tabela em uso; com o processo morto, a sessão ficou órfã no pooler (`ClientRead`) segurando `AccessExclusiveLock` e a conferência travou em produção ~15 min, até Julio rodar `pg_terminate_backend` (o auto mode recusou fazê-lo). Correção: `lock_timeout = '3s'` e `idle_in_transaction_session_timeout` nos scripts, sem reaplicar migration aplicada.
+
+**Pendentes:** fatura dos cartões do Pluggy (`billId` + `fetchCreditCardBills`); lixeira geral; a tela ainda não foi vista pelo Julio.
+
+### ✅ Conferência de saldo (27/out) — Decisão 29
+
+Migration **0034** (`account_opening_balances`, aplicada por Julio pelo Studio), merge `5601f51`.
+
+- `lib/account-ledger.ts` — saldo inicial, `lerExtratoDaConta` (corrido e fechamento por janela sobre a conta inteira, antes de filtros e paginação; `LEAD` marca a última linha VISÍVEL do dia), `descreverConta`, `contarLancamentosSemConta`.
+- `lib/transactions-list-filters.ts` — os filtros de `getTransactions`, movidos, com `regime`.
+- `components/transacoes-shared/transactions-table.tsx` — a tabela de `/transacoes`, movida (`contas` opcional, `modoSaldo`); `transacoes-client.tsx` virou casca.
+- `/contas/[accountId]` (page, loading, error, client), `server/account-ledger.ts`, links em `/contas`. `COLUNAS_CONFERENCIA` em `lib/column-widths.ts`.
+- `scripts/verify-conferencia-saldo.ts` 48/48, `scripts/confere-0034.ts`.
+
 ### ✅ Conta manual editável (20/out)
 
 - `src/lib/accounts.ts` — `aliasesDe`, `metadadosPreservando`, `editarContaManual`, `colunasDeConta`; `garantirContaManual` acha por apelido, devolve a identidade gravada e preserva o metadata; `mapaDeContasManuais` indexa apelidos.
