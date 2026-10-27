@@ -6,28 +6,18 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { db } from '@/db'
 import { transactions, categories, documents, costCenters, businessUnits, legalEntities, contacts, dataSources } from '@/db/schema'
-import { eq, and, desc, asc, count, inArray, sql, ilike, gte, lte, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
+import { eq, and, desc, asc, count, inArray, sql, isNull, ne, SQL, getTableColumns } from 'drizzle-orm'
 import { sendCategorizationEvents } from '@/lib/inngest'
 import { sanitizePageSize } from '@/lib/transactions-page-size'
 import {
-  dimensionExistsFilter, naturezasDoRateioSql, rateioComParteSemNaturezaSql,
+  naturezasDoRateioSql, rateioComParteSemNaturezaSql,
 } from '@/lib/sql-dimensions'
 import { estimarCustoCategorizacao } from '@/lib/ai-pricing'
 import {
   dimensionSchema, assertLeafCategory, classificarPorIds, semRateio, type DimensionData,
 } from '@/lib/transactions-write'
 import { recusaDePapel } from '@/lib/members-types'
-
-// Parseia filtros multi-select: "id1,id2,__none__,__classified__" → { ids, includeNone, includeClassified }
-function parseMultiFilter(param: string | undefined): { ids: string[]; includeNone: boolean; includeClassified: boolean } {
-  if (!param) return { ids: [], includeNone: false, includeClassified: false }
-  const parts = param.split(',').map(p => p.trim()).filter(Boolean)
-  return {
-    includeNone: parts.includes('__none__'),
-    includeClassified: parts.includes('__classified__'),
-    ids: parts.filter(p => p !== '__none__' && p !== '__classified__'),
-  }
-}
+import { condicoesDaListagem } from '@/lib/transactions-list-filters'
 
 interface GetTransactionsParams {
   page?: number
@@ -58,45 +48,12 @@ export async function getTransactions(params: GetTransactionsParams = {}) {
   const conditions: SQL[] = [
     eq(transactions.organizationId, organizationId),
     ne(transactions.status, 'pending'),
+    // Os filtros moram em `/lib` porque a conferência de saldo usa os mesmos.
+    ...condicoesDaListagem({
+      q, from, to, direction, category, costCenter, businessUnit, legalEntity, contact,
+      documentId, accountId, reportType, amountMin, amountMax,
+    }),
   ]
-
-  if (q?.trim()) conditions.push(ilike(transactions.description, `%${q.trim()}%`))
-  if (from) conditions.push(gte(transactions.date, from))
-  if (to) conditions.push(lte(transactions.date, to))
-  if (direction === 'inflow' || direction === 'outflow') conditions.push(eq(transactions.direction, direction))
-  if (amountMin) conditions.push(gte(sql`${transactions.amount}::numeric`, sql`${amountMin}::numeric`))
-  if (amountMax) conditions.push(lte(sql`${transactions.amount}::numeric`, sql`${amountMax}::numeric`))
-
-  // Natureza pergunta às LINHAS, como as dimensões: com rateio ela vive nas partes.
-  const catFilter = dimensionExistsFilter(transactions.id, 'category_id', parseMultiFilter(category))
-  if (catFilter) conditions.push(catFilter)
-
-  // As quatro dimensões filtram pelas LINHAS do lançamento, não pela coluna
-  // dele: com rateio a coluna do pai é nula e a classificação vive nas partes.
-  // A listagem segue sendo uma linha por lançamento — só a pergunta mudou.
-  const ccFilter = dimensionExistsFilter(transactions.id, 'cost_center_id', parseMultiFilter(costCenter))
-  if (ccFilter) conditions.push(ccFilter)
-
-  const buFilter = dimensionExistsFilter(transactions.id, 'business_unit_id', parseMultiFilter(businessUnit))
-  if (buFilter) conditions.push(buFilter)
-
-  const leFilter = dimensionExistsFilter(transactions.id, 'legal_entity_id', parseMultiFilter(legalEntity))
-  if (leFilter) conditions.push(leFilter)
-
-  const ctFilter = dimensionExistsFilter(transactions.id, 'contact_id', parseMultiFilter(contact))
-  if (ctFilter) conditions.push(ctFilter)
-
-  const docFilter = parseMultiFilter(documentId)
-  if (docFilter.ids.length > 0) conditions.push(inArray(transactions.documentId, docFilter.ids))
-
-  const acctFilter = parseMultiFilter(accountId)
-  if (acctFilter.ids.length > 0) conditions.push(inArray(transactions.accountId, acctFilter.ids))
-
-  if (reportType === 'balance_sheet') {
-    conditions.push(eq(documents.reportType, 'balance_sheet'))
-  } else if (reportType === 'other') {
-    conditions.push(ne(documents.reportType, 'balance_sheet'))
-  }
 
   const whereClause = and(...conditions)
 
