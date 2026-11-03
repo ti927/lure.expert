@@ -82,18 +82,21 @@ function ReconciliationCard({
   onSkip: () => void
   isPending: boolean
 }) {
+  const pendente = row.tipo === 'pendente'
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center gap-3">
         <ScoreBadge score={row.score} />
         <span className="text-xs text-slate-400">
-          O expert identificou uma possível duplicata
+          {pendente
+            ? 'O banco pode ter efetivado esta compra pendente com outro registro'
+            : 'O expert identificou uma possível duplicata'}
         </span>
       </div>
 
       <div className="flex gap-3">
         <TxSide
-          label="Importação manual"
+          label={pendente ? 'Pendente no banco' : 'Importação manual'}
           date={row.date}
           description={row.description}
           amount={row.amount}
@@ -105,7 +108,7 @@ function ReconciliationCard({
         </div>
 
         <TxSide
-          label="Banco conectado"
+          label={pendente ? 'Efetivada no banco' : 'Banco conectado'}
           date={row.pluggy.date}
           description={row.pluggy.description}
           amount={row.pluggy.amount}
@@ -151,7 +154,9 @@ export default function ReconciliacaoClient({ rows, total, pages, page }: Props)
       if ('error' in result) {
         toast.error(result.error)
       } else {
-        toast.success('Duplicata confirmada. A importação manual foi marcada como duplicata.')
+        toast.success(row.tipo === 'pendente'
+          ? 'Duplicata confirmada. A pendente saiu das somas.'
+          : 'Duplicata confirmada. A importação manual foi marcada como duplicata.')
         router.refresh()
       }
       setProcessingId(null)
@@ -182,7 +187,7 @@ export default function ReconciliacaoClient({ rows, total, pages, page }: Props)
         </div>
         <EmptyState
           title="Nenhuma duplicata aguardando revisão"
-          description="O expert não identificou transações importadas com possível duplicata no banco conectado."
+          description="O expert não identificou lançamentos que possam estar em dobro."
         />
       </div>
     )
