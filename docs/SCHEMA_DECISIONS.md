@@ -1852,3 +1852,34 @@ tabela já em uso: o `DROP POLICY` pegou trava EXCLUSIVA, o processo morreu e a 
 pooler (`ClientRead`), travando a conferência em produção até o Julio rodar `pg_terminate_backend`.
 Os scripts contra a produção agora começam com `SET LOCAL lock_timeout = '3s'` e não reaplicam
 migration já aplicada.
+
+## Decisão 31 — Sync do Pluggy: data em Brasília, releitura que atualiza, pendente que sai (03/nov)
+
+**Origem:** relatório de 01/11 do agente do app.lure (`relatorio-pluggy-lure-expert.md`, na raiz,
+fora do git), com 4 defeitos. Todos conferidos no código e no banco antes de codificar. Julio
+decidiu: corrigir as datas antigas (inclusive meses fechados), mandar os pares pendente × efetivada
+para a fila de duplicatas, e tirar das somas a pendente que o Pluggy deixou de devolver.
+
+- **Data.** O sync gravava `toISOString()` (UTC); `T02:59:59Z` é 23:59 do dia anterior em Brasília.
+  530 de 5.983 lançamentos. `dataEmBrasilia` (`lib/pluggy-sync.ts`) usa `America/Sao_Paulo`, não −3.
+- **Releitura atualiza.** `onConflictDoNothing` virou upsert (`gravarLancamentosPluggy`): `raw_data`
+  sempre; data, caixa, valor e descrição **só se ainda forem os que o Pluggy mandou da outra vez** —
+  editado à mão, casado com NF-e ou rateado (o gatilho recusaria valor novo) fica. `setWhere` no
+  `raw_data`: releitura sem mudança não escreve. `xmax = 0` separa a linha nova: só ela vai à
+  categorização e à conciliação.
+- **Pendente que sumiu** sai das somas como `status = 'duplicate'` (o que toda leitura analítica já
+  exclui), com `duplicate_of` na gêmea efetivada quando há e `metadata.motivoSubstituicao`. Só dentro
+  da **cobertura**: depois do dia seguinte ao início da janela e não antes da data mais antiga que o
+  Pluggy devolveu; conta que voltou vazia não marca nada. Não apaga.
+- **Janela.** `lastTransactionFetchedAt` grava o FIM lido (gravava o início e nunca avançava). Como
+  a janela agora anda, ela é estendida até a pendente ativa mais antiga, com teto de 45 dias.
+- **Webhook** aceita `?token=` contra `PLUGGY_WEBHOOK_SECRET`; sem a variável, aceita como antes.
+- **0035 (só dados):** alinha as 530 datas e põe 34 pendentes com gêmea na fila
+  (`metadata.reconciliationKind = 'pendente'`); a fila ganhou rótulos para esse caso. Eram 35 na
+  medida com a data errada: corrigida, uma das gêmeas fica a 4 dias, fora da janela de 3.
+
+**Fora, declarado:** o defeito 3 (reconectar o mesmo banco cria outra conexão — hoje nenhuma conta
+tem duas conexões ativas) e a assinatura HMAC, que o Pluggy não oferece.
+
+**Verificado:** `scripts/verify-pluggy-sync.ts` 39/39, contra a produção em transação revertida
+(organização descartável para o upsert e a substituição; a 0035 aplicada sobre a base real e medida).

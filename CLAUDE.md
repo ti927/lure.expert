@@ -301,6 +301,21 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
+**EM ANDAMENTO — 03/nov: HARDENING DO SYNC DO PLUGGY, no branch , NÃO subiu.**
+Origem:  (raiz, fora do git). Ver **Decisão 31**. Verificado 39/39 + build limpo.
+**Roteiro para subir, nesta ordem:**
+1. Julio diz "pode subir" → merge do branch no  + push (é o deploy). Conferir o deploy pela API do GitHub.
+2. **Depois** do deploy, Julio roda  no SQL Editor do Studio
+   (só dados: 530 datas + 34 pares na fila). Nessa ordem, nada entra com data UTC no intervalo.
+3. Rodar  de novo: o bloco da 0035 deve achar **0** datas UTC antes (já aplicada).
+4. Opcional, depois:  na Vercel +  na URL do webhook no painel da
+   Pluggy + redeploy. Só a variável sem a URL = webhooks recusados (o cron segue).
+**Efeito esperado:** a primeira releitura de cada conexão usa a janela longa antiga e atualiza de uma vez o status
+dos ~1.631 pendentes congelados; os que o Pluggy não devolve mais saem das somas — totais recentes de cartão podem
+mudar. **Para conferir na tela:** data de fim de mês em ; os pares em  → Revisar.
+**Ainda aberto do relatório:** defeito 3 (aviso ao reconectar banco já conectado). E do dia: o filtro de conta de
+ duplica opção quando a mesma conta tem tipos diferentes nos lançamentos (agrupa por tipo/número) — o Cartão Quick foi alinhado pelo lápis; o código não foi corrigido.
+
 **Última sessão — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, no ar** (merge `538be34`; a tela aguarda o olho do Julio).
 Sem migration. Ver **Decisão 30**. Quatro entregas:
 
