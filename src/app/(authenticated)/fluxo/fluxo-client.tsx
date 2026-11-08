@@ -22,7 +22,7 @@
 
 import { useState, useTransition, useMemo, useEffect, Fragment } from 'react'
 import {
-  X, Loader2, BarChart3,
+  X, Loader2, BarChart3, Download,
   ChevronRight, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -291,6 +291,18 @@ export function FluxoClient({
   const hasDimFilters = selCc.length > 0 || selBu.length > 0 || selLe.length > 0
   const { months } = data
 
+  const exportUrl = useMemo(() => {
+    const p = new URLSearchParams()
+    if (months.length > 0) {
+      p.set('from', months[0])
+      p.set('to',   months[months.length - 1])
+    }
+    selCc.forEach(id => p.append('cc', id))
+    selBu.forEach(id => p.append('bu', id))
+    selLe.forEach(id => p.append('le', id))
+    return `/fluxo/exportar?${p.toString()}`
+  }, [months, selCc, selBu, selLe])
+
   // Viewport-fill do DATA_TABLE_PATTERN: agora que a tabela está sozinha na
   // página, ela ocupa a altura toda e a rolagem fica DENTRO dela — antes era um
   // cartão de 520px no meio de outras quatro seções.
@@ -315,6 +327,17 @@ export function FluxoClient({
               </Button>
             )}
             {isPending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            {/* Exporta o que a tabela MOSTRA: o período aplicado (data.months,
+                não os seletores de mês, que só valem depois de "Filtrar") e
+                os filtros de dimensão, que se aplicam na hora. */}
+            {months.length > 0 && (
+              <Button asChild size="sm" variant="outline" className="h-7 text-xs gap-1.5">
+                <a href={exportUrl} download>
+                  <Download className="h-3 w-3" />
+                  Exportar para Excel
+                </a>
+              </Button>
+            )}
           </div>
         </div>
 
