@@ -12,6 +12,22 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Exportar o /fluxo para Excel (9–11/nov)
+
+Merge `b159f70`, sem migration. Branch `feat/exportar-fluxo`, commit `c8f4df6`. Pedido do Julio: os
+lançamentos da Quick em planilha, para montar no Excel o mesmo fluxo da tela. Decisões dele: botão no
+`/fluxo` (não arquivo avulso), período da tela, uma linha por parte do rateio, incluir o que o fluxo
+exclui com coluna e motivo, duas abas.
+
+- **`src/lib/fluxo-export.ts`:** `lerLinhasParaExportar` (lê `transaction_lines`, caixa = `COALESCE(effective_date, date)`, joins com natureza/pai e as 4 dimensões, `colunasDoRateioSql`; motivo na ordem pendente/duplicado → sem natureza → BP → sem pai → oculta → pai oculto), `montarMatriz`, `montarPlanilhaDoFluxo`, `exportarFluxo`.
+- **`src/app/(authenticated)/fluxo/exportar/route.ts`:** GET com `from`/`to` (YYYY-MM) e `cc`/`bu`/`le` repetíveis (uuid ou `__null__`), Zod, `getAuthContext`, `maxDuration=60`.
+- **`fluxo-client.tsx`:** botão com o período de `data.months` (o aplicado, não o seletor) e os filtros selecionados.
+- **A planilha:** "Fluxo de caixa" com `SUMIFS(Valor no fluxo; Natureza; "código – nome"; Mês de caixa; mês; Entra no fluxo?; "Sim")` e valor em cache, pai = soma dos filhos, Total OPEX/CAPEX/líquido; "Lançamentos" com 22 colunas, datas como serial UTC.
+- **Armadilha:** critério de SOMASES que parece número colide ("4.1" = "4.10"), daí a chave em texto, com `~*?` escapados. Nome de natureza pode terminar em espaço — não aparar.
+- **Verificado:** `scripts/verify-fluxo-export.ts` 61/61 (só leitura); Excel via COM, `CalculateFull`, 1.040 fórmulas sem diferença. Quick dez/25–nov/26: 3.386 linhas, 146 rateados, 28 pendentes fora, Total líquido −674.076,11 = tela.
+
+**Pendente:** o botão visto na tela pelo Julio. Em paralelo, `feat/pluggy-hardening` segue fora do `main`, aguardando aval.
+
 ### ✅ Conta manual na conferência: pré-pago, fatura, lançamento à mão (27/out) — Decisão 30
 
 Merge `538be34`, sem migration. Branch `feat/conferencia-manual`, 3 commits (uma sessão cada).

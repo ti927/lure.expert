@@ -301,7 +301,23 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, no ar** (merge `538be34`; a tela aguarda o olho do Julio).
+**Última sessão — 9 a 11/nov: EXPORTAR O /FLUXO PARA EXCEL, no ar** (merge `b159f70`; o botão aguarda o olho do Julio).
+Sem migration. Botão **"Exportar para Excel"** no `/fluxo` (ao lado de "Recolher todos") → `GET /fluxo/exportar`
+com o período **aplicado** e os filtros de CC/UEN/entidade da tela; todo papel pode. Miolo em
+`lib/fluxo-export.ts`, com as **mesmas regras** de `getFluxoMensalData`. Duas abas: **"Fluxo de caixa"**
+(a tabela da tela com SOMASES + subtotais pai, OPEX/CAPEX e Total líquido) e **"Lançamentos"** (uma linha
+por parte do rateio, nomes das 4 dimensões, "Valor no fluxo" com sinal, e os que a tela exclui com
+**"Entra no fluxo? = Não" + motivo**). A chave do SOMASES é "código – nome", porque "4.1" e "4.10"
+seriam o mesmo número para o Excel. Verificado: `scripts/verify-fluxo-export.ts` **61/61** (7 orgs, 2
+períodos, filtro de CC; só leitura) e o Excel real recalculando as 1.040 fórmulas sem diferença.
+O `/fluxo` não tem filtro de contato, então a exportação também não.
+
+**Em espera, NÃO no `main`: branch `feat/pluggy-hardening`** (data em Brasília, pendente que efetiva,
+janela que avança, webhook com segredo — Decisão 31, migration 0035). Aguarda o "pode subir" do Julio;
+o roteiro de deploy está no `CLAUDE.md` **daquele branch** (commit `441d753`). Ao fazer o merge, a seção
+dela substitui esta nota. `relatorio-pluggy-lure-expert.md` na raiz segue não versionado.
+
+**Antes dela — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, no ar** (merge `538be34`; a tela aguarda o olho do Julio).
 Sem migration. Ver **Decisão 30**. Quatro entregas:
 
 | Entrega | O quê |
@@ -1083,6 +1099,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Exportar o /fluxo para Excel (9–11/nov)** | Botão no `/fluxo` → `/fluxo/exportar` (route handler, xlsx via SheetJS). `lib/fluxo-export.ts`: `lerLinhasParaExportar` (uma linha por parte do rateio, motivo de ficar fora), `montarMatriz`, `montarPlanilhaDoFluxo` (aba "Fluxo de caixa" em SOMASES com valor em cache + aba "Lançamentos"). Período e filtros de dimensão da tela. 61/61 contra a produção (só leitura) + 1.040 fórmulas recalculadas no Excel sem diferença. Merge `b159f70` |
 | **Conta manual na conferência (27/out)** | Tipo "Cartão pré-pago"; aviso de saldo de abertura duplicado; cartão de crédito manual confere por **fatura** (lista de vencimentos + fatura aberta); **lançamento à mão** só em conta manual, com autoria no `metadata`, selo "Manual", filtro de origem e restauração do apagado. Decisão 30. Sem migration. 81/81 + 36/36 contra a produção, revertidos |
 | **Conferência de saldo (27/out)** | `/contas/[accountId]`: a tabela de transações pela data de caixa, com saldo inicial informado e salvo (migration **0034**, aplicada) e coluna Saldo — corrido por linha + fechamento do dia, este independente da ordem dentro do dia. Saldo calculado por janela **antes** dos filtros e da paginação. A tabela de `/transacoes` foi movida para `components/transacoes-shared/transactions-table.tsx` e os filtros para `lib/transactions-list-filters.ts`. Decisão 29. Verificado 48/48 com ROLLBACK contra a produção (conta Sicredi, 1.762 lançamentos), `next build` limpo, larguras 37/37 |
 | **Conta manual editável: nome, tipo, número, badge e logo (20/out)** | Pedido do Julio: conta manual configurável como as do Pluggy. Logo e badge já funcionavam no servidor (as actions não distinguem provedor) — faltava a tela; o envio de logo saiu da janela do Pluggy para `contas/logo-editor.tsx`, usado pelas duas. **Renomear é de verdade** (decisão dele): `editarContaManual` (`lib/accounts.ts`) muda cadastro E as colunas `account_*` dos lançamentos numa transação, **sem mudar a identidade** (`arq:<slug>` está em cada lançamento e na chave de dedup); o slug do nome novo (e do antigo) vira **apelido** em `metadata.aliases`, e `garantirContaManual`/`mapaDeContasManuais` passam a achar por ele — planilha com o nome antigo ou novo cai na mesma conta. Nome de outra conta é recusado. **Dois defeitos achados de passagem:** (1) `garantirContaManual` reescrevia o metadata inteiro a cada importação que citava a conta — teria apagado logo e badge; agora preserva; (2) as duas portas de arquivo gravavam no lançamento a conta **escrita no arquivo**, não a do cadastro — com apelido, partiria a conta em duas no filtro; agora `colunasDeConta` grava a do cadastro (a chave de dedup segue a do arquivo, regra de 1/set). Verificado: **20/20** contra a produção numa transação revertida (renomeando "Cartão QCK", 174 lançamentos), `verify-conta-por-linha` 52/52, `verify-staging-import` 69/70 — a falha é a asserção que esperava o Haiku **perder** "Data de caixa" num cabeçalho fora do padrão, e ele achou (depende do modelo, não desta sessão). **Validada por Julio na tela em 20/out** |
