@@ -445,7 +445,7 @@ export async function countSeriesBySource(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** Ocorrências por INSERT. O teto real é o de parâmetros do Postgres (65535). */
-const ENTRY_INSERT_CHUNK = 500
+export const ENTRY_INSERT_CHUNK = 500
 
 export function draftToRecurrence(d: CopiedSeriesDraft): RecurrenceInput {
   return {
