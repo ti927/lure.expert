@@ -35,15 +35,27 @@ export function ParametrosFolhaBar({
     const m = next.mes ?? mes
     const p = next.pct ?? pct
     const pctNum = m === '' ? null : parseAmount(p)
-    // Mês sem percentual ainda não é dissídio: espera o percentual.
-    if (m !== '' && pctNum === null) return
+    let dissidioMes: number | null = m === '' ? null : Number(m)
+    let dissidioPct: number | null = pctNum
+    if (m !== '' && pctNum === null) {
+      // Mês sem percentual ainda não é dissídio. Mudança só de dissídio espera
+      // o percentual; mudança de MODO grava já, com o dissídio que está salvo —
+      // a tela nunca pode mostrar um modo que não é o gravado.
+      if (!next.modo) return
+      dissidioMes = settings.dissidioMes
+      dissidioPct = settings.dissidioPct
+    }
     startSaving(async () => {
       const r = await saveParametrosFolha(versionId, {
         modoProvisao: next.modo ?? modo,
-        dissidioMes: m === '' ? null : Number(m),
-        dissidioPct: pctNum,
+        dissidioMes,
+        dissidioPct,
       })
-      if ('error' in r) { toast.error(r.error); return }
+      if ('error' in r) {
+        toast.error(r.error)
+        if (next.modo) setModo(settings.modoProvisao)
+        return
+      }
       onSaved()
     })
   }

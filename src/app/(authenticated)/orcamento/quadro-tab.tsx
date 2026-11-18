@@ -300,6 +300,14 @@ export function QuadroTab({
           </div>
         )}
 
+        {erro && (
+          <PartialDataBanner
+            variant="warning"
+            message={`Não foi possível atualizar o quadro (${erro}). Os dados abaixo podem estar desatualizados.`}
+            action={{ label: 'Tentar de novo', onClick: carregar }}
+          />
+        )}
+
         {semRegime.length > 0 && (
           <PartialDataBanner
             variant="warning"

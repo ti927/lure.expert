@@ -54,7 +54,8 @@ export function PessoaPrevia({
       if (e instanceof RegimeAusente) {
         return { erro: 'A unidade jurídica escolhida não tem regime tributário. Informe o regime em Configurações › Entidades jurídicas para calcular os encargos.' }
       }
-      throw e
+      // Erro inesperado do cálculo não derruba o diálogo: vira mensagem.
+      return { erro: `Não foi possível calcular a prévia: ${e instanceof Error ? e.message : String(e)}` }
     }
   }, [input, versao, uj, exercicio])
 
