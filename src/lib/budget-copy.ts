@@ -30,7 +30,8 @@ import { db } from '@/db'
 import { budgetSeries, budgetEntries } from '@/db/schema'
 import { expandSeries, round2, lastDayOfMonth, type RecurrenceInput } from './budget-recurrence'
 import { BP_TYPES } from './dre-types'
-import { money, type BudgetTx } from './budget-scope'
+import { money, ENTRY_INSERT_CHUNK, type BudgetTx } from './budget-scope'
+import { copiarQuadro } from './payroll-write'
 import type {
   AmountMode, BudgetSource, CopyActualsInput, CopyGranularity, CopyShape,
 } from './budget-types'
@@ -444,8 +445,6 @@ export async function countSeriesBySource(
 // GRAVAÇÃO
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Ocorrências por INSERT. O teto real é o de parâmetros do Postgres (65535). */
-export const ENTRY_INSERT_CHUNK = 500
 
 export function draftToRecurrence(d: CopiedSeriesDraft): RecurrenceInput {
   return {
@@ -624,7 +623,10 @@ export async function applyDuplicateVersion(
         (m.start_month + make_interval(years => ${delta}::int))::date,
         m.occurrences, m.interval_months, m.day_of_month, m.cash_lag_days,
         m.amount_mode, m.base_amount, m.total_amount, m.adjustment_rate, m.adjustment_every,
-        m.seasonal_amounts, 'duplicacao', m.notes, ${userId}::uuid, m.metadata
+        -- A origem 'folha' é preservada: gravada como 'duplicacao', a próxima
+        -- geração (que apaga só as 'folha') não a substituiria e a folha dobraria.
+        m.seasonal_amounts, CASE WHEN m.source = 'folha' THEN 'folha' ELSE 'duplicacao' END,
+        m.notes, ${userId}::uuid, m.metadata
       FROM mapped m
       RETURNING id
     ),
@@ -653,9 +655,57 @@ export async function applyDuplicateVersion(
       (SELECT COUNT(*) FROM ins_entries)::int  AS entries_copied
   `)
 
+  await duplicarQuadroDaFolha(tx, organizationId, userId, sourceId, result.version_id, delta)
+
   return {
     versionId: result.version_id,
     series:    Number(result.series_copied),
     entries:   Number(result.entries_copied),
   }
+}
+
+/**
+ * A parte da folha na duplicação: leva o quadro de pessoal junto das séries.
+ * Versão de origem sem parâmetros da folha (nunca teve quadro) → nada a fazer,
+ * e a duplicação fica exatamente como era.
+ *
+ * Os parâmetros da cópia são REESCRITOS depois de `copiarQuadro`, que carimba
+ * `quadro_alterado_em = now()` e deixaria a cópia nascer desatualizada:
+ *
+ * - mesmo exercício (`delta = 0`): as séries copiadas SÃO a folha do quadro
+ *   copiado, então os carimbos (`quadro_alterado_em`, `gerado_em`,
+ *   `updated_at`) vêm da origem — a cópia herda o estado dela, em dia ou não.
+ *   A linha é apagada e inserida de novo porque o gatilho de `updated_at`
+ *   sobrescreveria o carimbo num UPDATE.
+ * - outro exercício: as ocorrências foram deslocadas por ano e o caixa por
+ *   dias, o que não segue as datas de pagamento da folha (spec 5.5). A cópia
+ *   fica `gerado_em = NULL` — desatualizada até gerar de novo.
+ */
+async function duplicarQuadroDaFolha(
+  tx: BudgetTx, organizationId: string, userId: string | null,
+  sourceId: string, novaVersao: string, delta: number,
+) {
+  const temQuadro = await tx.execute<{ n: number }>(sql`
+    SELECT 1 AS n FROM budget_payroll_settings
+     WHERE organization_id = ${organizationId}::uuid AND version_id = ${sourceId}::uuid`)
+  if (temQuadro.length === 0) return
+
+  const r = await copiarQuadro(tx, organizationId, userId ?? '', sourceId, novaVersao)
+  // Não deveria acontecer (a versão nova é rascunho e a origem existe); se
+  // acontecer, a exceção desfaz a duplicação inteira em vez de deixá-la pela metade.
+  if ('error' in r) throw new Error(`Duplicação: o quadro da folha não foi copiado — ${r.error}`)
+
+  await tx.execute(sql`
+    DELETE FROM budget_payroll_settings
+     WHERE organization_id = ${organizationId}::uuid AND version_id = ${novaVersao}::uuid`)
+  await tx.execute(sql`
+    INSERT INTO budget_payroll_settings
+      (organization_id, version_id, modo_provisao, dissidio_mes, dissidio_pct,
+       quadro_alterado_em, gerado_em, updated_at)
+    SELECT o.organization_id, ${novaVersao}::uuid, o.modo_provisao, o.dissidio_mes, o.dissidio_pct,
+           CASE WHEN ${delta}::int = 0 THEN o.quadro_alterado_em ELSE now() END,
+           CASE WHEN ${delta}::int = 0 THEN o.gerado_em          ELSE NULL  END,
+           CASE WHEN ${delta}::int = 0 THEN o.updated_at         ELSE now() END
+      FROM budget_payroll_settings o
+     WHERE o.organization_id = ${organizationId}::uuid AND o.version_id = ${sourceId}::uuid`)
 }

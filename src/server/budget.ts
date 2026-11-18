@@ -88,6 +88,7 @@ import {
   MAX_COPIED_SERIES,
 } from '@/lib/budget-write'
 import { monthLabel } from '@/lib/format'
+import { recusaSeFolha } from '@/lib/payroll-write'
 import { detectarRecorrencias } from '@/lib/recurrence-detect'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -548,6 +549,11 @@ async function loadSeriesForEdit(
     .limit(1)
   if (!series) return { error: 'Lançamento não encontrado.' as const }
 
+  // Folha é só leitura aqui — inclusive nas prévias, que planejariam sobre uma
+  // regra que não descreve as ocorrências da série (ver lib/payroll-guard.ts).
+  const folha = await recusaSeFolha(db, organizationId, seriesId)
+  if (folha) return { error: folha }
+
   const version = await carregarVersaoEditavel(organizationId, series.versionId)
   if ('error' in version) return { error: version.error }
 
@@ -622,7 +628,7 @@ export async function updateBudgetSeries(
     return { needsConfirm: plan.preview }
   }
 
-  await db.transaction(tx => applySeriesUpdate(tx, {
+  const applied = await db.transaction(tx => applySeriesUpdate(tx, {
     organizationId,
     series,
     entries,
@@ -630,6 +636,7 @@ export async function updateBudgetSeries(
     plan,
     overwriteAdjusted: options.overwriteAdjusted,
   }))
+  if ('error' in applied) return { error: applied.error }
 
   revalidatePath('/orcamento')
   return { success: true as const, scope: plan.effectiveScope, affected: plan.targets.length }
@@ -692,6 +699,7 @@ export async function deleteBudgetSeries(
     series, entries, scope, fromSequence: options.fromSequence,
   }))
 
+  if ('error' in result) return { error: result.error }
   if (result.removed === 0) return { error: 'Nenhuma ocorrência nesse intervalo.' }
 
   revalidatePath('/orcamento')
@@ -724,6 +732,9 @@ export async function updateBudgetEntry(entryId: string, patch: BudgetEntryUpdat
     .where(and(eq(budgetEntries.id, entryId), eq(budgetEntries.organizationId, organizationId)))
     .limit(1)
   if (!entry) return { error: 'Ocorrência não encontrada.' }
+
+  const folha = await recusaSeFolha(db, organizationId, entry.seriesId)
+  if (folha) return { error: folha }
 
   const loaded = await carregarVersaoEditavel(organizationId, entry.versionId)
   if ('error' in loaded) return { error: loaded.error }
@@ -1072,11 +1083,17 @@ export async function deleteBudgetEntry(entryId: string) {
   const { organizationId } = await getAuthContext()
 
   const [entry] = await db
-    .select({ id: budgetEntries.id, versionId: budgetEntries.versionId, competenceDate: budgetEntries.competenceDate })
+    .select({
+      id: budgetEntries.id, versionId: budgetEntries.versionId, seriesId: budgetEntries.seriesId,
+      competenceDate: budgetEntries.competenceDate,
+    })
     .from(budgetEntries)
     .where(and(eq(budgetEntries.id, entryId), eq(budgetEntries.organizationId, organizationId)))
     .limit(1)
   if (!entry) return { error: 'Ocorrência não encontrada.' }
+
+  const folha = await recusaSeFolha(db, organizationId, entry.seriesId)
+  if (folha) return { error: folha }
 
   const loaded = await carregarVersaoEditavel(organizationId, entry.versionId)
   if ('error' in loaded) return { error: loaded.error }

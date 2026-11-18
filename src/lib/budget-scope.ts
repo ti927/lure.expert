@@ -12,6 +12,7 @@ import { db } from '@/db'
 import { budgetSeries, budgetEntries } from '@/db/schema'
 import { expandSeries } from './budget-recurrence'
 import { monthLabel } from './format'
+import { recusaSeFolha } from './payroll-guard'
 import {
   ADJUSTABLE_FIELDS,
   SERIES_STRUCTURAL_FIELDS,
@@ -32,6 +33,13 @@ export type EntryRow = typeof budgetEntries.$inferSelect
 
 /** `numeric` do Postgres viaja como string. */
 export const money = (v: number) => v.toFixed(2)
+
+/**
+ * Ocorrências por INSERT. O teto real é o de parâmetros do Postgres (65535).
+ * Mora aqui, e não em `budget-copy`, porque `payroll-write` precisa dele e
+ * `budget-copy` importa `payroll-write` — evita o ciclo de importação.
+ */
+export const ENTRY_INSERT_CHUNK = 500
 
 /** A regra do banco no formato do formulário, para comparar campo a campo. */
 export function seriesToInput(s: SeriesRow): Omit<BudgetSeriesInput, 'versionId'> {
@@ -238,8 +246,12 @@ export async function applySeriesUpdate(
     plan: UpdatePlan
     overwriteAdjusted?: boolean
   },
-) {
+): Promise<{ error: string } | { success: true }> {
   const { organizationId, series, entries, input: v, plan, overwriteAdjusted } = args
+
+  // A série é relida no banco: o `series` recebido pode ter vindo de fora.
+  const folha = await recusaSeFolha(tx, organizationId, series.id)
+  if (folha) return { error: folha }
 
   if (plan.updateSeriesRow) {
     await tx.update(budgetSeries).set({
@@ -353,6 +365,8 @@ export async function applySeriesUpdate(
         .where(eq(budgetEntries.id, e.id))
     }
   }
+
+  return { success: true }
 }
 
 /**
@@ -367,8 +381,12 @@ export async function applySeriesUpdate(
 export async function applySeriesDelete(
   tx: BudgetTx,
   args: { series: SeriesRow; entries: EntryRow[]; scope: EditScope; fromSequence?: number },
-): Promise<{ wipedSeries: boolean; removed: number }> {
+): Promise<{ error: string } | { wipedSeries: boolean; removed: number }> {
   const { series, entries, scope } = args
+
+  const folha = await recusaSeFolha(tx, series.organizationId, series.id)
+  if (folha) return { error: folha }
+
   const firstSeq = entries.length ? entries[0].sequence : 1
   const anchor = args.fromSequence ?? firstSeq
 

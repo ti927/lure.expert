@@ -28,8 +28,7 @@ import {
   budgetPeopleBenefits, budgetSeries, budgetVersions, businessUnits, categories, contacts,
   costCenters, legalEntities, payrollCategoryMap,
 } from '@/db/schema'
-import type { BudgetTx } from './budget-scope'
-import { ENTRY_INSERT_CHUNK } from './budget-copy'
+import { ENTRY_INSERT_CHUNK, type BudgetTx } from './budget-scope'
 import { calcularPessoa, custoAnual, RegimeAusente } from './payroll-calc'
 import { montarFolha, nomeDaPessoa, type LancamentoFolha, type RecusaFolha } from './payroll-build'
 import {
@@ -38,6 +37,10 @@ import {
   type Componente, type ModoProvisao, type ParametrosUJ, type ParametrosVersaoCalc, type PessoaCalc,
   type PessoaInput, type ParametrosVersaoInput, type Regime, type Vinculo,
 } from './payroll-types'
+
+// O guarda "lançamento da folha é só leitura" mora em arquivo próprio para
+// `budget-scope` chamá-lo sem ciclo de importação; é reexportado daqui.
+export { RECUSA_FOLHA, recusaSeFolha } from './payroll-guard'
 
 type Exec = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete' | 'execute'>
 type Erro = { error: string }

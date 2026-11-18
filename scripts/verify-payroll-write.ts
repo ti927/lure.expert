@@ -22,8 +22,10 @@ import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import {
   lerQuadro, salvarPessoa, apagarPessoa, salvarParametrosVersao, lerMapa, salvarMapa,
-  preverFolha, gerarFolha, copiarQuadro, quadroDesatualizado,
+  preverFolha, gerarFolha, copiarQuadro, quadroDesatualizado, recusaSeFolha, RECUSA_FOLHA,
 } from '@/lib/payroll-write'
+import { applySeriesUpdate, applySeriesDelete, planSeriesUpdate, seriesToInput } from '@/lib/budget-scope'
+import { applyDraftsToBudget, applyDuplicateVersion } from '@/lib/budget-copy'
 import type { PessoaInput } from '@/lib/payroll-types'
 
 const url = process.env.DATABASE_URL ?? ''
@@ -307,6 +309,123 @@ async function main() {
         FROM budget_series s JOIN budget_entries e ON e.series_id = s.id
        WHERE s.version_id = ${v28.id}::uuid AND s.metadata->'folha'->>'beneficio' = 'VR'`)
     t(Number(vr[0].n) === 1 && Number(vr[0].total) === 6000, `benefício VR = uma série de 12 × 500 — ${JSON.stringify(vr[0])}`)
+
+    // ── protecoes: o orçamento existente não mexe na folha ───────────────────
+    // Gera de novo: o benefício VR entrou direto no banco e o mapa mudou em (g).
+    const gp = await tx(x => gerarFolha(x, ORG, USUARIO, v27.id))
+    t(!temErro(gp) && await quadroDesatualizado(db, ORG, v27.id) === false, `protecoes: 2027 gerado de novo e em dia — ${JSON.stringify(gp)}`)
+    const folhaDe = async (versionId: string) => {
+      const [r] = await db.execute<{ n: number; soma: string; entries: number }>(sql`
+        SELECT COUNT(DISTINCT s.id)::int AS n, COALESCE(SUM(e.amount), 0)::text AS soma, COUNT(e.id)::int AS entries
+          FROM budget_series s LEFT JOIN budget_entries e ON e.series_id = s.id
+         WHERE s.version_id = ${versionId}::uuid AND s.source = 'folha'`)
+      return r
+    }
+    const antes = await folhaDe(v27.id)
+
+    const carregar = async (id: string) => {
+      const [s] = await db.select().from(budgetSeries).where(eq(budgetSeries.id, id))
+      const es = await db.select().from(budgetEntries).where(eq(budgetEntries.seriesId, id)).orderBy(budgetEntries.sequence)
+      return { s, es }
+    }
+    const [umaFolha] = await db.select({ id: budgetSeries.id }).from(budgetSeries)
+      .where(and(eq(budgetSeries.versionId, v27.id), eq(budgetSeries.source, 'folha'))).limit(1)
+    const fl = await carregar(umaFolha.id)
+    const inputFolha = { ...seriesToInput(fl.s), versionId: v27.id, description: 'mexido à mão' }
+
+    t(await recusaSeFolha(db, ORG, fl.s.id) === RECUSA_FOLHA, 'protecoes: recusaSeFolha numa série folha → RECUSA_FOLHA')
+    t(await recusaSeFolha(db, ORG, manual.id) === null, 'protecoes: recusaSeFolha numa série manual → null')
+    t(await recusaSeFolha(db, VIZ, fl.s.id) === null, 'protecoes: recusaSeFolha não enxerga série de outra organização')
+
+    const upd = await tx(x => applySeriesUpdate(x, {
+      organizationId: ORG, series: fl.s, entries: fl.es, input: inputFolha,
+      plan: planSeriesUpdate(fl.s, fl.es, inputFolha, { scope: 'todas' }),
+    }))
+    t(temErro(upd) && upd.error === RECUSA_FOLHA, `protecoes: applySeriesUpdate numa série folha recusado — ${JSON.stringify(upd)}`)
+    const del = await tx(x => applySeriesDelete(x, { series: fl.s, entries: fl.es, scope: 'todas' }))
+    t(temErro(del) && del.error === RECUSA_FOLHA, `protecoes: applySeriesDelete numa série folha recusado — ${JSON.stringify(del)}`)
+    const delEsta = await tx(x => applySeriesDelete(x, { series: fl.s, entries: fl.es, scope: 'esta', fromSequence: fl.es[0].sequence }))
+    t(temErro(delEsta) && delEsta.error === RECUSA_FOLHA, 'protecoes: excluir uma ocorrência da série folha recusado')
+    const depois = await carregar(fl.s.id)
+    const depoisFolha = await folhaDe(v27.id)
+    t(depois.s?.description === fl.s.description && depois.es.length === fl.es.length && depoisFolha.soma === antes.soma,
+      'protecoes: a série folha ficou como estava')
+
+    // Série manual: os mesmos caminhos funcionam.
+    const mn = await carregar(manual.id)
+    const inputManual = { ...seriesToInput(mn.s), versionId: v27.id, description: 'Aluguel manual (editado)' }
+    const updM = await tx(x => applySeriesUpdate(x, {
+      organizationId: ORG, series: mn.s, entries: mn.es, input: inputManual,
+      plan: planSeriesUpdate(mn.s, mn.es, inputManual, { scope: 'todas' }),
+    }))
+    const mn2 = await carregar(manual.id)
+    t(!temErro(updM) && mn2.s.description === 'Aluguel manual (editado)', `protecoes: applySeriesUpdate numa série manual funciona — ${JSON.stringify(updM)}`)
+
+    // Caminho em lote com substituição (planilha): só apaga a própria origem.
+    await db.insert(budgetSeries).values({
+      organizationId: ORG, versionId: v27.id, description: 'Da planilha', direction: 'outflow',
+      categoryId: honorarios.id, startMonth: '2027-01-01', occurrences: 1, amountMode: 'fixo', baseAmount: '10.00', source: 'csv',
+    })
+    const lote = await tx(x => applyDraftsToBudget(x, {
+      organizationId: ORG, versionId: v27.id, userId: USUARIO, drafts: [], source: 'csv', notes: 'teste', replaceExisting: true,
+    }))
+    const posLote = await folhaDe(v27.id)
+    t(lote.replaced === 1 && posLote.n === antes.n && posLote.soma === antes.soma,
+      `protecoes: importar planilha com substituição apaga só as séries 'csv' — ${JSON.stringify({ lote, posLote })}`)
+
+    // ── duplicar no mesmo exercício ──────────────────────────────────────────
+    const pessoas27 = await db.select({ id: budgetPeople.id }).from(budgetPeople).where(eq(budgetPeople.versionId, v27.id))
+    const dup = await tx(x => applyDuplicateVersion(x, {
+      organizationId: ORG, sourceId: v27.id, name: 'Folha 2027 revisão', fiscalYear: 2027,
+      description: null, isActive: false, userId: USUARIO, delta: 0,
+    }))
+    const dupFolha = await folhaDe(dup.versionId)
+    t(dupFolha.n === antes.n && dupFolha.soma === antes.soma, `protecoes: a cópia tem as séries 'folha' com a mesma soma — ${JSON.stringify(dupFolha)}`)
+    const viraramDup = await db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM budget_series s
+       WHERE s.version_id = ${dup.versionId}::uuid AND s.metadata ? 'folha' AND s.source <> 'folha'`)
+    t(Number(viraramDup[0].n) === 0, "protecoes: nenhuma série da folha virou 'duplicacao'")
+    const manualDup = await db.select({ source: budgetSeries.source }).from(budgetSeries)
+      .where(and(eq(budgetSeries.versionId, dup.versionId), eq(budgetSeries.description, 'Aluguel manual (editado)')))
+    t(manualDup.length === 1 && manualDup[0].source === 'duplicacao', "protecoes: a série manual copiada continua 'duplicacao'")
+    const qDup = await lerQuadro(db, ORG, dup.versionId)
+    t(!temErro(qDup) && qDup.pessoas.length === pessoas27.length && pessoas27.length > 0,
+      `protecoes: o quadro foi copiado (${temErro(qDup) ? qDup.error : qDup.pessoas.length} pessoas)`)
+    t(await quadroDesatualizado(db, ORG, dup.versionId) === false, 'protecoes: a cópia no mesmo exercício não nasce desatualizada')
+    const gDup = await tx(x => gerarFolha(x, ORG, USUARIO, dup.versionId))
+    const dupFolha2 = await folhaDe(dup.versionId)
+    t(!temErro(gDup) && gDup.substituidas === antes.n && dupFolha2.soma === antes.soma && dupFolha2.n === antes.n,
+      `protecoes: gerar na cópia substitui as copiadas — mesmo total, sem dobrar — ${JSON.stringify({ gDup, dupFolha2 })}`)
+
+    // ── duplicar para outro exercício ────────────────────────────────────────
+    const dup28 = await tx(x => applyDuplicateVersion(x, {
+      organizationId: ORG, sourceId: v27.id, name: 'Folha 2027 para 2028', fiscalYear: 2028,
+      description: null, isActive: false, userId: USUARIO, delta: 1,
+    }))
+    const q28dup = await lerQuadro(db, ORG, dup28.versionId)
+    t(!temErro(q28dup) && q28dup.pessoas.length === pessoas27.length, 'protecoes: duplicar para 2028 leva o quadro')
+    t(await quadroDesatualizado(db, ORG, dup28.versionId) === true, 'protecoes: duplicar para 2028 → desatualizado')
+
+    // ── versão sem quadro: duplicação como antes ─────────────────────────────
+    const [v29] = await db.insert(budgetVersions).values({ organizationId: ORG, name: 'Sem folha 2029', fiscalYear: 2029 })
+      .returning({ id: budgetVersions.id })
+    await db.insert(budgetSeries).values({
+      organizationId: ORG, versionId: v29.id, description: 'Só manual', direction: 'outflow',
+      categoryId: honorarios.id, startMonth: '2029-01-01', occurrences: 1, amountMode: 'fixo', baseAmount: '10.00', source: 'manual',
+    })
+    const dup29 = await tx(x => applyDuplicateVersion(x, {
+      organizationId: ORG, sourceId: v29.id, name: 'Sem folha 2029 cópia', fiscalYear: 2029,
+      description: null, isActive: false, userId: USUARIO, delta: 0,
+    }))
+    const cfg29 = await db.select({ id: budgetPayrollSettings.id }).from(budgetPayrollSettings)
+      .where(eq(budgetPayrollSettings.versionId, dup29.versionId))
+    t(dup29.series === 1 && cfg29.length === 0, 'protecoes: versão sem quadro duplica como antes, sem criar parâmetros da folha')
+
+    // Série manual: excluir funciona.
+    const mn3 = await carregar(manual.id)
+    const delM = await tx(x => applySeriesDelete(x, { series: mn3.s, entries: mn3.es, scope: 'todas' }))
+    const sumiu = await db.select({ id: budgetSeries.id }).from(budgetSeries).where(eq(budgetSeries.id, manual.id))
+    t(!temErro(delM) && sumiu.length === 0, `protecoes: applySeriesDelete numa série manual funciona — ${JSON.stringify(delM)}`)
 
     // ── (h) versão arquivada ─────────────────────────────────────────────────
     await db.update(budgetVersions).set({ status: 'arquivado' }).where(eq(budgetVersions.id, v27.id))
