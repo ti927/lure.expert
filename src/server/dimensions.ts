@@ -2,6 +2,8 @@
 
 import { getAuthContext } from '@/lib/auth-context'
 
+import { recusaDePapel } from '@/lib/members-types'
+import { folhaMudou, lerFolhaDaUnidade, type ColunasFolhaUJ } from '@/lib/payroll-uj'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { db } from '@/db'
@@ -190,8 +192,15 @@ export async function getLegalEntities() {
   return db.select().from(legalEntities).where(eq(legalEntities.organizationId, organizationId))
 }
 
+// Os padrões das colunas de folha (migration 0036) — o que uma unidade nova tem sem ninguém mexer.
+const FOLHA_PADRAO: Parameters<typeof folhaMudou>[1] = {
+  regimeTributario: null, simplesAnexoIv: false,
+  aliquotaInssPatronal: '0.20', aliquotaRatFap: '0.02', aliquotaTerceiros: '0.058', aliquotaFgts: '0.08',
+}
+const RECUSA_FOLHA_UJ = 'alterar os parâmetros de folha da unidade jurídica'
+
 export async function createLegalEntity(formData: FormData) {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
   const parsed = legalEntitySchema.safeParse({
     name: formData.get('name'),
     code: formData.get('code') || undefined,
@@ -199,13 +208,23 @@ export async function createLegalEntity(formData: FormData) {
   })
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
-  await db.insert(legalEntities).values({ organizationId, ...parsed.data })
+  // Os parâmetros de folha (regime e alíquotas) são admin+; criar a unidade com os
+  // padrões continua como era.
+  const folha = lerFolhaDaUnidade(formData)
+  if (folha && 'error' in folha) return { error: folha.error }
+  if (folha && folhaMudou(folha.colunas, FOLHA_PADRAO)) {
+    const recusa = recusaDePapel(papel, 'admin', RECUSA_FOLHA_UJ)
+    if (recusa) return { error: recusa }
+  }
+
+  await db.insert(legalEntities).values({ organizationId, ...parsed.data, ...(folha?.colunas ?? {}) })
   revalidatePath('/configuracoes/entidades-juridicas')
+  revalidatePath('/orcamento')
   return { success: true }
 }
 
 export async function updateLegalEntity(id: string, formData: FormData) {
-  const { organizationId } = await getAuthContext()
+  const { organizationId, papel } = await getAuthContext()
   const parsed = legalEntitySchema.safeParse({
     name: formData.get('name'),
     code: formData.get('code') || undefined,
@@ -213,11 +232,30 @@ export async function updateLegalEntity(id: string, formData: FormData) {
   })
   if (!parsed.success) return { error: parsed.error.issues[0].message }
 
+  const folha = lerFolhaDaUnidade(formData)
+  if (folha && 'error' in folha) return { error: folha.error }
+  let colunasFolha: ColunasFolhaUJ | null = null
+  if (folha) {
+    const [atual] = await db.select().from(legalEntities)
+      .where(and(eq(legalEntities.id, id), eq(legalEntities.organizationId, organizationId)))
+      .limit(1)
+    if (!atual) return { error: 'Entidade jurídica não encontrada.' }
+    // Só grava (e só exige admin) quando algo da folha de fato mudou — assim o
+    // operador segue editando nome e CNPJ, e `updated_at` (que avisa que a folha
+    // ficou desatualizada) não se mexe à toa.
+    if (folhaMudou(folha.colunas, atual)) {
+      const recusa = recusaDePapel(papel, 'admin', RECUSA_FOLHA_UJ)
+      if (recusa) return { error: recusa }
+      colunasFolha = folha.colunas
+    }
+  }
+
   await db
     .update(legalEntities)
-    .set(parsed.data)
+    .set({ ...parsed.data, ...(colunasFolha ?? {}) })
     .where(and(eq(legalEntities.id, id), eq(legalEntities.organizationId, organizationId)))
   revalidatePath('/configuracoes/entidades-juridicas')
+  revalidatePath('/orcamento')
   return { success: true }
 }
 
