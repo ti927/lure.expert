@@ -307,7 +307,7 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 18/nov: FOLHA DE PAGAMENTO NO ORÇAMENTO, pronta no branch `feat/folha-orcamento` — NÃO mergeada, e a migration 0036 NÃO está aplicada na produção** (só no banco local). Pedido do Julio: o orçamento de
+**Última sessão — 18/nov: FOLHA DE PAGAMENTO NO ORÇAMENTO, no ar** (0036 aplicada por mim em 18/nov, autorizado — "pode subir"; merge `fd790a3`; as telas aguardam o olho do Julio). Pedido do Julio: o orçamento de
 pessoal era valor total digitado; agora se cadastra o **quadro de pessoal por versão** (CLT, PJ, pró-labore,
 estagiário e vaga a contratar) e o app **gera a folha**, com encargos pelo **regime da unidade jurídica**,
 nas naturezas mapeadas. Aba nova **"Quadro de pessoal"** em `/orcamento`; os lançamentos da folha (origem
@@ -318,8 +318,10 @@ Spec e plano em `docs/superpowers/`. 8 tarefas, 9 commits (`4bbb01a`..`d23d010`)
 subida autônoma, com dump e `lock_timeout` curto) e conferir o catálogo; (2) só então o merge e o deploy
 — **não é só o `/orcamento`**: as colunas novas de `legal_entities` estão no schema Drizzle, e **todo
 `select().from(legalEntities)` do app as pede** — `/configuracoes`, os filtros de entidade de `/transacoes`,
-`/dre`, `/fluxo`, o orçamento, o MCP. Deploy antes da 0036 = erro de coluna inexistente em boa parte do app. Reversa: `0036_down_folha_orcamento.sql`. **Aguarda o "pode
-subir" do Julio.** O branch `feat/pluggy-hardening` segue em espera, e por isso esta é a Decisão **32**
+`/dre`, `/fluxo`, o orçamento, o MCP. Deploy antes da 0036 = erro de coluna inexistente em boa parte do app. Reversa: `0036_down_folha_orcamento.sql`. **Subiu nessa ordem em 18/nov:** tag
+`backup/antes-folha-2026-11-18` + dump `lure-expert-2026-11-18-antes-0036.dump` (restaurado e idêntico à
+produção), validação com ROLLBACK na produção 46/46, 0036 em `psql -1` pelo session pooler, catálogo
+conferido e retrato idêntico antes e depois (15.275 lançamentos, orçamento 1.839.972,68). O branch `feat/pluggy-hardening` segue em espera, e por isso esta é a Decisão **32**
 (a 31 mora naquele branch).
 
 **Limitações declaradas da v1:** **sem rescisão** (aviso prévio, multa de 40% do FGTS, férias indenizadas — o
@@ -1076,8 +1078,9 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ Layer 0 de categorização — match determinístico do CSV antes do LLM. Parser detecta colunas autoritativas (`Categoria/Natureza Pai/Filho`, `Conta Contábil`, `Plano de Contas`, `Tipo Natureza`) por regex no header. `findCategoryByCsvMapping` faz lookup normalizado (lowercase + sem acento + colapsa dash/barra/parênteses em espaço). Desempate cumulativo: nome → tipo (`TIPO_ALIASES`: `Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc) → pai. `approveAndInsert` pré-classifica no INSERT (linhas casadas não entram no evento Inngest). Resultado: CSVs de ERP com plano alinhado importam zero-Haiku. Commits `d587644` / `d72ec37` / `35400e6`. Decisão arquitetural em `docs/SCHEMA_DECISIONS.md` Decisão 12.
 
 **Migrations aplicadas no Supabase Studio:**
-- 🔲 `db/migrations/rls/0036_folha_orcamento.sql` — **PENDENTE, NÃO aplicada na produção** (só no banco local,
-  porta 55432). Sete colunas em `legal_entities` (regime tributário, Anexo IV do Simples e as quatro
+- ✅ `db/migrations/rls/0036_folha_orcamento.sql` — **aplicada em 18/nov** (por mim, `psql -1` pelo session
+  pooler, autorizado pelo Julio) e conferida: 5 tabelas com RLS e 4 policies cada, alíquotas `numeric(8,6)`
+  com os padrões, `'folha'` no CHECK de origem; retrato idêntico antes e depois. Sete colunas em `legal_entities` (regime tributário, Anexo IV do Simples e as quatro
   alíquotas patronais, em fração, com CHECK 0..1); cinco tabelas — `budget_payroll_settings`,
   `budget_people`, `budget_people_allocations`, `budget_people_benefits`, `payroll_category_map` — com
   CHECKs, índices, gatilhos `updated_at` e RLS (4 policies cada); e `'folha'` no CHECK de
