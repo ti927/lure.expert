@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/states/empty-state'
+import { PartialDataBanner } from '@/components/states/partial-data-banner'
 import { ColHeader } from '@/components/transacoes-shared/col-header'
 import {
   MultiSelectFilter, DescFilter, DirectionFilter, AmountFilter,
@@ -26,6 +27,8 @@ import {
   getBudgetSeriesEntries, deleteBudgetSeries, deleteBudgetEntry, updateBudgetEntry,
 } from '@/server/budget'
 import { SeriesDialog } from '@/components/budget/series-dialog'
+import { RECUSA_FOLHA } from '@/lib/payroll-types'
+import { getQuadro } from '@/server/payroll'
 
 // Chave própria: `lure:orcamento:filters` guarda versão + aba no shell.
 const STORAGE_KEY = 'lure:orcamento:planejamento:filters'
@@ -89,6 +92,19 @@ export function PlanejamentoTab({
   const [isMutating, startMutation] = useTransition()
 
   const isArchived = version.status === 'arquivado'
+
+  // Lançamentos da folha vêm do quadro de pessoal e só se editam lá. Quando o
+  // quadro mudou depois da última geração, os números aqui estão velhos.
+  const temFolha = series.some(s => s.source === 'folha')
+  const [folhaDesatualizada, setFolhaDesatualizada] = useState(false)
+  useEffect(() => {
+    if (!temFolha) { setFolhaDesatualizada(false); return }
+    let vivo = true
+    getQuadro(version.id)
+      .then(r => { if (vivo) setFolhaDesatualizada(!('error' in r) && r.desatualizado) })
+      .catch(() => { /* o aviso é acessório: sem ele a tela segue */ })
+    return () => { vivo = false }
+  }, [version.id, temFolha, series])
 
   useEffect(() => {
     try {
@@ -306,6 +322,15 @@ export function PlanejamentoTab({
         )}
       </div>
 
+      {folhaDesatualizada && (
+        <div className="shrink-0 px-6 pb-3">
+          <PartialDataBanner
+            variant="warning"
+            message="O quadro de pessoal mudou desde a última geração. Os lançamentos da folha abaixo estão desatualizados — gere a folha de novo na aba Quadro de pessoal."
+          />
+        </div>
+      )}
+
       {/* ── Zona 4: tabela ── */}
       <div className="flex-1 min-h-0 overflow-hidden px-6">
         <div className={cn('h-full overflow-auto border rounded-lg', isPending && 'opacity-50 pointer-events-none')}>
@@ -379,7 +404,11 @@ export function PlanejamentoTab({
               {visible.map(s => {
                 const isOpen = expanded.has(s.id)
                 const entries = entriesBySeries[s.id]
-                const diverged = s.entryCount !== s.occurrences
+                // Na folha a regra da série não descreve as ocorrências (PJ salteado,
+                // 13º em parcelas) — o "≠" seria ruído, e editar é recusado.
+                const daFolha = s.source === 'folha'
+                const diverged = !daFolha && s.entryCount !== s.occurrences
+                const travado = isArchived || daFolha
 
                 return (
                   <Fragment key={s.id}>
@@ -392,8 +421,9 @@ export function PlanejamentoTab({
                       <td className="px-2 py-1.5">
                         <span className="font-medium">{s.description}</span>
                         {s.source !== 'manual' && (
-                          <span className="ml-2 text-[10px] rounded px-1.5 py-0.5 bg-sky-500/15 text-sky-700"
-                            title={s.notes ?? undefined}>
+                          <span className={cn('ml-2 text-[10px] rounded px-1.5 py-0.5',
+                            daFolha ? 'bg-violet-500/15 text-violet-700' : 'bg-sky-500/15 text-sky-700')}
+                            title={daFolha ? RECUSA_FOLHA : s.notes ?? undefined}>
                             {BUDGET_SOURCE_LABELS[s.source]}
                           </span>
                         )}
@@ -431,6 +461,11 @@ export function PlanejamentoTab({
                         {fmtMoney(s.annualTotal)}
                       </td>
                       <td className="px-1 py-1.5">
+                        {daFolha ? (
+                          <span className="block text-right text-[10px] text-muted-foreground" title={RECUSA_FOLHA}>
+                            no quadro
+                          </span>
+                        ) : (
                         <div className="flex items-center justify-end gap-0.5">
                           <button
                             onClick={() => setEditing(s)}
@@ -452,6 +487,7 @@ export function PlanejamentoTab({
                             <Trash2 className="h-3 w-3" />
                           </button>
                         </div>
+                        )}
                       </td>
                     </tr>
 
@@ -492,7 +528,8 @@ export function PlanejamentoTab({
                                       <input
                                         type="number" min={0} step="0.01"
                                         defaultValue={e.amount}
-                                        disabled={isArchived || isMutating}
+                                        disabled={travado || isMutating}
+                                        title={daFolha ? RECUSA_FOLHA : undefined}
                                         onBlur={ev => saveEntryAmount(e, ev.target.value)}
                                         onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
                                         className={cn(
@@ -509,7 +546,7 @@ export function PlanejamentoTab({
                                         : e.adjustedFields.map(f => ADJUSTABLE_FIELD_LABELS[f]).join(', ')}
                                     </td>
                                     <td className="py-1 text-right">
-                                      <button
+                                      {!daFolha && <button
                                         onClick={() => {
                                           setDeleteScope('esta')
                                           setPendingDelete({
@@ -524,7 +561,7 @@ export function PlanejamentoTab({
                                         title="Excluir só esta ocorrência"
                                       >
                                         <Trash2 className="h-2.5 w-2.5" />
-                                      </button>
+                                      </button>}
                                     </td>
                                   </tr>
                                 ))}

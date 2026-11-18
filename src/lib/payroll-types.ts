@@ -308,3 +308,6 @@ export function paraParametrosUJ(u: z.output<typeof unidadeJuridicaFolhaSchema>)
     fgts: u.fgts / 100,
   }
 }
+
+/** A recusa de editar/apagar um lançamento da folha fora do quadro (e a dica na tela). */
+export const RECUSA_FOLHA = 'Este lançamento vem da folha. Edite no Quadro de pessoal e gere a folha de novo.'

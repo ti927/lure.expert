@@ -12,10 +12,12 @@
 
 import { sql } from 'drizzle-orm'
 import type { db } from '@/db'
+// A frase mora em `payroll-types` (sem `@/db`) para a tela poder mostrá-la como dica.
+import { RECUSA_FOLHA } from './payroll-types'
+
+export { RECUSA_FOLHA }
 
 type Exec = Pick<typeof db, 'execute'>
-
-export const RECUSA_FOLHA = 'Este lançamento vem da folha. Edite no Quadro de pessoal e gere a folha de novo.'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 

@@ -25,10 +25,10 @@ const CAMPOS_FOLHA: ExtraField[] = [
     name: CAMPOS_FOLHA_UJ.anexoIV, label: 'Anexo IV (INSS patronal fora do DAS)', type: 'checkbox',
     width: 'w-64', visibleWhen: { field: CAMPOS_FOLHA_UJ.regime, equals: 'simples' }, showInRow: false,
   },
-  { name: CAMPOS_FOLHA_UJ.inss, label: 'INSS patronal (%)', type: 'text', defaultValue: '20', width: 'w-28', showInRow: false },
+  { name: CAMPOS_FOLHA_UJ.inss, label: 'INSS patronal (%)', type: 'text', defaultValue: '20', width: 'w-28', showInRow: false, hint: DICA_INSS_DESONERADA },
   { name: CAMPOS_FOLHA_UJ.ratFap, label: 'RAT/FAP (%)', type: 'text', defaultValue: '2', width: 'w-24', showInRow: false },
   { name: CAMPOS_FOLHA_UJ.terceiros, label: 'Terceiros (%)', type: 'text', defaultValue: '5,8', width: 'w-24', showInRow: false },
-  { name: CAMPOS_FOLHA_UJ.fgts, label: 'FGTS (%)', type: 'text', defaultValue: '8', width: 'w-24', showInRow: false, hint: DICA_INSS_DESONERADA },
+  { name: CAMPOS_FOLHA_UJ.fgts, label: 'FGTS (%)', type: 'text', defaultValue: '8', width: 'w-24', showInRow: false },
 ]
 
 function resumoDaFolha(u: typeof legalEntities.$inferSelect): string | null {

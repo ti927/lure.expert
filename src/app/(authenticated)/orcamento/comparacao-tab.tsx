@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Loader2, Target, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Info, Loader2, Target, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/states/empty-state'
 import { PartialDataBanner } from '@/components/states/partial-data-banner'
@@ -23,6 +23,7 @@ import {
 } from '@/lib/budget-types'
 import { getBudgetVsActual, getBudgetDrillDown } from '@/server/budget'
 import { getDreDrillDown } from '@/server/dre'
+import { getMapaFolha, getQuadro } from '@/server/payroll'
 import type { CostCenter } from '@/db/schema/cost-centers'
 import type { BusinessUnit } from '@/db/schema/business-units'
 import type { LegalEntity } from '@/db/schema/legal-entities'
@@ -33,6 +34,9 @@ const TOTAL_COL_W = 104
 const LABEL_W = 260
 
 type Cell = { orcado: number; realizado: number }
+
+const NOTA_PROVISAO =
+  'O orçado provisiona 1/12 por mês; o realizado só registra no pagamento — use o regime Caixa para comparar mês a mês.'
 
 /**
  * CONVENÇÃO DE SINAL: com `netAmount` (receita positiva, despesa negativa),
@@ -96,6 +100,31 @@ export function ComparacaoTab({
 
   const [data, setData] = useState<BudgetVsActualData | null>(null)
   const [isPending, startTransition] = useTransition()
+
+  // Naturezas que recebem provisão de 13º/1/3 de férias da folha (modo provisão).
+  // Na competência o orçado as distribui por 12 e o realizado só registra no
+  // pagamento: a nota evita ler isso como desvio.
+  const [naturezasProvisao, setNaturezasProvisao] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    let vivo = true
+    Promise.all([getQuadro(version.id), getMapaFolha()])
+      .then(([q, mapa]) => {
+        if (!vivo || 'error' in q || q.settings.modoProvisao !== 'provisao') return
+        const clt = q.pessoas.filter(p => p.vinculo === 'clt')
+        const ids = new Set<string>()
+        for (const c of ['decimo_terceiro', 'terco_ferias'] as const) {
+          // O mapa só vale gravado; a sugestão não entra na geração.
+          const doMapa = mapa.find(m => m.componente === c && !m.sugerida)?.categoryId
+          for (const p of clt) {
+            const id = p.naturezas[c] ?? doMapa
+            if (id) ids.add(id)
+          }
+        }
+        setNaturezasProvisao(ids)
+      })
+      .catch(() => { /* a nota é acessória */ })
+    return () => { vivo = false }
+  }, [version.id])
 
   const from = `${fy}-01-01`
   const to = `${fy}-12-31`
@@ -364,6 +393,11 @@ export function ComparacaoTab({
                             <span className="text-muted-foreground/30 font-mono text-[10px] shrink-0">{child.categoryCode}</span>
                           )}
                           <span className="truncate">{child.categoryName}</span>
+                          {regime === 'competencia' && naturezasProvisao.has(child.categoryId) && (
+                            <span title={NOTA_PROVISAO} className="shrink-0 text-amber-600 cursor-help">
+                              <Info className="h-3 w-3" />
+                            </span>
+                          )}
                         </div>
                       </td>
                       {renderCells(child.byMonth, {
@@ -495,6 +529,15 @@ export function ComparacaoTab({
           <PartialDataBanner
             variant="warning"
             message={`${fmtMoney(Math.abs(data!.semCategoria.net))} em ${data!.semCategoria.count} transações sem categoria não entram nesta comparação.`}
+          />
+        </div>
+      )}
+
+      {regime === 'competencia' && naturezasProvisao.size > 0 && (
+        <div className="shrink-0 px-6 pb-2">
+          <PartialDataBanner
+            variant="info"
+            message={`Naturezas marcadas com o ícone de informação recebem 13º e 1/3 de férias da folha. ${NOTA_PROVISAO}`}
           />
         </div>
       )}

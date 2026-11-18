@@ -102,6 +102,9 @@ export function DimensionManager({
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; linkedCount: number } | null>(null)
 
   const createFormRef = useRef<HTMLFormElement>(null)
+  // `form.reset()` só limpa o DOM; os `select` controlados de `ExtraFieldInputs`
+  // guardam estado próprio. Trocar a chave remonta os campos com os padrões.
+  const [createKey, setCreateKey] = useState(0)
 
   const active = items.filter((i) => i.isActive)
   const archived = items.filter((i) => !i.isActive)
@@ -116,6 +119,7 @@ export function DimensionManager({
         toast.success(`${singularLabel} criado com sucesso.`)
         setShowCreateForm(false)
         createFormRef.current?.reset()
+        setCreateKey((k) => k + 1)
         router.refresh()
       }
     })
@@ -210,7 +214,7 @@ export function DimensionManager({
               <Input id="new-cnpj" name="cnpj" placeholder="00.000.000/0001-00" />
             </div>
           )}
-          {extraFields && <ExtraFieldInputs fields={extraFields} idPrefix="new" />}
+          {extraFields && <ExtraFieldInputs key={createKey} fields={extraFields} idPrefix="new" />}
           {roleFields && roleFields.length > 0 && (
             <div>
               <Label className="text-xs mb-1 block">Papel</Label>
