@@ -140,7 +140,12 @@ export function calcularPessoa(
   const outros = (m: number) => Math.round(outrosC * fator(m))
   const rem = (m: number) => principal(m) + outros(m)
 
-  const mesFerias = p.mesFerias ?? (p.mesEntrada > 1 ? p.mesEntrada : 12)
+  // Férias (CLT arts. 130/134): só depois de 12 meses de período aquisitivo.
+  // Quem é admitido no exercício (entrada > janeiro) não tira férias nele — elas
+  // caem no ano seguinte, no mês informado ou no aniversário da admissão.
+  const feriasNoAnoSeguinte = p.mesEntrada > 1
+  const mesFerias = p.mesFerias ?? (feriasNoAnoSeguinte ? p.mesEntrada : 12)
+  const feriasNoExercicio = (m: number) => !feriasNoAnoSeguinte && m === mesFerias
   const comp = (m: number) => competencia(exercicio, m)
   const m1 = (m: number, dia: number) => data(exercicio, m + 1, dia)
 
@@ -154,7 +159,7 @@ export function calcularPessoa(
   for (const m of ativos) {
     const caixaRem =
       p.vinculo === 'pj' ? m1(m, p.diaPagamentoPj)
-      : ehClt && m === mesFerias ? data(exercicio, m, 1)
+      : ehClt && feriasNoExercicio(m) ? data(exercicio, m, 1)
       : m1(m, 5)
     push({ componente: componentePrincipal, competencia: comp(m), caixa: caixaRem, centavos: principal(m) })
     push({ componente: 'outros_proventos', competencia: comp(m), caixa: caixaRem, centavos: outros(m) })
@@ -182,7 +187,7 @@ export function calcularPessoa(
   const provisao = versao.modoProvisao === 'provisao'
   const alvo13 = Math.round(rem(ultimo) * avos / 12)
   const alvoTerco = Math.round(rem(ultimo) * avos / 36)
-  const mesPagTerco = ativos.includes(mesFerias) ? mesFerias : ultimo
+  const mesPagTerco = ativos.some(feriasNoExercicio) ? mesFerias : ultimo
 
   const d13 = distribuir(ativos, m => Math.round(rem(m) / 12), alvo13, provisao, ultimo)
   const dTerco = distribuir(ativos, m => Math.round(rem(m) / 36), alvoTerco, provisao, mesPagTerco)
@@ -219,8 +224,11 @@ export function calcularPessoa(
       d13f.get(m) ?? 0, [data(exercicio, 12, 20), data(exercicio + 1, 1, 20)])
 
     // Terço: dia 01 do mês de férias; provisão posterior às férias do ano paga
-    // nas férias do ano seguinte. Encargos: dia 20 do mês seguinte ao terço.
-    const caixaTerco = m <= mesFerias ? data(exercicio, mesFerias, 1) : data(exercicio + 1, mesFerias, 1)
+    // nas férias do ano seguinte; admitido no exercício, tudo nas férias do ano
+    // seguinte. Encargos: dia 20 do mês seguinte ao terço.
+    const caixaTerco = feriasNoAnoSeguinte || m > mesFerias
+      ? data(exercicio + 1, mesFerias, 1)
+      : data(exercicio, mesFerias, 1)
     const caixaEncTerco = dia20DoMesSeguinte(caixaTerco)
     emitir({ componente: 'terco_ferias', competencia: c }, dTerco.get(m) ?? 0, [caixaTerco])
     emitir({ componente: 'encargos_13_ferias', encargo: { sobre: 'terco_ferias', parte: 'patronal' }, competencia: c },

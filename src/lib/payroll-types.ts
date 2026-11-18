@@ -158,7 +158,10 @@ export type LinhaCalculada = {
 // ─── Schemas de entrada (pontos percentuais) ─────────────────────────────────
 
 const mes = z.number().int().min(1, 'Mês entre 1 e 12').max(12, 'Mês entre 1 e 12')
-const pontos = z.number().min(-100).max(1000)
+// Os limites espelham os CHECKs da migration 0036 — o que o Zod aceita tem de
+// caber na coluna. Reajuste negativo, além disso, daria complemento negativo
+// em dezembro.
+const pontos = z.number().min(0, 'Percentual não pode ser negativo').max(1000)
 const aliquotaPontos = z.number().min(0, 'Alíquota não pode ser negativa').max(100, 'Alíquota acima de 100%')
 
 /** "99,99" — o número como a pessoa leria. */
@@ -174,7 +177,7 @@ export const alocacaoSchema = z.object({
 
 export const beneficioSchema = z.object({
   nome: z.string().trim().min(1, 'Informe o nome do benefício'),
-  valorMensal: z.number().min(0, 'Valor do benefício não pode ser negativo'),
+  valorMensal: z.number().gt(0, 'Valor do benefício deve ser maior que zero'),
   categoryId: z.uuid().nullable().default(null),
 })
 
@@ -186,14 +189,14 @@ export const pessoaSchema = z
     cargo: z.string().trim().nullable().default(null),
     legalEntityId: z.uuid().nullable().default(null),
     contactId: z.uuid().nullable().default(null),
-    valorBase: z.number().min(0, 'Valor não pode ser negativo'),
+    valorBase: z.number().gt(0, 'Valor deve ser maior que zero'),
     outrosProventos: z.number().min(0).default(0),
     /** Sem valor = janeiro. Vaga precisa informar (é o mês previsto de entrada). */
     mesEntrada: mes.optional(),
     mesSaida: mes.default(12),
     mesesPj: z.array(mes).nullable().default(null),
     mesFerias: mes.nullable().default(null),
-    diaPagamentoPj: z.number().int().min(1).max(31).default(10),
+    diaPagamentoPj: z.number().int().min(1, 'Dia entre 1 e 28').max(28, 'Dia entre 1 e 28').default(10),
     aplicaDissidio: z.boolean().default(true),
     reajusteMes: mes.nullable().default(null),
     /** Pontos percentuais: 5 = 5%. */
