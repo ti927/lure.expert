@@ -101,7 +101,8 @@ export function ComparacaoTab({
   const [data, setData] = useState<BudgetVsActualData | null>(null)
   const [isPending, startTransition] = useTransition()
 
-  // Naturezas que recebem provisão de 13º/1/3 de férias da folha (modo provisão).
+  // Naturezas que recebem provisão de 13º/1/3 de férias da folha (modo provisão),
+  // e a dos encargos sobre eles — provisionados do mesmo jeito.
   // Na competência o orçado as distribui por 12 e o realizado só registra no
   // pagamento: a nota evita ler isso como desvio.
   const [naturezasProvisao, setNaturezasProvisao] = useState<Set<string>>(new Set())
@@ -112,7 +113,7 @@ export function ComparacaoTab({
         if (!vivo || 'error' in q || q.settings.modoProvisao !== 'provisao') return
         const clt = q.pessoas.filter(p => p.vinculo === 'clt')
         const ids = new Set<string>()
-        for (const c of ['decimo_terceiro', 'terco_ferias'] as const) {
+        for (const c of ['decimo_terceiro', 'terco_ferias', 'encargos_13_ferias'] as const) {
           // O mapa só vale gravado; a sugestão não entra na geração.
           const doMapa = mapa.find(m => m.componente === c && !m.sugerida)?.categoryId
           for (const p of clt) {
@@ -537,7 +538,7 @@ export function ComparacaoTab({
         <div className="shrink-0 px-6 pb-2">
           <PartialDataBanner
             variant="info"
-            message={`Naturezas marcadas com o ícone de informação recebem 13º e 1/3 de férias da folha. ${NOTA_PROVISAO}`}
+            message={`Naturezas marcadas com o ícone de informação recebem 13º, 1/3 de férias ou os encargos sobre eles, da folha. ${NOTA_PROVISAO}`}
           />
         </div>
       )}

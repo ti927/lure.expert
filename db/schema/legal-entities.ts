@@ -19,10 +19,10 @@ export const legalEntities = pgTable('legal_entities', {
   /** 'lucro_real' | 'lucro_presumido' | 'simples' */
   regimeTributario: text('regime_tributario'),
   simplesAnexoIv: boolean('simples_anexo_iv').notNull().default(false),
-  aliquotaInssPatronal: numeric('aliquota_inss_patronal', { precision: 6, scale: 4 }).notNull().default('0.20'),
-  aliquotaRatFap: numeric('aliquota_rat_fap', { precision: 6, scale: 4 }).notNull().default('0.02'),
-  aliquotaTerceiros: numeric('aliquota_terceiros', { precision: 6, scale: 4 }).notNull().default('0.058'),
-  aliquotaFgts: numeric('aliquota_fgts', { precision: 6, scale: 4 }).notNull().default('0.08'),
+  aliquotaInssPatronal: numeric('aliquota_inss_patronal', { precision: 8, scale: 6 }).notNull().default('0.20'),
+  aliquotaRatFap: numeric('aliquota_rat_fap', { precision: 8, scale: 6 }).notNull().default('0.02'),
+  aliquotaTerceiros: numeric('aliquota_terceiros', { precision: 8, scale: 6 }).notNull().default('0.058'),
+  aliquotaFgts: numeric('aliquota_fgts', { precision: 8, scale: 6 }).notNull().default('0.08'),
   updatedAt: timestamp('updated_at', tz).notNull().default(sql`now()`),
 })
 

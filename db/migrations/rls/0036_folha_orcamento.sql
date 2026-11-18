@@ -21,10 +21,10 @@
 ALTER TABLE legal_entities
   ADD COLUMN IF NOT EXISTS regime_tributario      text,
   ADD COLUMN IF NOT EXISTS simples_anexo_iv       boolean       NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS aliquota_inss_patronal numeric(6,4)  NOT NULL DEFAULT 0.20,
-  ADD COLUMN IF NOT EXISTS aliquota_rat_fap       numeric(6,4)  NOT NULL DEFAULT 0.02,
-  ADD COLUMN IF NOT EXISTS aliquota_terceiros     numeric(6,4)  NOT NULL DEFAULT 0.058,
-  ADD COLUMN IF NOT EXISTS aliquota_fgts          numeric(6,4)  NOT NULL DEFAULT 0.08,
+  ADD COLUMN IF NOT EXISTS aliquota_inss_patronal numeric(8,6)  NOT NULL DEFAULT 0.20,
+  ADD COLUMN IF NOT EXISTS aliquota_rat_fap       numeric(8,6)  NOT NULL DEFAULT 0.02,
+  ADD COLUMN IF NOT EXISTS aliquota_terceiros     numeric(8,6)  NOT NULL DEFAULT 0.058,
+  ADD COLUMN IF NOT EXISTS aliquota_fgts          numeric(8,6)  NOT NULL DEFAULT 0.08,
   ADD COLUMN IF NOT EXISTS updated_at             timestamptz   NOT NULL DEFAULT now();
 
 ALTER TABLE legal_entities DROP CONSTRAINT IF EXISTS legal_entities_regime_chk;

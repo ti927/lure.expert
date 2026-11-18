@@ -59,13 +59,19 @@ export function GerarFolhaDialog({
   }, [previa])
 
   const totalMes = (mes: string) => matriz.reduce((s, r) => s + (r.porMes.get(mes) ?? 0), 0)
-  const bloqueado = !previa || previa.recusas.length > 0 || previa.totalCentavos === 0 || !editavel
+  // Quadro vazio (ou tudo zerado) com folha anterior gravada: gerar é REMOVER a
+  // folha antiga — sem isso as séries `folha` ficariam travadas para sempre,
+  // porque só a geração as apaga.
+  const remover = !!previa && previa.recusas.length === 0 && previa.totalCentavos === 0 && previa.seriesExistentes > 0
+  const bloqueado = !previa || previa.recusas.length > 0 || (previa.totalCentavos === 0 && !remover) || !editavel
 
   function gerar() {
     startGenerating(async () => {
       const r = await generateFolha(versionId)
       if ('error' in r) { toast.error(r.error); return }
-      toast.success(`Folha gerada: ${r.series} lançamentos, ${r.entries} ocorrências.`)
+      toast.success(r.series === 0
+        ? `Folha removida: ${r.substituidas} lançamento${r.substituidas === 1 ? '' : 's'} apagado${r.substituidas === 1 ? '' : 's'}.`
+        : `Folha gerada: ${r.series} lançamentos, ${r.entries} ocorrências.`)
       onOpenChange(false)
       onGenerated()
     })
@@ -116,7 +122,7 @@ export function GerarFolhaDialog({
               <span className="text-muted-foreground">
                 Total do ano <span className="text-base font-semibold tabular-nums text-foreground">R$ {fmtCentavos(previa.totalCentavos)}</span>
               </span>
-              {previa.seriesExistentes > 0 && (
+              {previa.seriesExistentes > 0 && !remover && (
                 <span className="text-amber-600">
                   Substitui {previa.seriesExistentes} lançamento{previa.seriesExistentes > 1 ? 's' : ''} da folha anterior.
                 </span>
@@ -171,7 +177,14 @@ export function GerarFolhaDialog({
               </div>
             )}
 
-            {previa.porPessoa.length === 0 && (
+            {remover && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-amber-800 dark:text-amber-300">
+                {previa.porPessoa.length === 0 ? 'O quadro está vazio' : 'O quadro não gera nenhum valor'}, mas o orçamento ainda tem a folha anterior.
+                Confirmar apaga {previa.seriesExistentes === 1 ? 'o lançamento' : `os ${previa.seriesExistentes} lançamentos`} da folha desta versão e não grava nada no lugar.
+              </div>
+            )}
+
+            {previa.porPessoa.length === 0 && !remover && (
               <p className="text-muted-foreground">O quadro está vazio. Adicione pessoas antes de gerar.</p>
             )}
 
@@ -185,7 +198,7 @@ export function GerarFolhaDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isGenerating}>Cancelar</Button>
           {editavel && (
             <Button onClick={gerar} disabled={bloqueado || isGenerating}>
-              {isGenerating ? 'Gerando…' : 'Gerar folha'}
+              {isGenerating ? (remover ? 'Removendo…' : 'Gerando…') : (remover ? 'Remover a folha' : 'Gerar folha')}
             </Button>
           )}
         </DialogFooter>

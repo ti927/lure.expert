@@ -15,6 +15,7 @@ import {
   pessoaSchema, parametrosVersaoSchema, unidadeJuridicaFolhaSchema, paraPessoaCalc,
   type PessoaCalc, type ParametrosUJ, type ParametrosVersaoCalc, type LinhaCalculada, type Componente,
 } from '@/lib/payroll-types'
+import { CAMPOS_FOLHA_UJ, lerFolhaDaUnidade, valoresDeFolhaParaForm } from '@/lib/payroll-uj'
 
 let ok = 0, falhas = 0
 const t = (bom: boolean, msg: string) => { if (bom) ok++; else falhas++; console.log(`${bom ? 'OK  ' : 'FALHA'} | ${msg}`) }
@@ -296,6 +297,11 @@ console.log('\n── zod ──')
   t(erro({ ...base, vinculo: 'pro_labore', reajusteMes: 7, reajustePct: -5 }) !== null, 'recusa reajuste negativo')
   t(erro({ ...base, beneficios: [{ nome: 'VR', valorMensal: 0 }] }) !== null, 'recusa benefício de valor 0 (valor_mensal > 0)')
   t(erro({ ...base, beneficios: [{ nome: 'VR', valorMensal: 800 }] }) === null, 'aceita benefício de 800')
+  const eDup = erro({ ...base, beneficios: [{ nome: 'VR', valorMensal: 800 }, { nome: ' vr ', valorMensal: 200 }] })
+  t(eDup !== null && /Benefício repetido/.test(eDup), `recusa "VR" e " vr " na mesma pessoa (${eDup})`)
+  const eDupEsp = erro({ ...base, beneficios: [{ nome: 'Vale  Refeição', valorMensal: 800 }, { nome: 'vale refeição', valorMensal: 200 }] })
+  t(eDupEsp !== null && /Benefício repetido/.test(eDupEsp), 'recusa nomes que só diferem em espaços internos e caixa')
+  t(erro({ ...base, beneficios: [{ nome: 'VR', valorMensal: 800 }, { nome: 'VA', valorMensal: 300 }] }) === null, 'aceita VR e VA na mesma pessoa')
 
   const r = pessoaSchema.safeParse({ ...base, vinculo: 'pro_labore', reajusteMes: 7, reajustePct: 10 })
   if (r.success) {
@@ -310,6 +316,19 @@ console.log('\n── zod ──')
   t(!parametrosVersaoSchema.safeParse({ modoProvisao: 'provisao', dissidioMes: 5, dissidioPct: -3 }).success, 'dissídio negativo é recusado')
   const u = unidadeJuridicaFolhaSchema.safeParse({ regime: 'simples', anexoIV: true, inss: 20, ratFap: 2, terceiros: 5.8, fgts: 8 })
   t(u.success, 'unidadeJuridicaFolhaSchema aceita alíquotas em pontos')
+  t(unidadeJuridicaFolhaSchema.safeParse({ regime: 'lucro_real', anexoIV: false, inss: 20, ratFap: 3.7035, terceiros: 5.8, fgts: 8 }).success,
+    'aceita RAT×FAP 3,7035 (4 casas em pontos)')
+  t(!unidadeJuridicaFolhaSchema.safeParse({ regime: 'lucro_real', anexoIV: false, inss: 20, ratFap: 3.70351, terceiros: 5.8, fgts: 8 }).success,
+    'recusa 5 casas em pontos (truncaria ao gravar em numeric(8,6))')
+  {
+    const fd = new Map<string, string>([['folha_regime', 'lucro_real'], ['folha_inss', '20'], ['folha_rat_fap', '3,7035'], ['folha_terceiros', '5,8'], ['folha_fgts', '8']])
+    const lido = lerFolhaDaUnidade({ get: k => fd.get(k) ?? null, has: k => fd.has(k) })
+    const col = lido && !('error' in lido) ? lido.colunas : null
+    t(col?.aliquotaRatFap === '0.037035', `formulário "3,7035" → coluna "0.037035" (${col?.aliquotaRatFap})`)
+    const volta = col ? valoresDeFolhaParaForm(col)[CAMPOS_FOLHA_UJ.ratFap] : null
+    t(volta === '3.7035', `coluna "0.037035" → formulário "3.7035" (${volta})`)
+    t(col?.aliquotaTerceiros === '0.058000' && valoresDeFolhaParaForm(col!)[CAMPOS_FOLHA_UJ.terceiros] === '5.8', 'terceiros 5,8 → "0.058000" → "5.8"')
+  }
   t(!unidadeJuridicaFolhaSchema.safeParse({ regime: 'mei', anexoIV: false, inss: 20, ratFap: 2, terceiros: 5.8, fgts: 8 }).success, 'regime desconhecido é recusado')
 }
 

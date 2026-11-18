@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/utils'
 import { fmtMoney, fmtNum, dateLabel } from '@/lib/format'
 import type { BudgetDrillDownEntry, BudgetSeriesListItem } from '@/lib/budget-types'
+import { RECUSA_FOLHA } from '@/lib/payroll-types'
 import type { CategoryItem, SimpleDimensionItem } from '@/components/transacoes-shared/types'
 import { getBudgetSeries } from '@/server/budget'
 import { SeriesDialog } from './series-dialog'
@@ -103,6 +104,9 @@ export function BudgetDrillDownDialog({
                       <tr key={e.id} className="border-b last:border-b-0">
                         <td className="px-2 py-1">
                           {e.description}
+                          {e.daFolha && (
+                            <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-sky-500/15 text-sky-700" title={RECUSA_FOLHA}>folha</span>
+                          )}
                           {e.adjusted && (
                             <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-amber-500/15 text-amber-600">ajustada</span>
                           )}
@@ -116,6 +120,14 @@ export function BudgetDrillDownDialog({
                         </td>
                         {edit && (
                           <td className="px-1 py-1 text-center">
+                            {/* Da folha: só leitura. Um span, não um botão desabilitado —
+                                o `pointer-events-none` do desabilitado esconderia o motivo. */}
+                            {e.daFolha ? (
+                              <span title={RECUSA_FOLHA}
+                                className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground opacity-30 cursor-help">
+                                <Pencil className="h-3 w-3" />
+                              </span>
+                            ) : (
                             <button
                               onClick={() => openSeries(e.seriesId)}
                               disabled={!canEdit || loadingSeriesId !== null}
@@ -126,6 +138,7 @@ export function BudgetDrillDownDialog({
                                 ? <Loader2 className="h-3 w-3 animate-spin" />
                                 : <Pencil className="h-3 w-3" />}
                             </button>
+                            )}
                           </td>
                         )}
                       </tr>

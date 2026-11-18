@@ -162,7 +162,10 @@ const mes = z.number().int().min(1, 'Mês entre 1 e 12').max(12, 'Mês entre 1 e
 // caber na coluna. Reajuste negativo, além disso, daria complemento negativo
 // em dezembro.
 const pontos = z.number().min(0, 'Percentual não pode ser negativo').max(1000)
+// Até 4 casas em PONTOS = 6 casas na fração (`numeric(8,6)`): RAT × FAP dá
+// 3% × 1,2345 = 3,7035%. Mais casas seriam truncadas em silêncio ao gravar.
 const aliquotaPontos = z.number().min(0, 'Alíquota não pode ser negativa').max(100, 'Alíquota acima de 100%')
+  .refine(v => Math.abs(v * 1e4 - Math.round(v * 1e4)) < 1e-6, 'Alíquota com no máximo 4 casas decimais (ex.: 3,7035)')
 
 /** "99,99" — o número como a pessoa leria. */
 function pctBR(centesimos: number): string {
@@ -226,6 +229,20 @@ export const pessoaSchema = z
 
     if ((p.reajusteMes === null) !== (p.reajustePct === null)) {
       erro('reajustePct', 'Reajuste precisa de mês e percentual juntos')
+    }
+
+    // A geração agrupa as séries pelo NOME do benefício: dois "VR" na mesma
+    // pessoa virariam um lançamento só, somado. Caixa e espaços não distinguem.
+    const chaveBeneficio = (n: string) => n.trim().replace(/\s+/g, ' ').toLocaleLowerCase('pt-BR')
+    const vistos = new Set<string>()
+    const repetidos = new Set<string>()
+    for (const b of p.beneficios) {
+      const k = chaveBeneficio(b.nome)
+      if (vistos.has(k)) repetidos.add(b.nome.trim())
+      vistos.add(k)
+    }
+    if (repetidos.size > 0) {
+      erro('beneficios', `Benefício repetido na mesma pessoa: ${Array.from(repetidos).join(', ')}. Use nomes diferentes ou some os valores num só`)
     }
 
     if (p.alocacoes.length > 0) {

@@ -26,7 +26,7 @@ export const OPCOES_REGIME = [
   ...REGIMES.map(r => ({ value: r, label: REGIME_LABELS[r] })),
 ]
 
-/** As colunas de `legal_entities` que a folha lê (frações, `numeric(6,4)` como texto). */
+/** As colunas de `legal_entities` que a folha lê (frações, `numeric(8,6)` como texto). */
 export type ColunasFolhaUJ = {
   regimeTributario: Regime | null
   simplesAnexoIv: boolean
@@ -36,8 +36,8 @@ export type ColunasFolhaUJ = {
   aliquotaFgts: string
 }
 
-/** Fração → texto de `numeric(6,4)`, sem o ruído do ponto flutuante. */
-const fracaoParaTexto = (f: number) => f.toFixed(4)
+/** Fração → texto de `numeric(8,6)`, sem o ruído do ponto flutuante (3,7035 pontos → "0.037035"). */
+const fracaoParaTexto = (f: number) => f.toFixed(6)
 
 /** "5,8" ou "5.8" → número; vazio → undefined (vale o padrão do schema); lixo → NaN. */
 function lerPontos(v: FormDataEntryValue | null): number | undefined {
@@ -100,7 +100,7 @@ export function folhaMudou(
     || Number(novas.aliquotaFgts) !== Number(atuais.aliquotaFgts)
 }
 
-/** Fração do banco → pontos como texto, para o formulário ("0.0580" → "5.8"). */
+/** Fração do banco → pontos como texto, para o formulário ("0.058000" → "5.8", "0.037035" → "3.7035"). */
 const fracaoParaPontosTexto = (v: string) => String(Math.round(Number(v) * 1e6) / 1e4)
 
 /** Os valores dos campos para preencher o formulário de edição. */

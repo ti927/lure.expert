@@ -280,7 +280,7 @@ export function QuadroTab({
                   <Plus className="h-3.5 w-3.5" /> Adicionar pessoa
                 </Button>
                 <Button size="sm" className="h-8 text-xs gap-1.5" onClick={() => setGerarOpen(true)}
-                  disabled={pessoas.length === 0}>
+                  disabled={pessoas.length === 0 && !quadro.geradoEm}>
                   <Wand2 className="h-3.5 w-3.5" /> Gerar folha
                 </Button>
               </>
@@ -288,10 +288,14 @@ export function QuadroTab({
           </div>
         </div>
 
-        {quadro.desatualizado && pessoas.length > 0 && (
+        {/* Sem a condição de haver pessoas: o quadro esvaziado depois de uma geração
+            ainda deixa a folha antiga no orçamento, e só gerar de novo a remove. */}
+        {quadro.desatualizado && (
           <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            {quadro.geradoEm
+            {quadro.geradoEm && pessoas.length === 0
+              ? 'O quadro está vazio, mas o orçamento ainda mostra a folha gerada antes. Gere de novo para removê-la.'
+              : quadro.geradoEm
               ? `O quadro mudou desde a última geração (${quando(quadro.geradoEm)}). O orçamento ainda mostra a folha antiga.`
               : 'A folha desta versão ainda não foi gerada. O orçamento não tem nada do quadro.'}
             {editavel && (

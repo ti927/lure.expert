@@ -97,6 +97,11 @@ async function main() {
       t(Number(e0.a) === 0.2 && Number(e0.r) === 0.02 && Number(e0.tc) === 0.058 && Number(e0.f) === 0.08,
         'entidade nova nasce com 0.20 / 0.02 / 0.058 / 0.08')
 
+      // RAT × FAP: 3% × 1,2345 = 3,7035% = 0.037035 — precisa de 6 casas na fração.
+      const [ePrec] = await tx.execute<{ r: string }>(sql`
+        UPDATE legal_entities SET aliquota_rat_fap = 0.037035 WHERE id = ${ent.id}::uuid RETURNING aliquota_rat_fap::text AS r`)
+      t(ePrec.r === '0.037035', `RAT×FAP 0.037035 gravado sem arredondar (${ePrec.r})`)
+
       const rAliq = await recusa(tx, () => tx.execute(sql`UPDATE legal_entities SET aliquota_fgts = 8 WHERE id = ${ent.id}::uuid`))
       t(rAliq !== null, 'alíquota em percentual (8) em vez de fração é recusada')
       const rReg = await recusa(tx, () => tx.execute(sql`UPDATE legal_entities SET regime_tributario = 'mei' WHERE id = ${ent.id}::uuid`))

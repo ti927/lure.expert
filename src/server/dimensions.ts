@@ -4,6 +4,7 @@ import { getAuthContext } from '@/lib/auth-context'
 
 import { recusaDePapel } from '@/lib/members-types'
 import { folhaMudou, lerFolhaDaUnidade, type ColunasFolhaUJ } from '@/lib/payroll-uj'
+import { recusaApagarUnidadeJuridica, usoDaUnidadeNaFolha } from '@/lib/payroll-write'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { db } from '@/db'
@@ -240,9 +241,10 @@ export async function updateLegalEntity(id: string, formData: FormData) {
       .where(and(eq(legalEntities.id, id), eq(legalEntities.organizationId, organizationId)))
       .limit(1)
     if (!atual) return { error: 'Entidade jurídica não encontrada.' }
-    // Só grava (e só exige admin) quando algo da folha de fato mudou — assim o
-    // operador segue editando nome e CNPJ, e `updated_at` (que avisa que a folha
-    // ficou desatualizada) não se mexe à toa.
+    // Só grava as colunas da folha (e só exige admin) quando algo da folha de
+    // fato mudou — assim o operador segue editando nome e CNPJ. Isto NÃO poupa
+    // o `updated_at`: o gatilho o move em QUALQUER UPDATE da linha, inclusive
+    // renomear, e o quadro que usa esta UJ passa a aparecer como desatualizado.
     if (folhaMudou(folha.colunas, atual)) {
       const recusa = recusaDePapel(papel, 'admin', RECUSA_FOLHA_UJ)
       if (recusa) return { error: recusa }
@@ -271,6 +273,9 @@ export async function toggleLegalEntityActive(id: string, isActive: boolean) {
 
 export async function deleteLegalEntity(id: string) {
   const { organizationId } = await getAuthContext()
+  // A FK de `budget_people` é RESTRICT: sem esta pergunta, o 23503 sairia cru.
+  const recusa = await recusaApagarUnidadeJuridica(db, organizationId, id)
+  if (recusa) return { error: recusa }
   await db
     .delete(legalEntities)
     .where(and(eq(legalEntities.id, id), eq(legalEntities.organizationId, organizationId)))
@@ -280,12 +285,17 @@ export async function deleteLegalEntity(id: string) {
 
 export async function getLegalEntityLinkedCount(id: string) {
   const { organizationId } = await getAuthContext()
-  return countLinked(organizationId, id, {
-    tx:     transactions.legalEntityId,
-    rule:   categorizationRules.targetLegalEntityId,
-    series: budgetSeries.legalEntityId,
-    entry:  budgetEntries.legalEntityId,
-  })
+  const [vinculos, folha] = await Promise.all([
+    countLinked(organizationId, id, {
+      tx:     transactions.legalEntityId,
+      rule:   categorizationRules.targetLegalEntityId,
+      series: budgetSeries.legalEntityId,
+      entry:  budgetEntries.legalEntityId,
+    }),
+    usoDaUnidadeNaFolha(db, organizationId, id),
+  ])
+  // As pessoas do quadro também contam: é o vínculo que IMPEDE apagar.
+  return vinculos + folha.pessoas
 }
 
 // ─── CONTATOS (clientes e fornecedores) ──────────────────────────────────────

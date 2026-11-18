@@ -467,6 +467,8 @@ export interface BudgetDrillDownEntry {
   legalEntityName:  string | null
   contactName:      string | null
   adjusted:         boolean
+  /** Ocorrência gerada pela folha (série `source = 'folha'`): só leitura. */
+  daFolha:          boolean
 }
 
 // ─── Aceleradores: copiar do realizado e duplicar versão ──────────────────────

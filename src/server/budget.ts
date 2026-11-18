@@ -1028,6 +1028,7 @@ export async function getBudgetDrillDown(
     legal_entity_name: string | null
     contact_name: string | null
     adjusted: boolean
+    da_folha: boolean
   }
 
   const rows = await db.execute<Row>(sql`
@@ -1043,8 +1044,10 @@ export async function getBudgetDrillDown(
       bu.name                 AS business_unit_name,
       le.name                 AS legal_entity_name,
       ct.name                 AS contact_name,
-      (cardinality(e.adjusted_fields) > 0) AS adjusted
+      (cardinality(e.adjusted_fields) > 0) AS adjusted,
+      COALESCE(bs.source = 'folha', false) AS da_folha
     FROM budget_entries e
+    LEFT JOIN budget_series bs  ON bs.id = e.series_id
     LEFT JOIN cost_centers cc   ON e.cost_center_id   = cc.id
     LEFT JOIN business_units bu ON e.business_unit_id = bu.id
     LEFT JOIN legal_entities le ON e.legal_entity_id  = le.id
@@ -1071,6 +1074,7 @@ export async function getBudgetDrillDown(
     legalEntityName: r.legal_entity_name,
     contactName: r.contact_name,
     adjusted: r.adjusted,
+    daFolha: r.da_folha,
   }))
 }
 

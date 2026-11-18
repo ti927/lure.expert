@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto'
 import {
   lerQuadro, salvarPessoa, apagarPessoa, salvarParametrosVersao, lerMapa, salvarMapa,
   preverFolha, gerarFolha, copiarQuadro, quadroDesatualizado, recusaSeFolha, RECUSA_FOLHA,
+  recusaApagarUnidadeJuridica, recusaApagarNaturezaDaFolha,
 } from '@/lib/payroll-write'
 import { applySeriesUpdate, applySeriesDelete, planSeriesUpdate, seriesToInput } from '@/lib/budget-scope'
 import { applyDraftsToBudget, applyDuplicateVersion } from '@/lib/budget-copy'
@@ -82,7 +83,8 @@ async function main() {
 
     const [ujLP] = await db.insert(legalEntities).values({ organizationId: ORG, name: 'UJ LP', regimeTributario: 'lucro_presumido' })
       .returning({ id: legalEntities.id })
-    await db.insert(legalEntities).values({ organizationId: ORG, name: 'UJ Simples', regimeTributario: 'simples' })
+    const [ujSimples] = await db.insert(legalEntities).values({ organizationId: ORG, name: 'UJ Simples', regimeTributario: 'simples' })
+      .returning({ id: legalEntities.id })
     const [cc] = await db.insert(costCenters).values({ organizationId: ORG, name: 'CC teste' }).returning({ id: costCenters.id })
     const [v27] = await db.insert(budgetVersions).values({ organizationId: ORG, name: 'Folha 2027', fiscalYear: 2027 })
       .returning({ id: budgetVersions.id })
@@ -268,6 +270,22 @@ async function main() {
     const apOk = await tx(x => apagarPessoa(x, ORG, v28.id, tmp.id))
     t(!temErro(apOk), 'apagarPessoa apaga')
 
+    // ── apagar UJ / natureza que a folha usa ─────────────────────────────────
+    const rUj = await recusaApagarUnidadeJuridica(db, ORG, ujLP.id)
+    t(!!rUj && /quadro de pessoal de 1 versão/.test(rUj), `apagar UJ com pessoas no quadro → recusa descritiva — ${rUj}`)
+    t(await recusaApagarUnidadeJuridica(db, ORG, ujSimples.id) === null, 'apagar UJ sem pessoas → sem recusa')
+    t(await recusaApagarUnidadeJuridica(db, VIZ, ujLP.id) === null, 'recusa de UJ não enxerga outra organização')
+    const rCat = await recusaApagarNaturezaDaFolha(db, ORG, honorarios.id)
+    t(!!rCat && /mapa de naturezas da folha/.test(rCat), `apagar natureza do mapa da folha → recusa descritiva — ${rCat}`)
+    const [livre] = await db.insert(categories).values({
+      organizationId: ORG, code: '5.1.98', name: 'Sem uso (teste)', type: salarios.type, parentId: salarios.parentId,
+    }).returning({ id: categories.id })
+    t(await recusaApagarNaturezaDaFolha(db, ORG, livre.id) === null, 'apagar natureza fora da folha → sem recusa')
+    t(await recusaApagarNaturezaDaFolha(db, VIZ, honorarios.id) === null, 'recusa de natureza não enxerga outra organização')
+    // Sem a recusa, o banco devolveria o 23503 cru: o RESTRICT continua lá.
+    const fkCru = await db.delete(legalEntities).where(eq(legalEntities.id, ujLP.id)).then(() => null, (e: { cause?: { code?: string }; code?: string }) => e.cause?.code ?? e.code)
+    t(fkCru === '23503', `apagar a UJ direto no banco estoura 23503 — a recusa é o que evita isso (${fkCru})`)
+
     // ── (i) copiar quadro para 2028 ──────────────────────────────────────────
     await db.insert(budgetPeopleBenefits).values({ organizationId: ORG, personId: sClt.id, nome: 'VR', valorMensal: '500' })
     const i = await tx(x => copiarQuadro(x, ORG, USUARIO, v27.id, v28.id))
@@ -396,6 +414,22 @@ async function main() {
     const dupFolha2 = await folhaDe(dup.versionId)
     t(!temErro(gDup) && gDup.substituidas === antes.n && dupFolha2.soma === antes.soma && dupFolha2.n === antes.n,
       `protecoes: gerar na cópia substitui as copiadas — mesmo total, sem dobrar — ${JSON.stringify({ gDup, dupFolha2 })}`)
+
+    // ── quadro esvaziado depois de gerar: gerar de novo REMOVE a folha ───────
+    const pessoasDup = await db.select({ id: budgetPeople.id }).from(budgetPeople).where(eq(budgetPeople.versionId, dup.versionId))
+    for (const p of pessoasDup) await tx(x => apagarPessoa(x, ORG, dup.versionId, p.id))
+    t(await quadroDesatualizado(db, ORG, dup.versionId) === true, 'vazio: quadro esvaziado depois de gerar → desatualizado')
+    const pv = await preverFolha(db, ORG, dup.versionId)
+    t(!temErro(pv) && pv.totalCentavos === 0 && pv.recusas.length === 0 && pv.seriesExistentes === antes.n,
+      `vazio: prévia com total 0, sem recusas e ${antes.n} séries a remover — ${temErro(pv) ? pv.error : JSON.stringify({ total: pv.totalCentavos, recusas: pv.recusas.length, ex: pv.seriesExistentes })}`)
+    const gVazio = await tx(x => gerarFolha(x, ORG, USUARIO, dup.versionId))
+    const dupFolha3 = await folhaDe(dup.versionId)
+    t(!temErro(gVazio) && gVazio.series === 0 && gVazio.entries === 0 && gVazio.substituidas === antes.n && dupFolha3.n === 0,
+      `vazio: gerar com o quadro vazio apaga as ${antes.n} séries da folha e não grava nada — ${JSON.stringify({ gVazio, dupFolha3 })}`)
+    t(await quadroDesatualizado(db, ORG, dup.versionId) === false, 'vazio: depois de remover, em dia (gerado_em gravado)')
+    const [cfgDup] = await db.select({ g: budgetPayrollSettings.geradoEm }).from(budgetPayrollSettings)
+      .where(eq(budgetPayrollSettings.versionId, dup.versionId))
+    t(!!cfgDup?.g, 'vazio: gerado_em gravado na remoção')
 
     // ── duplicar para outro exercício ────────────────────────────────────────
     const dup28 = await tx(x => applyDuplicateVersion(x, {

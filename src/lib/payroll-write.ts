@@ -894,3 +894,46 @@ export async function quadroDesatualizado(exec: Exec, organizationId: string, ve
   if (!row.gerado) return Number(row.pessoas) > 0
   return row.mudou === true
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APAGAR UJ / NATUREZA QUE A FOLHA USA
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// As FKs da folha para `legal_entities` e `categories` são RESTRICT: apagar
+// direto estoura um 23503 cru na tela. Estas funções perguntam antes e dizem
+// o que tirar do caminho. Recebem o `organizationId` e só contam linhas dele.
+
+/** Pessoas do quadro (de todas as versões) nesta unidade jurídica. */
+export async function usoDaUnidadeNaFolha(exec: Exec, organizationId: string, legalEntityId: string) {
+  const [r] = await exec.select({
+    pessoas: sql<number>`count(*)::int`,
+    versoes: sql<number>`count(DISTINCT ${budgetPeople.versionId})::int`,
+  }).from(budgetPeople)
+    .where(and(eq(budgetPeople.organizationId, organizationId), eq(budgetPeople.legalEntityId, legalEntityId)))
+  return { pessoas: Number(r?.pessoas ?? 0), versoes: Number(r?.versoes ?? 0) }
+}
+
+/** `null` = pode apagar; texto = a recusa, dizendo onde a UJ está. */
+export async function recusaApagarUnidadeJuridica(exec: Exec, organizationId: string, legalEntityId: string): Promise<string | null> {
+  const u = await usoDaUnidadeNaFolha(exec, organizationId, legalEntityId)
+  if (u.pessoas === 0) return null
+  return `Esta unidade jurídica está no quadro de pessoal de ${u.versoes} ${u.versoes === 1 ? 'versão' : 'versões'} do orçamento `
+    + `(${u.pessoas} ${u.pessoas === 1 ? 'pessoa' : 'pessoas'}). Tire as pessoas dela antes de apagar, ou arquive-a.`
+}
+
+/** `null` = pode apagar; texto = a recusa, dizendo onde a natureza está na folha. */
+export async function recusaApagarNaturezaDaFolha(exec: Exec, organizationId: string, categoryId: string): Promise<string | null> {
+  const [[m], [b]] = await Promise.all([
+    exec.select({ n: sql<number>`count(*)::int` }).from(payrollCategoryMap)
+      .where(and(eq(payrollCategoryMap.organizationId, organizationId), eq(payrollCategoryMap.categoryId, categoryId))),
+    exec.select({ n: sql<number>`count(*)::int` }).from(budgetPeopleBenefits)
+      .where(and(eq(budgetPeopleBenefits.organizationId, organizationId), eq(budgetPeopleBenefits.categoryId, categoryId))),
+  ])
+  const mapa = Number(m?.n ?? 0), beneficios = Number(b?.n ?? 0)
+  if (mapa === 0 && beneficios === 0) return null
+  const onde = [
+    mapa > 0 ? `no mapa de naturezas da folha (${mapa} ${mapa === 1 ? 'componente' : 'componentes'})` : null,
+    beneficios > 0 ? `em ${beneficios} ${beneficios === 1 ? 'benefício' : 'benefícios'} do quadro de pessoal` : null,
+  ].filter(Boolean).join(' e ')
+  return `Esta natureza está ${onde}. Troque-a lá antes de apagar, ou arquive-a.`
+}
