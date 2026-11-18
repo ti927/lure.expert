@@ -10,6 +10,7 @@
 import {
   aliquotas, calcularPessoa, custoAnual, RegimeAusente,
 } from '@/lib/payroll-calc'
+import { montarFolha, nomeDaPessoa, type QuadroParaMontar, type LancamentoFolha } from '@/lib/payroll-build'
 import {
   pessoaSchema, parametrosVersaoSchema, unidadeJuridicaFolhaSchema, paraPessoaCalc,
   type PessoaCalc, type ParametrosUJ, type ParametrosVersaoCalc, type LinhaCalculada, type Componente,
@@ -310,6 +311,92 @@ console.log('\n── zod ──')
   const u = unidadeJuridicaFolhaSchema.safeParse({ regime: 'simples', anexoIV: true, inss: 20, ratFap: 2, terceiros: 5.8, fgts: 8 })
   t(u.success, 'unidadeJuridicaFolhaSchema aceita alíquotas em pontos')
   t(!unidadeJuridicaFolhaSchema.safeParse({ regime: 'mei', anexoIV: false, inss: 20, ratFap: 2, terceiros: 5.8, fgts: 8 }).success, 'regime desconhecido é recusado')
+}
+
+// ═══ montagem ════════════════════════════════════════════════════════════════
+console.log('\n── montagem ──')
+{
+  const UJ = { ...UJ_LP, nome: 'Matriz' }
+  const CAT = { sal: 'cat-sal', cpv: 'cat-cpv', ben: 'cat-ben', ben2: 'cat-ben2', out: 'cat-out' }
+  const validas = new Map(Object.values(CAT).map(id => [id, { nome: id }]))
+  const mapaCheio: QuadroParaMontar['mapa'] = {}
+  for (const c of ['salario', 'outros_proventos', 'inss_patronal', 'fgts', 'decimo_terceiro', 'terco_ferias',
+    'encargos_13_ferias', 'pro_labore', 'inss_pro_labore', 'bolsa_estagio', 'honorario_pj', 'beneficios'] as Componente[]) {
+    mapaCheio[c] = c === 'salario' ? CAT.sal : CAT.out
+  }
+  const quadro = (ps: Partial<QuadroParaMontar['pessoas'][number]>[], o: Partial<QuadroParaMontar> = {}): QuadroParaMontar => ({
+    exercicio: EX, versao: PROVISAO,
+    pessoas: ps.map((p, i) => ({ ...pessoa(), id: `p${i}`, ...p }) as QuadroParaMontar['pessoas'][number]),
+    unidades: new Map([['uj-1', UJ]]), mapa: mapaCheio, naturezasValidas: validas, ...o,
+  })
+  const somaL = (ls: LancamentoFolha[]) => ls.reduce((s, l) => s + l.centavos, 0)
+  const guarda = (ls: LancamentoFolha[]) => TODAS.push(...ls.map(l => ({ componente: l.componente, competencia: l.competencia, caixa: l.caixa, centavos: l.centavos })))
+  const al6040 = [{ costCenterId: 'cc-1', businessUnitId: 'uen-1', percentual: 60 }, { costCenterId: 'cc-2', businessUnitId: null, percentual: 40 }]
+
+  // (a) 60/40
+  const a = montarFolha(quadro([{ alocacoes: al6040 }]))
+  guarda(a.lancamentos)
+  const base = calcularPessoa(pessoa(), PROVISAO, UJ_LP, EX)
+  t(a.recusas.length === 0 && a.avisos.length === 0, 'CLT 60/40: sem recusas nem avisos')
+  t(somaL(a.lancamentos) === custoAnual(base), `Σ lançamentos = custoAnual (${somaL(a.lancamentos)} × ${custoAnual(base)})`)
+  const salJan = a.lancamentos.filter(l => l.componente === 'salario' && l.competencia === `${EX}-01`)
+  t(salJan.length === 2 && salJan[0].centavos === 300000 && salJan[1].centavos === 200000, `salário jan partido ${salJan.map(l => l.centavos)}`)
+  t(salJan[0].costCenterId === 'cc-1' && salJan[0].businessUnitId === 'uen-1' && salJan[1].costCenterId === 'cc-2' && salJan[1].businessUnitId === null && salJan[0].alocacao === 0 && salJan[1].alocacao === 1, 'partes carregam CC/UEN e índice da alocação')
+  t(salJan[0].categoryId === CAT.sal && salJan[0].legalEntityId === 'uj-1' && salJan[0].personId === 'p0', 'natureza, UJ e pessoa nos lançamentos')
+  const porLinha = base.every(l => {
+    const ps = a.lancamentos.filter(x => x.componente === l.componente && x.competencia === l.competencia && x.caixa === l.caixa
+      && x.encargo?.sobre === l.encargo?.sobre && x.encargo?.parte === l.encargo?.parte)
+    return somaL(ps) === l.centavos
+  })
+  t(porLinha, 'cada linha calculada fecha ao centavo nas suas partes')
+
+  // (b) 33,33 / 33,33 / 33,34 de 100,01
+  const b = montarFolha(quadro([{ vinculo: 'pj', legalEntityId: null, valorBase: 100.01, mesEntrada: 1, mesSaida: 1,
+    alocacoes: [{ costCenterId: 'a', businessUnitId: null, percentual: 33.33 }, { costCenterId: 'b', businessUnitId: null, percentual: 33.33 }, { costCenterId: 'c', businessUnitId: null, percentual: 33.34 }] }]))
+  guarda(b.lancamentos)
+  t(b.lancamentos.length === 3 && somaL(b.lancamentos) === 10001, `100,01 em três partes fecha: ${b.lancamentos.map(l => l.centavos)}`)
+
+  // (c) exceção da pessoa e benefício
+  const c = montarFolha(quadro([{ naturezas: { salario: CAT.cpv }, beneficios: [{ nome: 'VR', valorMensal: 800, categoryId: CAT.ben }] }]))
+  guarda(c.lancamentos)
+  t(c.lancamentos.filter(l => l.componente === 'salario').every(l => l.categoryId === CAT.cpv), 'exceção da pessoa em salário vence o mapa')
+  t(c.lancamentos.filter(l => l.componente === 'fgts').every(l => l.categoryId === CAT.out), 'sem exceção, vale o mapa')
+  const c2 = montarFolha(quadro([{ naturezas: { beneficios: CAT.ben2 }, beneficios: [{ nome: 'VR', valorMensal: 800, categoryId: CAT.ben }, { nome: 'VT', valorMensal: 200, categoryId: null }] }]))
+  guarda(c2.lancamentos)
+  t(c2.lancamentos.filter(l => l.beneficio === 'VR').every(l => l.categoryId === CAT.ben), 'benefício com natureza própria vence a exceção')
+  t(c2.lancamentos.filter(l => l.beneficio === 'VT').every(l => l.categoryId === CAT.ben2), 'benefício sem natureza própria usa a exceção da pessoa')
+
+  // (d) natureza fora das válidas
+  const d = montarFolha(quadro([{ nome: 'Maria Silva' }], { mapa: { ...mapaCheio, salario: 'cat-pai-invalida' } }))
+  t(d.recusas.length === 1 && d.recusas[0].motivo === 'Maria Silva: Salário sem natureza válida', `recusa única: ${JSON.stringify(d.recusas.map(r => r.motivo))}`)
+  t(d.lancamentos.length > 0 && d.lancamentos.every(l => l.componente !== 'salario'), 'o resto ainda vem para a prévia')
+  const d2 = montarFolha(quadro([{}], { mapa: {} }))
+  t(d2.recusas.length > 1 && d2.recusas.some(r => r.motivo === 'Ana: Salário sem natureza válida') && d2.lancamentos.length === 0, 'mapa vazio: uma recusa por componente, nenhum lançamento')
+
+  // (e) UJ sem regime
+  const e = montarFolha(quadro([{ nome: 'Beto' }], { unidades: new Map([['uj-1', { ...UJ_LP, regime: null, nome: 'Filial Sul' }]]) }))
+  t(e.recusas.length === 1 && e.recusas[0].motivo === 'Beto: a unidade jurídica Filial Sul não tem regime tributário', `regime ausente: ${e.recusas[0]?.motivo}`)
+
+  // (f) sem alocação
+  const f = montarFolha(quadro([{ nome: 'Carla' }]))
+  guarda(f.lancamentos)
+  t(f.avisos.length === 1 && f.avisos[0] === 'Carla sem centro de custo e unidade de negócio', `aviso: ${JSON.stringify(f.avisos)}`)
+  t(f.lancamentos.length > 0 && f.lancamentos.every(l => l.costCenterId === null && l.businessUnitId === null && l.alocacao === 0), 'CC/UEN nulos')
+
+  // descrição
+  t(f.lancamentos.find(l => l.componente === 'salario')!.descricao === 'Folha · Carla · Salário', 'descrição de componente')
+  t(c.lancamentos.find(l => l.componente === 'beneficios')!.descricao === 'Folha · Ana · VR', 'descrição de benefício = nome do benefício')
+  const descEnc = (sobre: 'decimo_terceiro' | 'terco_ferias', parte: 'patronal' | 'fgts') =>
+    f.lancamentos.find(l => l.encargo?.sobre === sobre && l.encargo.parte === parte)?.descricao
+  t(descEnc('decimo_terceiro', 'patronal') === 'Folha · Carla · Encargos s/ 13º — INSS/RAT/terceiros'
+    && descEnc('decimo_terceiro', 'fgts') === 'Folha · Carla · Encargos s/ 13º — FGTS'
+    && descEnc('terco_ferias', 'patronal') === 'Folha · Carla · Encargos s/ férias — INSS/RAT/terceiros'
+    && descEnc('terco_ferias', 'fgts') === 'Folha · Carla · Encargos s/ férias — FGTS', 'quatro descrições distintas dos encargos')
+
+  // (g) nomeDaPessoa
+  t(nomeDaPessoa({ nome: 'Maria Silva', isVaga: false, cargo: null }) === 'Maria Silva', 'nome da pessoa')
+  t(nomeDaPessoa({ nome: null, isVaga: true, cargo: 'Vendedor' }) === 'Vaga · Vendedor', 'vaga com cargo')
+  t(nomeDaPessoa({ nome: null, isVaga: true, cargo: null }) === 'Vaga', 'vaga sem cargo')
 }
 
 // ═══ guarda geral ════════════════════════════════════════════════════════════
