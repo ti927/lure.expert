@@ -203,6 +203,12 @@ script, sem sessão HTTP. É como o miolo de cada feature acaba testado:
 | `dashboard/block-spec.ts` | `blockSpecSchema` — a spec de bloco, que **embute `querySpecSchema`**. Validada na escrita E na leitura |
 | `transactions-list-filters.ts` | `condicoesDaListagem` — os filtros da URL da tabela de lançamentos, com `regime` (competência em `/transacoes`, caixa na conferência); `dataDeCaixaSql` |
 | `account-ledger.ts` | a conferência de saldo: saldo inicial (`gravarSaldoInicial`), `lerExtratoDaConta` (saldo corrido + fechamento do dia por janela, **antes** dos filtros), `lerFaturasDaConta` (cartão de crédito, por vencimento), `descreverConta` (conta manual: do cadastro). Decisões 29 e 30 |
+| `payroll-types.ts` | (client-safe) os componentes da folha, o mapa de naturezas, os Zod do quadro em **pontos percentuais** (o banco guarda fração) e `paraPessoaCalc` |
+| `payroll-calc.ts` | **cálculo puro** do custo de uma pessoa por componente e mês (regimes, 13º, terço de férias, complemento, datas de caixa). Sem `@/db`, por isso roda também no navegador (prévia ao vivo do diálogo) |
+| `payroll-build.ts` | `montarFolha`: transforma o cálculo em lançamentos — natureza (benefício > exceção da pessoa > mapa), dimensões e partição pela alocação (maior resto, via `allocation-math`) |
+| `payroll-write.ts` | a escrita: CRUD do quadro, mapa, prévia (`preverFolha`) e geração com substituição **só da origem `folha`**; `copiarQuadro`; `agent_events` `folha.gerada`. Recebe o `tx` |
+| `payroll-guard.ts` | `recusaSeFolha`: recusa **todo** caminho que editaria série/ocorrência `folha` (ações, prévias, lote por origem) com "editar no quadro de pessoal" |
+| `payroll-uj.ts` | (puro) lê o FormData da unidade jurídica em pontos %, valida o regime e devolve frações; `folhaMudou` decide se o admin+ é exigido |
 | `lancamento-manual.ts` | criar lançamento à mão (só conta manual, autoria no `metadata`), `registrarApagamentoDeManuais` (retrato antes do DELETE), `restaurarLancamentoManual`, `descreverUserAgent`. O que é puro e vai ao navegador mora em `lancamento-manual-types.ts` |
 
 **A regra que separa leitura analítica de operacional** (Fase 1):
@@ -301,7 +307,28 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 9 a 11/nov: EXPORTAR O /FLUXO PARA EXCEL, no ar** (merge `b159f70`; o botão aguarda o olho do Julio).
+**Última sessão — 18/nov: FOLHA DE PAGAMENTO NO ORÇAMENTO, pronta no branch `feat/folha-orcamento` — NÃO mergeada, e a migration 0036 NÃO está aplicada na produção** (só no banco local). Pedido do Julio: o orçamento de
+pessoal era valor total digitado; agora se cadastra o **quadro de pessoal por versão** (CLT, PJ, pró-labore,
+estagiário e vaga a contratar) e o app **gera a folha**, com encargos pelo **regime da unidade jurídica**,
+nas naturezas mapeadas. Aba nova **"Quadro de pessoal"** em `/orcamento`; os lançamentos da folha (origem
+`folha`) aparecem no Planejamento **só para leitura**. Ver **Decisão 32** em `docs/SCHEMA_DECISIONS.md`.
+Spec e plano em `docs/superpowers/`. 8 tarefas, 9 commits (`4bbb01a`..`d23d010`) mais o de documentação.
+
+**A ordem de subida é esta, e inverter quebra a tela:** (1) aplicar a **0036** (Studio ou o roteiro de
+subida autônoma, com dump e `lock_timeout` curto) e conferir o catálogo; (2) só então o merge e o deploy
+— a página `/orcamento` lê as tabelas novas. Reversa: `0036_down_folha_orcamento.sql`. **Aguarda o "pode
+subir" do Julio.** O branch `feat/pluggy-hardening` segue em espera, e por isso esta é a Decisão **32**
+(a 31 mora naquele branch).
+
+**Limitações declaradas da v1:** **sem rescisão** (aviso prévio, multa de 40% do FGTS, férias indenizadas — o
+mês de saída só encerra os lançamentos; as provisões vão a caixa no dia 10 do mês seguinte); INSS/IRRF do
+empregado fora (o custo é o bruto); sem hora extra, PLR, comissão nem CPRB; **Simples com Anexo IV E outro
+anexo** não é coberto (`simples_anexo_iv` é um booleano por unidade jurídica); **viewers veem os botões
+de escrita** (o servidor recusa — o botão escondido por papel é a frente seguinte); **apagar um centro
+de custo ou UEN deixa a dimensão das séries da folha nula** (FK `SET NULL`) sem acender o aviso de
+desatualização; sem MCP do quadro nem importação do quadro por planilha (v1.1); datas de caixa fixas.
+
+**Antes dela — 9 a 11/nov: EXPORTAR O /FLUXO PARA EXCEL, no ar** (merge `b159f70`; o botão aguarda o olho do Julio).
 Sem migration. Botão **"Exportar para Excel"** no `/fluxo` (ao lado de "Recolher todos") → `GET /fluxo/exportar`
 com o período **aplicado** e os filtros de CC/UEN/entidade da tela; todo papel pode. Miolo em
 `lib/fluxo-export.ts`, com as **mesmas regras** de `getFluxoMensalData`. Duas abas: **"Fluxo de caixa"**
@@ -822,6 +849,16 @@ lançamento e copiar do realizado agora passam pelo mesmo código do MCP), `/con
 (criar/editar mudaram de caminho, e o badge `aplicada N×` passa a aparecer **depois da próxima
 categorização**), `/configuracoes/consumo` e `/configuracoes/conexoes`.
 
+**Da folha no orçamento (18/nov), nada visto por olho humano ainda** — depois que a 0036 subir: (1) em
+`/configuracoes/entidades-juridicas`, cadastrar a **unidade jurídica com regime** (Lucro Presumido) e ver os
+campos de alíquota com os padrões; (2) em `/orcamento` → **Quadro de pessoal**, salvar o **mapa de
+naturezas** (o pré-preenchido casa com 5.1.x); (3) cadastrar um **CLT de 5.000** nessa unidade e conferir o
+custo ano **90.533,33** (igual com 13º/férias em provisão ou no pagamento); (4) **Gerar folha** — a prévia
+mostra componente × mês e as recusas; confirmar; (5) no **Planejamento**, ver os lançamentos "Folha" **sem
+poder editá-los** (a recusa manda para o quadro); (6) ver a folha na **DRE orçada** e a nota de
+13º/férias no Orçado × Realizado em Competência; (7) **duplicar a versão** e conferir que o quadro foi junto
+e que gerar de novo não dobra a folha.
+
 **Da 4.5.B**, todas em `/upload/[id]/review` e `/contas`: a coluna **Data de caixa** (mostra
 "= competência" em cinza quando vazia, e o preenchimento em lote aparece quando há linhas sem ela);
 o bloco **Conta deste arquivo**, que oferece as contas existentes e aceita nome novo; o **modo de
@@ -1029,6 +1066,14 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ Layer 0 de categorização — match determinístico do CSV antes do LLM. Parser detecta colunas autoritativas (`Categoria/Natureza Pai/Filho`, `Conta Contábil`, `Plano de Contas`, `Tipo Natureza`) por regex no header. `findCategoryByCsvMapping` faz lookup normalizado (lowercase + sem acento + colapsa dash/barra/parênteses em espaço). Desempate cumulativo: nome → tipo (`TIPO_ALIASES`: `Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc) → pai. `approveAndInsert` pré-classifica no INSERT (linhas casadas não entram no evento Inngest). Resultado: CSVs de ERP com plano alinhado importam zero-Haiku. Commits `d587644` / `d72ec37` / `35400e6`. Decisão arquitetural em `docs/SCHEMA_DECISIONS.md` Decisão 12.
 
 **Migrations aplicadas no Supabase Studio:**
+- 🔲 `db/migrations/rls/0036_folha_orcamento.sql` — **PENDENTE, NÃO aplicada na produção** (só no banco local,
+  porta 55432). Sete colunas em `legal_entities` (regime tributário, Anexo IV do Simples e as quatro
+  alíquotas patronais, em fração, com CHECK 0..1); cinco tabelas — `budget_payroll_settings`,
+  `budget_people`, `budget_people_allocations`, `budget_people_benefits`, `payroll_category_map` — com
+  CHECKs, índices, gatilhos `updated_at` e RLS (4 policies cada); e `'folha'` no CHECK de
+  `budget_series.source`. Validada com ROLLBACK (45/45 na primeira rodada). **Tem de subir ANTES do
+  merge**: a página lê as tabelas novas. Reversa: `0036_down_folha_orcamento.sql` (apaga as séries
+  `folha`, devolve o CHECK antigo, dropa as 5 tabelas e as colunas — perde o quadro; idempotente).
 - ✅ `db/migrations/rls/0034_account_opening_balances.sql` — **aplicada por Julio em 27/out** e
   conferida (`scripts/confere-0034.ts`: tabela, RLS com 4 policies, gatilho `updated_at`,
   unicidade por conta). O saldo inicial da conferência de saldo. Validada 48/48 com ROLLBACK antes
@@ -1099,6 +1144,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
+| **Folha de pagamento no orçamento (18/nov, branch `feat/folha-orcamento`, não mergeada)** | Quadro de pessoal **por versão** (CLT, PJ, pró-labore, estagiário, vaga), encargos pelo regime da unidade jurídica, 13º/férias em provisão ou no pagamento, benefícios, alocação em % por CC/UEN, mapa de naturezas com exceção por pessoa. Migration **0036** (5 tabelas + 7 colunas em `legal_entities` + `'folha'` em `budget_series.source`), **não aplicada na produção**. Cálculo puro (`payroll-calc`), montagem, escrita com prévia+confirmação e proteção das séries `folha` em todo caminho; aba "Quadro de pessoal" com prévia ao vivo. Exemplo do spec (CLT 5.000, Lucro Presumido) fecha **90.533,33** nos dois modos. Placares: cálculo 139/139, escrita 88/88 (banco local), migration 45 verificações (44 OK na releitura — ver `SESSION_LOG`), `tsc` limpo. Decisão 32 |
 | **Exportar o /fluxo para Excel (9–11/nov)** | Botão no `/fluxo` → `/fluxo/exportar` (route handler, xlsx via SheetJS). `lib/fluxo-export.ts`: `lerLinhasParaExportar` (uma linha por parte do rateio, motivo de ficar fora), `montarMatriz`, `montarPlanilhaDoFluxo` (aba "Fluxo de caixa" em SOMASES com valor em cache + aba "Lançamentos"). Período e filtros de dimensão da tela. 61/61 contra a produção (só leitura) + 1.040 fórmulas recalculadas no Excel sem diferença. Merge `b159f70` |
 | **Conta manual na conferência (27/out)** | Tipo "Cartão pré-pago"; aviso de saldo de abertura duplicado; cartão de crédito manual confere por **fatura** (lista de vencimentos + fatura aberta); **lançamento à mão** só em conta manual, com autoria no `metadata`, selo "Manual", filtro de origem e restauração do apagado. Decisão 30. Sem migration. 81/81 + 36/36 contra a produção, revertidos |
 | **Conferência de saldo (27/out)** | `/contas/[accountId]`: a tabela de transações pela data de caixa, com saldo inicial informado e salvo (migration **0034**, aplicada) e coluna Saldo — corrido por linha + fechamento do dia, este independente da ordem dentro do dia. Saldo calculado por janela **antes** dos filtros e da paginação. A tabela de `/transacoes` foi movida para `components/transacoes-shared/transactions-table.tsx` e os filtros para `lib/transactions-list-filters.ts`. Decisão 29. Verificado 48/48 com ROLLBACK contra a produção (conta Sicredi, 1.762 lançamentos), `next build` limpo, larguras 37/37 |

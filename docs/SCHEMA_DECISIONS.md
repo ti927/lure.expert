@@ -1852,3 +1852,99 @@ tabela já em uso: o `DROP POLICY` pegou trava EXCLUSIVA, o processo morreu e a 
 pooler (`ClientRead`), travando a conferência em produção até o Julio rodar `pg_terminate_backend`.
 Os scripts contra a produção agora começam com `SET LOCAL lock_timeout = '3s'` e não reaplicam
 migration já aplicada.
+
+---
+
+## Decisão 32 — Folha de pagamento no orçamento (18/nov)
+
+**Pedido do Julio:** o orçamento de pessoal era um valor total digitado ("Salários: R$ 80.000/mês"), que não
+diz de onde vem, não acompanha contratação, desligamento nem dissídio, e cujos encargos eram estimados à mão
+— errados com frequência, porque dependem do regime tributário de cada empresa do grupo. Agora se cadastra o
+quadro e o app **gera a folha**. Spec: `docs/superpowers/specs/2026-11-18-folha-no-orcamento-design.md`.
+**Numeração:** a Decisão 31 (Pluggy) vive no branch `feat/pluggy-hardening`, ainda fora do `main`; esta é a 32
+para não colidir quando aquele subir. Migration **0036** pelo mesmo motivo (a 0035 é daquele branch).
+
+**1. O quadro pertence à VERSÃO do orçamento (abordagem A, escolhida pelo Julio).** Cada versão tem suas
+pessoas, benefícios, alocações e parâmetros (`budget_payroll_settings`); duplicar a versão leva o quadro.
+Cenário ("3 contratações a menos") é apagar 3 linhas e gerar de novo; regenerar uma versão antiga não reescreve
+o passado. O custo: a mesma pessoa existe em várias versões, e mudar o salário numa não muda nas outras.
+**Rejeitadas:** (B) quadro único da organização com a versão só gerando a partir dele — cenário exigiria
+exceções por versão e regenerar versão antiga com o cadastro de hoje reescreveria o passado; (C) folha
+calculada na leitura, sem gravar — cria uma **segunda fonte de número orçado** e quebra a conciliação
+DRE × Orçado × Realizado × MCP. `budget_entries` segue a única fonte da verdade (Decisão 13).
+
+**2. As ocorrências são gravadas DIRETAMENTE, sem `expandSeries`, e por isso as séries `folha` são SÓ
+LEITURA em todo caminho.** `expandSeries` aplica um `cash_lag_days` fixo à série; a folha precisa de "dia 5 do
+mês seguinte", "20 de dezembro" e "30 de novembro", que uma regra de série não expressa. A série fica como
+agrupador e rótulo ("Folha · Maria Silva · FGTS"), com `person_id` e componente no `metadata`. Consequência
+inevitável: qualquer caminho que **reexpandisse** a série a partir da regra apagaria as datas certas — e, para
+PJ com meses não contíguos, a regra nem descreve as ocorrências. Então `recusaSeFolha` (`lib/payroll-guard.ts`)
+recusa editar, excluir, mudar escopo, copiar e as **prévias** das escritas do orçamento, nas ações da tela, no
+MCP e nos caminhos em lote por origem, com "editar no quadro de pessoal". A guarda lê o banco na própria
+transação em vez de confiar na série que chega. `'folha'` entrou em `BUDGET_SOURCES` e no CHECK de
+`budget_series.source`.
+
+**3. Do mês de férias entra SÓ o 1/3.** Custo anual = 12 salários + 13º + 1/3 de férias (mais os encargos
+sobre tudo). O mês em que a pessoa está de férias **já está** entre os 12 salários; provisionar "férias + 1/3"
+inteiro por cima contaria o salário desse mês duas vezes. O componente chama-se terço de férias.
+
+**4. Alvo + complemento no ÚLTIMO mês ativo, para os dois modos darem o mesmo custo anual ao centavo (inclusive
+encargos).** O 13º devido é o salário de dezembro × avos, e o terço é sobre o salário do mês de férias; com
+dissídio no meio do ano o 1/12 mensal fica abaixo do devido. O spec mandava o complemento "no mês de férias";
+na execução ele ficou **no último mês ativo**, porque com dissídio *depois* do mês de férias o complemento
+naquele mês ficaria negativo. A invariante "mesmo custo anual nos dois modos" é testada em todos os casos CLT;
+o preço é a distribuição mensal da provisão do terço ficar um pouco diferente da "técnica" contábil.
+
+**5. Férias de quem foi admitido no ano caem no ano SEGUINTE.** CLT arts. 130 e 134: o direito exige 12 meses
+de período aquisitivo. Com `mesEntrada > 1`, o terço cai em `exercício + 1` (mês = mês de férias informado, ou
+o mês de entrada); as provisões têm caixa em `(exercício+1)-MM-01`. O salário do mês de admissão segue no dia 5.
+O custo anual não muda, só a data de caixa — se a leitura jurídica estiver errada, o caixa do terço adianta um ano.
+
+**6. Saída antes do pagamento: provisões vão a caixa no dia 10 do mês seguinte à saída** (prazo de pagamento da
+rescisão, CLT art. 477). A **rescisão em si não existe na v1** (aviso prévio, multa de 40%, férias indenizadas):
+o mês de saída só encerra os lançamentos.
+
+**7. 13º e FGTS sobre o 13º viram séries "1ª parcela" e "2ª parcela".** Cada série tem CHECK de no máximo 12
+ocorrências; o 13º tem duas datas de caixa por competência (50% em 30/nov, 50% em 20/dez) e o FGTS do 13º tem a
+2ª parcela em 20/jan do ano seguinte. Separar por parcela mantém uma ocorrência por competência em cada série.
+Os encargos sobre 13º e férias são séries distintas (INSS/RAT/terceiros × FGTS).
+
+**8. Pessoa dividida em % entre centros de custo/UEN vira N séries, e o valor é partido por MAIOR RESTO no
+próprio orçamento — NÃO por `transaction_allocations`.** O rateio de `transaction_allocations` é do realizado;
+o orçamento tem **uma dimensão por lançamento** (Fase 10). Com N alocações, cada componente vira N séries
+(pessoa × componente × alocação), e `applyProportion` (`allocation-math.ts`) parte o centavo para que a soma
+das partes feche exata com o componente. A soma das alocações é 100% (recusada na escrita); sem nenhuma, o
+lançamento sai sem CC/UEN e a prévia avisa.
+
+**9. Duplicar a versão MANTÉM a origem `folha` e copia o quadro.** A duplicação gravava `'duplicacao'`;
+mantido, a próxima geração não substituiria as séries copiadas e a folha dobraria. Com delta de exercício 0, as
+séries e `gerado_em` são copiados e a cópia **não** nasce desatualizada; com delta ≠ 0, `gerado_em` fica nulo
+(desatualizada — as datas não valem para outro ano). Copiar o quadro de outra versão substitui o desta, após
+confirmação, e não gera.
+
+**10. Regime ausente e natureza ausente → RECUSA, nunca um padrão.** A geração recusa nomeando as unidades
+jurídicas sem regime (e as pessoas afetadas) e os componentes sem natureza mapeada (ou arquivada). Cravar
+"Lucro Presumido" ou "5.1.1" por omissão produziria um orçamento errado com cara de certo. Idem PJ sem mês
+pagável. As alíquotas (INSS patronal 20%, RAT×FAP 2%, terceiros 5,8%, FGTS 8%) têm padrão **na unidade
+jurídica**, editáveis, nunca no código; empresa desonerada informa a alíquota da transição da Lei 14.973/2024.
+
+**11. Parâmetros de folha da unidade jurídica exigem ADMIN+; o quadro, member+.** O CRUD de `legal_entities`
+não tinha nenhum portão de papel (pré-existente); o portão novo vale **só quando os campos de folha mudam**
+(`folhaMudou`), para não apertar o cadastro comum de dimensão. Leitura: todo papel — decisão do Julio, "todos
+que veem o orçamento veem os salários".
+
+**12. O mapa de naturezas da organização usa só LINHAS SALVAS.** A sugestão pré-preenchida casa por código
+(5.1.1 Salários, 5.1.2 Encargos, 5.1.3 Benefícios, 5.1.4 13º e Férias, 5.1.5 Pró-labore) e aparece na tela,
+mas **não vale até ser salva**: a geração lê `payroll_category_map`, nunca a sugestão. Tabela com FK
+`RESTRICT` (e não `jsonb` em `settings`) para que apagar a natureza seja recusado. Precedência: benefício >
+exceção da pessoa > mapa. Aviso de desatualização: se pessoa, benefício, parâmetro da versão, mapa ou parâmetro
+de unidade jurídica mudou depois de `generated_at`, a aba diz.
+
+**Não coberto na v1 (declarado):** rescisão; INSS/IRRF do empregado; hora extra, PLR, comissão, CPRB; Simples
+com Anexo IV **e** outro anexo; folha realizada; MCP do quadro e importação por planilha (v1.1). **Pendências
+técnicas registradas:** apagar centro de custo/UEN deixa a dimensão das séries nula via FK `SET NULL`, sem
+acender a desatualização; o aviso de desatualização não vê linha de mapa apagada nem natureza arquivada depois
+da geração; viewers veem botões de escrita (o servidor recusa).
+
+**Verificado:** `verify-payroll-calc` 139/139 (exemplo do spec: 90.533,33 nos dois modos; Simples só FGTS),
+`verify-payroll-write` 88/88 contra o banco local, `verify-migration-0036` 45/45 com ROLLBACK na entrega.
