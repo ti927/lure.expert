@@ -155,8 +155,8 @@ desde a 9.0 (exercício validado só na competência) e o comparativo já avisa 
   de entrada; sem mês de entrada no exercício, dezembro.
 - Provisão de férias **acumulada depois das férias do ano**: caixa no mês de férias do ano
   seguinte (mesmo mês).
-- Pessoa que **sai antes do pagamento**: as provisões acumuladas (13º e terço) têm caixa no mês de
-  saída — o que seria pago na rescisão. A rescisão em si (aviso, multa de 40%) segue fora da v1.
+- Pessoa que **sai antes do pagamento**: as provisões acumuladas (13º e terço) têm caixa no dia 10
+  do mês seguinte à saída — o prazo de pagamento da rescisão (CLT art. 477). A rescisão em si (aviso, multa de 40%) segue fora da v1.
 - Salário no **dia 5** = 5º dia útil simplificado; VT e VR saem com o salário (na prática são
   pagos antes do mês). Declarado na tela.
 
@@ -170,7 +170,7 @@ CLT, R$ 5.000, Lucro Presumido, RAT×FAP 2%, terceiros 5,8%, FGTS 8%, modo provi
 | INSS + RAT + terceiros (27,8%) | 1.390,00 |
 | FGTS (8%) | 400,00 |
 | Provisão 13º (1/12) | 416,67 |
-| Encargos s/ 13º (35,8%) | 149,17 |
+| Encargos s/ 13º (35,8%) | 149,16 (115,83 + 33,33, arredondados por parte) |
 | Provisão 1/3 férias (5.000/3/12) | 138,89 |
 | Encargos s/ férias (35,8%) | 49,72 |
 
