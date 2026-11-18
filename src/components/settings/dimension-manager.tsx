@@ -1,5 +1,6 @@
 'use client'
 
+import * as React from 'react'
 import { useState, useTransition, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
@@ -21,13 +22,28 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EmptyState } from '@/components/states/empty-state'
 
-/** Campo de texto adicional além de nome/código/CNPJ (ex: documento, e-mail). */
+/**
+ * Campo adicional além de nome/código/CNPJ (ex: documento, e-mail).
+ * Sem `type` é texto; `select` e `checkbox` existem para os campos que não são
+ * texto livre (ex.: o regime tributário da unidade jurídica).
+ */
 export type ExtraField = {
   name: string
   label: string
   placeholder?: string
   /** Classe de largura no formulário. Default: `w-40`. */
   width?: string
+  type?: 'text' | 'select' | 'checkbox'
+  /** Só para `select`. */
+  options?: { value: string; label: string }[]
+  /** Valor inicial no formulário de criação (`checkbox`: 'true'). */
+  defaultValue?: string
+  /** Mostra o campo só quando outro campo do formulário tem este valor. */
+  visibleWhen?: { field: string; equals: string }
+  /** Texto de apoio, em linha própria logo depois do campo. */
+  hint?: string
+  /** false = o valor não aparece na linha da lista (só no formulário). Default: true. */
+  showInRow?: boolean
 }
 
 /** Papel booleano marcável (ex: cliente / fornecedor). */
@@ -44,6 +60,8 @@ export type DimensionItem = {
   extra?: Record<string, string | null>
   /** Papéis marcados, indexados pelo `name` do papel. */
   roles?: Record<string, boolean>
+  /** Texto curto mostrado na linha da lista (ex.: o regime e as alíquotas). */
+  summary?: string | null
 }
 
 interface DimensionManagerProps {
@@ -84,6 +102,9 @@ export function DimensionManager({
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; linkedCount: number } | null>(null)
 
   const createFormRef = useRef<HTMLFormElement>(null)
+  // `form.reset()` só limpa o DOM; os `select` controlados de `ExtraFieldInputs`
+  // guardam estado próprio. Trocar a chave remonta os campos com os padrões.
+  const [createKey, setCreateKey] = useState(0)
 
   const active = items.filter((i) => i.isActive)
   const archived = items.filter((i) => !i.isActive)
@@ -98,6 +119,7 @@ export function DimensionManager({
         toast.success(`${singularLabel} criado com sucesso.`)
         setShowCreateForm(false)
         createFormRef.current?.reset()
+        setCreateKey((k) => k + 1)
         router.refresh()
       }
     })
@@ -192,12 +214,7 @@ export function DimensionManager({
               <Input id="new-cnpj" name="cnpj" placeholder="00.000.000/0001-00" />
             </div>
           )}
-          {extraFields?.map((f) => (
-            <div key={f.name} className={f.width ?? 'w-40'}>
-              <Label htmlFor={`new-${f.name}`} className="text-xs mb-1 block">{f.label}</Label>
-              <Input id={`new-${f.name}`} name={f.name} placeholder={f.placeholder} />
-            </div>
-          ))}
+          {extraFields && <ExtraFieldInputs key={createKey} fields={extraFields} idPrefix="new" />}
           {roleFields && roleFields.length > 0 && (
             <div>
               <Label className="text-xs mb-1 block">Papel</Label>
@@ -289,6 +306,79 @@ export function DimensionManager({
   )
 }
 
+// ─── Campos extras ───────────────────────────────────────────────────────────
+
+/**
+ * Os campos extras de um formulário. Em modo de edição (`values`) parte dos
+ * valores gravados; em criação, de `defaultValue`. Guarda o valor dos `select`
+ * para `visibleWhen` — campo escondido sai do DOM e, portanto, não é enviado.
+ */
+function ExtraFieldInputs({
+  fields, idPrefix, values, compact,
+}: { fields: ExtraField[]; idPrefix: string; values?: Record<string, string | null>; compact?: boolean }) {
+  const inicial = (f: ExtraField) => values ? (values[f.name] ?? '') : (f.defaultValue ?? '')
+  const [selecionados, setSelecionados] = useState<Record<string, string>>(
+    () => Object.fromEntries(fields.filter((f) => f.type === 'select').map((f) => [f.name, inicial(f)])),
+  )
+
+  return (
+    <>
+      {fields.map((f) => {
+        if (f.visibleWhen && selecionados[f.visibleWhen.field] !== f.visibleWhen.equals) return null
+        const id = `${idPrefix}-${f.name}`
+        const tipo = f.type ?? 'text'
+
+        let controle: React.ReactNode
+        if (tipo === 'select') {
+          controle = (
+            <select
+              id={id}
+              name={f.name}
+              value={selecionados[f.name] ?? ''}
+              onChange={(e) => setSelecionados((s) => ({ ...s, [f.name]: e.target.value }))}
+              className={`flex w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${compact ? 'h-8' : 'h-9'}`}
+            >
+              {f.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          )
+        } else if (tipo === 'checkbox') {
+          controle = (
+            <label className="flex items-center gap-1.5 text-sm cursor-pointer h-8">
+              <Checkbox id={id} name={f.name} defaultChecked={inicial(f) === 'true'} />
+              {f.label}
+            </label>
+          )
+        } else {
+          controle = (
+            <Input
+              id={id}
+              name={f.name}
+              defaultValue={inicial(f)}
+              placeholder={compact ? f.label : f.placeholder}
+              className={compact ? 'h-8' : undefined}
+            />
+          )
+        }
+
+        // Na edição o texto livre legado se identifica pelo placeholder; quem declara
+        // `type` leva rótulo próprio, porque "20" sozinho não diz que é o INSS.
+        const comRotulo = tipo !== 'checkbox' && (!compact || f.type !== undefined)
+        return (
+          <React.Fragment key={f.name}>
+            <div className={f.width ?? 'w-40'}>
+              {comRotulo && (
+                <Label htmlFor={id} className="text-xs mb-1 block">{f.label}</Label>
+              )}
+              {controle}
+            </div>
+            {f.hint && <p className="basis-full text-xs text-muted-foreground">{f.hint}</p>}
+          </React.Fragment>
+        )
+      })}
+    </>
+  )
+}
+
 // ─── Row ─────────────────────────────────────────────────────────────────────
 
 interface RowProps {
@@ -345,15 +435,7 @@ function DimensionRow({
             placeholder="CNPJ"
           />
         )}
-        {extraFields?.map((f) => (
-          <Input
-            key={f.name}
-            name={f.name}
-            defaultValue={item.extra?.[f.name] ?? ''}
-            className={`h-8 ${f.width ?? 'w-40'}`}
-            placeholder={f.label}
-          />
-        ))}
+        {extraFields && <ExtraFieldInputs fields={extraFields} idPrefix={`edit-${item.id}`} values={item.extra} compact />}
         {roleFields?.map((r) => (
           <label key={r.name} className="flex items-center gap-1.5 text-sm cursor-pointer">
             <Checkbox name={r.name} defaultChecked={item.roles?.[r.name] ?? false} />
@@ -381,8 +463,11 @@ function DimensionRow({
           {showCnpj && item.cnpj && (
             <span className="text-xs text-muted-foreground">{item.cnpj}</span>
           )}
+          {item.summary && (
+            <span className="text-xs text-muted-foreground">{item.summary}</span>
+          )}
           {extraFields?.map((f) =>
-            item.extra?.[f.name] ? (
+            f.showInRow !== false && f.type !== 'select' && f.type !== 'checkbox' && item.extra?.[f.name] ? (
               <span key={f.name} className="text-xs text-muted-foreground">{item.extra[f.name]}</span>
             ) : null
           )}

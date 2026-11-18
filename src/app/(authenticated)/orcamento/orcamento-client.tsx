@@ -21,6 +21,7 @@ import type { LegalEntity } from '@/db/schema/legal-entities'
 import { PlanejamentoTab } from './planejamento-tab'
 import { ComparacaoTab } from './comparacao-tab'
 import { VersoesTab } from './versoes-tab'
+import { QuadroTab } from './quadro-tab'
 import { SeriesDialog } from '@/components/budget/series-dialog'
 import { CopyActualsDialog } from './copy-actuals-dialog'
 import { ImportCsvDialog } from './import-csv-dialog'
@@ -28,7 +29,7 @@ import { RecurrencesDialog } from './recurrences-dialog'
 
 const STORAGE_KEY = 'lure:orcamento:filters'
 
-type TabKey = 'planejamento' | 'comparacao' | 'versoes'
+type TabKey = 'planejamento' | 'quadro' | 'comparacao' | 'versoes'
 
 interface Props {
   initialVersions: BudgetVersionListItem[]
@@ -224,6 +225,7 @@ export function OrcamentoClient({
         <Tabs value={tab} onValueChange={changeTab} className="mt-3">
           <TabsList className="h-8">
             <TabsTrigger value="planejamento" className="text-xs h-6">Planejamento</TabsTrigger>
+            <TabsTrigger value="quadro" className="text-xs h-6">Quadro de pessoal</TabsTrigger>
             <TabsTrigger value="comparacao" className="text-xs h-6">Orçado × Realizado</TabsTrigger>
             <TabsTrigger value="versoes" className="text-xs h-6">
               Versões
@@ -258,6 +260,31 @@ export function OrcamentoClient({
                 icon={<Target className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
                 title="Nenhuma versão de orçamento"
                 description="Crie a versão do exercício para começar a lançar previsões de recebimento e pagamento."
+                action={{ label: 'Criar versão', onClick: () => changeTab('versoes') }}
+              />
+            </div>
+          )
+        )}
+
+        {tab === 'quadro' && (
+          selectedVersion ? (
+            <QuadroTab
+              key={selectedVersion.id}
+              version={selectedVersion}
+              versions={versions}
+              legalEntities={legalEntities}
+              costCenters={costCenters}
+              businessUnits={businessUnits}
+              contactOptions={contactOptions}
+              leafCategories={leafCategories}
+              onChanged={() => refresh()}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center px-6">
+              <EmptyState
+                icon={<Target className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} />}
+                title="Nenhuma versão de orçamento"
+                description="Crie uma versão do exercício para montar o quadro de pessoal dela."
                 action={{ label: 'Criar versão', onClick: () => changeTab('versoes') }}
               />
             </div>

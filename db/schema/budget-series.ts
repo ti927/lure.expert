@@ -68,7 +68,7 @@ export const budgetSeries = pgTable(
     // mês do calendário (com intervalMonths > 1 não existem 12 slots).
     seasonalAmounts: jsonb('seasonal_amounts'),
 
-    // 'manual' | 'copia_realizado' | 'csv' | 'recorrencia_detectada' | 'duplicacao'
+    // 'manual' | 'copia_realizado' | 'csv' | 'recorrencia_detectada' | 'duplicacao' | 'folha'
     source: text('source').notNull().default('manual'),
 
     notes: text('notes'),

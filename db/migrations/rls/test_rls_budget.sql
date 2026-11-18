@@ -231,6 +231,38 @@ BEGIN
   END;
 
   -- ============================================================
+  -- C2. FOLHA (migration 0036) — só roda se a 0036 já estiver aplicada.
+  -- 5 tabelas, RLS ligado, 4 policies cada; e uma linha da org_a em cada
+  -- uma, para que a leitura da org_b em D prove isolamento de verdade.
+  -- ============================================================
+
+  IF to_regclass('public.budget_people') IS NOT NULL THEN
+    SELECT COUNT(*) INTO cnt FROM pg_tables
+    WHERE schemaname = 'public' AND rowsecurity
+      AND tablename IN ('budget_payroll_settings', 'budget_people', 'budget_people_allocations',
+                        'budget_people_benefits', 'payroll_category_map');
+    IF cnt = 5 THEN report := report || E'  [OK]     0036: RLS habilitada nas 5 tabelas da folha\n';
+    ELSE report := report || '  [FALHOU] 0036: RLS habilitada em apenas ' || cnt || E' de 5\n'; fails := fails + 1; END IF;
+
+    SELECT COUNT(*) INTO cnt FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename IN ('budget_payroll_settings', 'budget_people', 'budget_people_allocations',
+                        'budget_people_benefits', 'payroll_category_map');
+    IF cnt = 20 THEN report := report || E'  [OK]     0036: 20 policies (4 por tabela)\n';
+    ELSE report := report || '  [FALHOU] 0036: esperava 20 policies, achou ' || cnt || E'\n'; fails := fails + 1; END IF;
+
+    INSERT INTO budget_payroll_settings(organization_id, version_id) VALUES (org_a, ver_a);
+    INSERT INTO budget_people(id, organization_id, version_id, nome, vinculo, valor_base)
+    VALUES (ent_a, org_a, ver_a, '_Pessoa', 'pj', 1000);
+    INSERT INTO budget_people_allocations(organization_id, person_id, percentual, ordem)
+    VALUES (org_a, ent_a, 100, 1);
+    INSERT INTO budget_people_benefits(organization_id, person_id, nome, valor_mensal)
+    VALUES (org_a, ent_a, '_VR', 500);
+    INSERT INTO payroll_category_map(organization_id, componente, category_id)
+    VALUES (org_a, '_salario', cat_fil);
+  END IF;
+
+  -- ============================================================
   -- D. ISOLAMENTO — user_b pertence somente à org_b
   -- ============================================================
 
@@ -267,6 +299,21 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN
     report := report || E'  [ATENCAO] sem GRANT de SELECT em budget_entries para authenticated\n';
   END;
+
+  IF to_regclass('public.budget_people') IS NOT NULL THEN
+   BEGIN
+    SELECT (SELECT COUNT(*) FROM budget_payroll_settings   WHERE organization_id = org_a)
+         + (SELECT COUNT(*) FROM budget_people             WHERE organization_id = org_a)
+         + (SELECT COUNT(*) FROM budget_people_allocations WHERE organization_id = org_a)
+         + (SELECT COUNT(*) FROM budget_people_benefits    WHERE organization_id = org_a)
+         + (SELECT COUNT(*) FROM payroll_category_map      WHERE organization_id = org_a)
+      INTO cnt;
+    IF cnt = 0 THEN report := report || E'  [OK]     0036: as 5 tabelas da folha isoladas\n';
+    ELSE report := report || '  [FALHOU] 0036: tabelas da folha vazaram (' || cnt || E' row(s))\n'; fails := fails + 1; END IF;
+   EXCEPTION WHEN insufficient_privilege THEN
+    report := report || E'  [ATENCAO] sem GRANT de SELECT nas tabelas da folha para authenticated\n';
+   END;
+  END IF;
 
   -- Escrita cruzada também tem que ser bloqueada
   BEGIN

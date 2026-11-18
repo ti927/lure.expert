@@ -8,6 +8,7 @@ import { db } from '@/db'
 import { categories, categorizationRules } from '@/db/schema'
 import { eq, and, count, sql } from 'drizzle-orm'
 import { contarUsoPorNatureza, contarUsoDaNatureza } from '@/lib/category-usage'
+import { recusaApagarNaturezaDaFolha } from '@/lib/payroll-write'
 
 const CATEGORY_TYPES = [
   // DRE
@@ -185,6 +186,10 @@ export async function deleteCategory(id: string) {
   const txCount = await contarUsoDaNatureza(organizationId, id)
   if (txCount > 0)
     return { error: `Esta categoria está vinculada a ${txCount} transação(ões). Archive-a em vez de deletar, ou reclassifique as transações primeiro.` }
+
+  // Mapa da folha e benefícios do quadro apontam para a natureza com FK RESTRICT.
+  const recusaFolha = await recusaApagarNaturezaDaFolha(db, organizationId, id)
+  if (recusaFolha) return { error: recusaFolha }
 
   // Regras de categorização são metadados gerados automaticamente — deletar em cascata
   await db

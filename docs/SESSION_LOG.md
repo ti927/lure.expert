@@ -12,6 +12,81 @@ Decisões arquiteturais não-óbvias estão em `docs/SCHEMA_DECISIONS.md` (sempr
 
 ---
 
+### ✅ Folha de pagamento no orçamento (18/nov) — branch `feat/folha-orcamento`, NÃO mergeada
+
+Migration **0036 aplicada só no banco local** (contêiner `lure-local`, porta 55432); **não** na produção.
+Spec `docs/superpowers/specs/2026-11-18-folha-no-orcamento-design.md`; Decisão 32. Oito tarefas, cada uma
+com revisão independente. Commits `4bbb01a`..`d23d010` + `docs: folha no orçamento`.
+
+**Arquivos por tarefa**
+- **T1 (`4bbb01a`):** `db/migrations/rls/0036_folha_orcamento.sql` e `0036_down_folha_orcamento.sql`;
+  `db/schema/budget-payroll.ts` (5 tabelas), `legal-entities.ts`, `budget-series.ts`, `index.ts`;
+  `test_rls_budget.sql` (seção C2 condicional); `scripts/verify-migration-0036.ts`.
+- **T2 (`ac0ba81`, `4fe4c00`):** `src/lib/payroll-types.ts`, `payroll-calc.ts`; `scripts/verify-payroll-calc.ts`.
+- **T3 (`d8ac405`):** `src/lib/payroll-build.ts` (e a seção "montagem" do verify de cálculo).
+- **T4 (`2c1a707`):** `src/lib/payroll-write.ts`; `src/lib/budget-types.ts` (`'folha'`); `scripts/verify-payroll-write.ts`.
+- **T5 (`4486767`):** `src/lib/payroll-guard.ts`; `budget-scope.ts` (`ENTRY_INSERT_CHUNK` mudou de casa),
+  `budget-copy.ts` (duplicação preserva `folha` e copia o quadro), `src/server/budget.ts`.
+- **T6 (`4f1c83c`):** `src/server/payroll.ts`, `src/lib/payroll-uj.ts`, `src/server/dimensions.ts`,
+  `dimension-manager.tsx`, `/configuracoes/entidades-juridicas/page.tsx`.
+- **T7 (`c046ea6`, `d23d010`):** em `orcamento/`: `quadro-tab`, `pessoa-dialog`, `pessoa-form`, `pessoa-linhas`,
+  `pessoa-previa`, `parametros-folha-bar`, `naturezas-folha-dialog`, `gerar-folha-dialog`,
+  `copiar-quadro-dialog`, `folha-format`; mudanças em `orcamento-client`, `planejamento-tab`, `comparacao-tab`.
+- **T8:** `docs/SCHEMA_DECISIONS.md` (Decisão 32), `CLAUDE.md`, este log.
+
+**Defeitos achados pelas revisões e corrigidos**
+- **T2, 4 Importantes (Zod × CHECK do banco):** o Zod aceitava o que a 0036 recusa (`meses_pj` fora de 1..12 ou
+  repetidos, coerência entrada/saída, etc.) — o erro só apareceria no INSERT. Fechado no Zod, com teste dos
+  dois sentidos. Mais a regra das **férias de quem foi admitido no ano**, que caem em `exercício+1`
+  (CLT arts. 130/134) — o plano original as punha no ano corrente.
+- **T2, ruling:** o complemento do terço ficou no **último mês ativo**, não no mês de férias (ficaria negativo
+  com dissídio posterior).
+- **T4, desvio aceito:** 13º e FGTS sobre 13º viraram séries "1ª/2ª parcela" por causa do CHECK de 12 ocorrências.
+- **T5:** a guarda recusa em **todo** caminho, inclusive prévias e MCP, e lê o banco em vez de confiar na série.
+- **T7, 1 Importante:** com mês de dissídio escolhido e percentual vazio, `gravar` saía cedo e **descartava
+  também a troca de modo** de 13º/férias — o rádio mostrava um modo que não estava salvo. Corrigido em `d23d010`,
+  com avisos de recarga e de prévia.
+
+**Minores adiados (no ledger `.superpowers/sdd/2026-11-18-folha-no-orcamento/progress.md`):** `outros_proventos`
+emitido para PJ/estágio; PJ de meses não contíguos tem regra que não descreve as ocorrências (por isso o
+bloqueio total); `applyProportion` confia que a alocação soma 100; desatualização não vê linha de mapa
+apagada; apagar CC/UEN anula a dimensão via `SET NULL`; recusas das actions sem teste (exigem sessão HTTP);
+estado local de mês/% do dissídio não reverte em erro; viewers veem botões de escrita; sem filtro "sem CC/UEN".
+
+**Placares (rodados de novo no fim, 18/nov)**
+- `npx tsx scripts/verify-payroll-calc.ts` → **139 OK, 0 falha(s)** (esperado 139).
+- `verify-payroll-write.ts` (banco local) → **88 ok, 0 falhas** (esperado 88).
+- `verify-migration-0036.ts` (banco local) → **44 OK, 1 falha**, de 45. **A falha é esperada e honesta:** a
+  0036 já está aplicada no banco local (as Tarefas 4–5 precisavam dela), e a última asserção, "ROLLBACK: nada
+  persistiu (`to_regclass('budget_people')` é null)", só vale em banco **sem** a migration. Na entrega da T1,
+  contra o banco sem ela, foram 45/45. Não "consertei" o banco; reaplicar contra um banco limpo (ou depois de
+  rodar a reversa) devolve 45/45.
+- `npx tsc --noEmit` → limpo, sem saída.
+
+**Revisão final do branch inteiro (18/nov) — 8 achados, corrigidos numa onda (`fix(folha)`):**
+- Quadro vazio (ou total zero) nunca removia a folha anterior — a confirmação ficava bloqueada e o aviso de
+  desatualização sumia sem pessoas. Agora "Remover a folha", e o servidor apaga as séries e grava `gerado_em`.
+- Apagar UJ usada no quadro estourava o 23503 cru (FK RESTRICT): agora recusa com motivo, e a contagem de
+  vínculos conta as pessoas. O mesmo para natureza do mapa da folha / de benefício (`deleteCategory`).
+- **Alíquotas `numeric(6,4)` → `numeric(8,6)`** (RAT × FAP = 0,037035), `toFixed(6)`, Zod com até 4 casas
+  em pontos. A 0036 foi reaplicada no banco local (reversa → `verify-migration-0036` **46/46** → 0036).
+- Drill-down do orçado (`/dre`, Orçado × Realizado) deixou de oferecer o lápis em ocorrência da folha.
+- Nota de provisão do Orçado × Realizado passou a incluir a natureza de encargos s/ 13º e férias.
+- Benefício com nome repetido na mesma pessoa (caixa/espaço não distinguem) é recusado — a geração agrupa
+  pelo nome e os somaria num lançamento só.
+- Documentação: a ordem de subida (todo `select` de `legal_entities` lê as colunas novas) e o falso positivo
+  de desatualização ao renomear UJ.
+- **Tempo de geração medido** (banco local, script descartável, organização criada e apagada): 100 CLT ×
+  2 alocações + 1 benefício → **2.400 séries / 28.800 ocorrências**; prévia **151 ms**, gerar **6.059 ms**,
+  gerar de novo substituindo as 2.400 **6.016 ms**.
+- Placares depois: cálculo **147 OK**, escrita **100 ok**, migration **46/46**, `tsc`/lint/build limpos.
+
+**Não verificado:** nenhuma tela foi vista (sem login na produção para o navegador); recusas de papel só por
+teste de lógica, não por sessão HTTP; a 0036 nunca rodou na produção. Falta o olho do Julio (lista em
+`CLAUDE.md`, "Confirmações na tela") e o "pode subir": **0036 primeiro, merge depois**.
+
+---
+
 ### ✅ Exportar o /fluxo para Excel (9–11/nov)
 
 Merge `b159f70`, sem migration. Branch `feat/exportar-fluxo`, commit `c8f4df6`. Pedido do Julio: os

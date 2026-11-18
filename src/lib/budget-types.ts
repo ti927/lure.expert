@@ -35,6 +35,8 @@ export const BUDGET_SOURCES = [
   'csv',
   'recorrencia_detectada',
   'duplicacao',
+  // Gerada pelo quadro de pessoal (folha no orçamento, migration 0036).
+  'folha',
 ] as const
 export type BudgetSource = (typeof BUDGET_SOURCES)[number]
 
@@ -44,6 +46,7 @@ export const BUDGET_SOURCE_LABELS: Record<BudgetSource, string> = {
   csv:                   'Importado de planilha',
   recorrencia_detectada: 'Recorrência detectada',
   duplicacao:            'Duplicação de versão',
+  folha:                 'Folha',
 }
 
 // ─── Modo de valor da série ───────────────────────────────────────────────────
@@ -464,6 +467,8 @@ export interface BudgetDrillDownEntry {
   legalEntityName:  string | null
   contactName:      string | null
   adjusted:         boolean
+  /** Ocorrência gerada pela folha (série `source = 'folha'`): só leitura. */
+  daFolha:          boolean
 }
 
 // ─── Aceleradores: copiar do realizado e duplicar versão ──────────────────────
