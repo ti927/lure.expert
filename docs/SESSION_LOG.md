@@ -63,6 +63,24 @@ estado local de mês/% do dissídio não reverte em erro; viewers veem botões d
   rodar a reversa) devolve 45/45.
 - `npx tsc --noEmit` → limpo, sem saída.
 
+**Revisão final do branch inteiro (18/nov) — 8 achados, corrigidos numa onda (`fix(folha)`):**
+- Quadro vazio (ou total zero) nunca removia a folha anterior — a confirmação ficava bloqueada e o aviso de
+  desatualização sumia sem pessoas. Agora "Remover a folha", e o servidor apaga as séries e grava `gerado_em`.
+- Apagar UJ usada no quadro estourava o 23503 cru (FK RESTRICT): agora recusa com motivo, e a contagem de
+  vínculos conta as pessoas. O mesmo para natureza do mapa da folha / de benefício (`deleteCategory`).
+- **Alíquotas `numeric(6,4)` → `numeric(8,6)`** (RAT × FAP = 0,037035), `toFixed(6)`, Zod com até 4 casas
+  em pontos. A 0036 foi reaplicada no banco local (reversa → `verify-migration-0036` **46/46** → 0036).
+- Drill-down do orçado (`/dre`, Orçado × Realizado) deixou de oferecer o lápis em ocorrência da folha.
+- Nota de provisão do Orçado × Realizado passou a incluir a natureza de encargos s/ 13º e férias.
+- Benefício com nome repetido na mesma pessoa (caixa/espaço não distinguem) é recusado — a geração agrupa
+  pelo nome e os somaria num lançamento só.
+- Documentação: a ordem de subida (todo `select` de `legal_entities` lê as colunas novas) e o falso positivo
+  de desatualização ao renomear UJ.
+- **Tempo de geração medido** (banco local, script descartável, organização criada e apagada): 100 CLT ×
+  2 alocações + 1 benefício → **2.400 séries / 28.800 ocorrências**; prévia **151 ms**, gerar **6.059 ms**,
+  gerar de novo substituindo as 2.400 **6.016 ms**.
+- Placares depois: cálculo **147 OK**, escrita **100 ok**, migration **46/46**, `tsc`/lint/build limpos.
+
 **Não verificado:** nenhuma tela foi vista (sem login na produção para o navegador); recusas de papel só por
 teste de lógica, não por sessão HTTP; a 0036 nunca rodou na produção. Falta o olho do Julio (lista em
 `CLAUDE.md`, "Confirmações na tela") e o "pode subir": **0036 primeiro, merge depois**.

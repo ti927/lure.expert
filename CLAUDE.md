@@ -316,7 +316,9 @@ Spec e plano em `docs/superpowers/`. 8 tarefas, 9 commits (`4bbb01a`..`d23d010`)
 
 **A ordem de subida é esta, e inverter quebra a tela:** (1) aplicar a **0036** (Studio ou o roteiro de
 subida autônoma, com dump e `lock_timeout` curto) e conferir o catálogo; (2) só então o merge e o deploy
-— a página `/orcamento` lê as tabelas novas. Reversa: `0036_down_folha_orcamento.sql`. **Aguarda o "pode
+— **não é só o `/orcamento`**: as colunas novas de `legal_entities` estão no schema Drizzle, e **todo
+`select().from(legalEntities)` do app as pede** — `/configuracoes`, os filtros de entidade de `/transacoes`,
+`/dre`, `/fluxo`, o orçamento, o MCP. Deploy antes da 0036 = erro de coluna inexistente em boa parte do app. Reversa: `0036_down_folha_orcamento.sql`. **Aguarda o "pode
 subir" do Julio.** O branch `feat/pluggy-hardening` segue em espera, e por isso esta é a Decisão **32**
 (a 31 mora naquele branch).
 
@@ -327,6 +329,14 @@ anexo** não é coberto (`simples_anexo_iv` é um booleano por unidade jurídica
 de escrita** (o servidor recusa — o botão escondido por papel é a frente seguinte); **apagar um centro
 de custo ou UEN deixa a dimensão das séries da folha nula** (FK `SET NULL`) sem acender o aviso de
 desatualização; sem MCP do quadro nem importação do quadro por planilha (v1.1); datas de caixa fixas.
+**Renomear (ou arquivar) uma unidade jurídica marca o quadro que a usa como desatualizado**: o gatilho move
+`legal_entities.updated_at` em QUALQUER UPDATE da linha, e a desatualização compara esse `updated_at` com o
+`gerado_em` — é falso positivo declarado, resolvido gerando de novo. **Quadro esvaziado depois de gerar**:
+"Gerar folha" vira **"Remover a folha"** e apaga as séries `folha` da versão sem gravar nada no lugar.
+**Alíquotas da UJ em `numeric(8,6)`** (RAT × FAP = 3% × 1,2345 = 3,7035%); a tela aceita até 4 casas em pontos.
+Apagar UJ com gente no quadro, ou natureza do mapa da folha / de benefício, é **recusado com motivo**
+(as FKs são RESTRICT). Geração medida no banco local: **100 CLT × 2 alocações + 1 benefício = 2.400 séries /
+28.800 ocorrências em ~6 s** — na produção, pelo pooler, será mais.
 
 **Antes dela — 9 a 11/nov: EXPORTAR O /FLUXO PARA EXCEL, no ar** (merge `b159f70`; o botão aguarda o olho do Julio).
 Sem migration. Botão **"Exportar para Excel"** no `/fluxo` (ao lado de "Recolher todos") → `GET /fluxo/exportar`
@@ -1072,7 +1082,8 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
   `budget_people`, `budget_people_allocations`, `budget_people_benefits`, `payroll_category_map` — com
   CHECKs, índices, gatilhos `updated_at` e RLS (4 policies cada); e `'folha'` no CHECK de
   `budget_series.source`. Validada com ROLLBACK (45/45 na primeira rodada). **Tem de subir ANTES do
-  merge**: a página lê as tabelas novas. Reversa: `0036_down_folha_orcamento.sql` (apaga as séries
+  merge**: todo `select().from(legalEntities)` do app lê as colunas novas (configurações, filtros de
+  `/transacoes`, `/dre`, orçamento) — não só o `/orcamento`. Reversa: `0036_down_folha_orcamento.sql` (apaga as séries
   `folha`, devolve o CHECK antigo, dropa as 5 tabelas e as colunas — perde o quadro; idempotente).
 - ✅ `db/migrations/rls/0034_account_opening_balances.sql` — **aplicada por Julio em 27/out** e
   conferida (`scripts/confere-0034.ts`: tabela, RLS com 4 policies, gatilho `updated_at`,
