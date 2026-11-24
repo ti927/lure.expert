@@ -369,7 +369,7 @@ seriam o mesmo número para o Excel. Verificado: `scripts/verify-fluxo-export.ts
 períodos, filtro de CC; só leitura) e o Excel real recalculando as 1.040 fórmulas sem diferença.
 O `/fluxo` não tem filtro de contato, então a exportação também não.
 
-**24/nov: HARDENING DO SYNC DO PLUGGY, mergeado** (feito em 03/nov; subiu em 24/nov, depois dos fornecedores). **Falta a 0035 no Studio** e a conferência só lendo — passos 2 e 3 abaixo.
+**24/nov: HARDENING DO SYNC DO PLUGGY, mergeado** (feito em 03/nov; subiu em 24/nov, depois dos fornecedores). **Falta a 0035 no Studio** e a conferência só lendo — passos 2 e 3 abaixo. Merge `ce19f7d`, deploy confirmado.
 Origem: `relatorio-pluggy-lure-expert.md` (raiz, fora do git). Ver **Decisão 31**. Verificado 39/39
 (`scripts/verify-pluggy-sync.ts`, ROLLBACK contra a produção) + `next build` limpo.
 
@@ -377,9 +377,9 @@ Origem: `relatorio-pluggy-lure-expert.md` (raiz, fora do git). Ver **Decisão 31
 1. Julio diz "pode subir" → merge do branch no `main` + push (é o deploy). Conferir o deploy pela
    API do GitHub (`/repos/ti927/lure.expert/commits/<sha>/status`).
 2. **Depois** do deploy, Julio roda `db/migrations/rls/0035_pluggy_datas_e_pendentes.sql` no SQL
-   Editor do Studio (só dados: 530 datas + 34 pares na fila). Nessa ordem, nada entra com data UTC
+   Editor do Studio (só dados). **Medido em 24/nov, com ROLLBACK, logo após o deploy: 592 datas + 35 pares na fila** (eram 530 + 34 em 03/nov — o sync antigo seguiu gravando UTC até o deploy). Nessa ordem, nada entra com data UTC
    no intervalo entre as duas coisas.
-3. Conferir só lendo: 0 lançamentos do Pluggy com data UTC ≠ data de Brasília, e 34 com
+3. Conferir só lendo: 0 lançamentos do Pluggy com data UTC ≠ data de Brasília, e 35 com
    `metadata->>'reconciliationKind' = 'pendente'`. **Não** rodar o `verify-pluggy-sync` inteiro
    para isso — depois da 0035 a asserção "havia datas UTC para alinhar" falha por construção.
 4. Opcional, depois: `PLUGGY_WEBHOOK_SECRET` na Vercel + `?token=<mesmo valor>` na URL do webhook
