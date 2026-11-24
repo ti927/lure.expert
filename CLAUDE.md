@@ -308,7 +308,7 @@ mostrar nada — e as duas telas nem batiam entre si; (2) projeção estatístic
 perdeu sentido diante do orçamento da Fase 9. A **detecção** de recorrências sobreviveu, em
 `lib/recurrence-detect.ts`, servindo só ao `/orcamento`; `server/fluxo.ts` foi apagado.
 
-**Última sessão — 24/nov: ANÁLISE DE FORNECEDORES + MESA DE NEGOCIAÇÃO, no branch `feat/fornecedores`, NÃO no ar.**
+**Última sessão — 24/nov: ANÁLISE DE FORNECEDORES + MESA DE NEGOCIAÇÃO, no ar** (0037 aplicada por Julio no Studio e conferida; merge `f483979`; seed da Quick aplicado — 2 agrupamentos e as 4 marcações do painel; as telas aguardam o olho do Julio).
 Pedido do Julio: um Pareto das despesas por fornecedor (não por natureza, rateio desconsiderado) para
 detalhar o orçamento da Quick. Começou como painel no claude.ai e veio para o app quando os envolvidos
 precisaram marcar fornecedores para negociar. Tela `/fornecedores` (menu "Fornecedores") com três abas —
@@ -317,7 +317,7 @@ mês → lançamentos) e **mesa de negociação** (redução em % ou R$/mês dig
 em 12 meses) — e `/configuracoes/agrupamentos-de-fornecedor`. Mesa e agrupamentos: **admin+**. Ver
 **Decisão 33**.
 
-**A ordem de subida:** (1) aplicar a **0037** no Studio (duas tabelas novas, nada em tabela existente — sem
+**Subiu nesta ordem em 24/nov:** (1) aplicar a **0037** no Studio (duas tabelas novas, nada em tabela existente — sem
 ela só `/fornecedores` e a tela de agrupamentos quebram); (2) merge e deploy; (3) `scripts/seed-fornecedores-quick.ts
 --aplicar` cria os 2 agrupamentos da Quick (folha em TED de lote, câmbio Ebury) e leva à mesa as 4 marcações
 do painel de 24/nov — **reler a mesa do painel antes**, porque alguém pode ter marcado mais. Verificado:
@@ -1095,8 +1095,8 @@ duas datas por lançamento (`competence_date` → DRE Orçada, `cash_date` → F
 - ✅ Hardening pipeline de categorização — 4 fixes encadeados: catch loud em `approveAndInsert` (com flag `categorizationDispatched` pro frontend), chunking interno do `categorize-transactions` em `step.run`s de 50 (sobrevive ao maxDuration=300 do Vercel), chunking de evento `transaction/batch-inserted` em 3000 IDs/event (limite real do Inngest é 256KB, não 512KB — `sendCategorizationEvents` helper em `lib/inngest.ts`), sanitização de BOM/zero-width nas envs Anthropic e Inngest no startup (causa do `TypeError: Cannot convert argument to a ByteString`). Commits `b040a23` / `37026ef` / `cec830a` / `2bd4cf1`. Detalhes em `docs/SESSION_LOG.md`.
 - ✅ Layer 0 de categorização — match determinístico do CSV antes do LLM. Parser detecta colunas autoritativas (`Categoria/Natureza Pai/Filho`, `Conta Contábil`, `Plano de Contas`, `Tipo Natureza`) por regex no header. `findCategoryByCsvMapping` faz lookup normalizado (lowercase + sem acento + colapsa dash/barra/parênteses em espaço). Desempate cumulativo: nome → tipo (`TIPO_ALIASES`: `Receita`→`receita_operacional`, `CMV`/`CPV`→`cpv`, etc) → pai. `approveAndInsert` pré-classifica no INSERT (linhas casadas não entram no evento Inngest). Resultado: CSVs de ERP com plano alinhado importam zero-Haiku. Commits `d587644` / `d72ec37` / `35400e6`. Decisão arquitetural em `docs/SCHEMA_DECISIONS.md` Decisão 12.
 
-**Migration PENDENTE (Studio, antes do merge de `feat/fornecedores`):**
-- 🔲 `db/migrations/rls/0037_fornecedores.sql` — `supplier_negotiations` (a mesa, única por organização+chave) e
+**Migrations aplicadas no Supabase Studio (24/nov):**
+- ✅ `db/migrations/rls/0037_fornecedores.sql` — **aplicada por Julio em 24/nov** e conferida (2 tabelas, RLS, 8 policies, 6 CHECKs, 2 gatilhos) — `supplier_negotiations` (a mesa, única por organização+chave) e
   `supplier_groupings` (com `sobrepoe_contato`), RLS com 4 policies cada, gatilhos `updated_at`. Validada com
   ROLLBACK contra a produção (36/36, incluindo reaplicar = idempotente). Reversa: `0037_down_fornecedores.sql`.
 
@@ -1181,7 +1181,7 @@ Decisões arquiteturais não-óbvias e WHYs em `docs/SCHEMA_DECISIONS.md`.
 
 | Sessão | O que foi entregue |
 |---|---|
-| **Análise de fornecedores (24/nov, branch `feat/fornecedores`, não mergeada)** | `/fornecedores` (curva ABC 70/20/10, matriz natureza × mês → fornecedor × mês → lançamentos, mesa de negociação com redução na linha e antes/depois) e `/configuracoes/agrupamentos-de-fornecedor`. Migration **0037** (2 tabelas), não aplicada. Fornecedor como chave de texto, não FK; `sobrepoe_contato` achado pelo teste (a folha perdia R$ 110 mil para o contato das partes do rateio). `verify-fornecedores` 36/36 com ROLLBACK; `tsc`, lint e build limpos. Decisão 33 |
+| **Análise de fornecedores (24/nov, no ar — merge `f483979`)** | `/fornecedores` (curva ABC 70/20/10, matriz natureza × mês → fornecedor × mês → lançamentos, mesa de negociação com redução na linha e antes/depois) e `/configuracoes/agrupamentos-de-fornecedor`. Migration **0037** (2 tabelas), aplicada. Fornecedor como chave de texto, não FK; `sobrepoe_contato` achado pelo teste (a folha perdia R$ 110 mil para o contato das partes do rateio). `verify-fornecedores` 36/36 com ROLLBACK; `tsc`, lint e build limpos. Decisão 33 |
 | **Folha de pagamento no orçamento (18/nov, branch `feat/folha-orcamento`, não mergeada)** | Quadro de pessoal **por versão** (CLT, PJ, pró-labore, estagiário, vaga), encargos pelo regime da unidade jurídica, 13º/férias em provisão ou no pagamento, benefícios, alocação em % por CC/UEN, mapa de naturezas com exceção por pessoa. Migration **0036** (5 tabelas + 7 colunas em `legal_entities` + `'folha'` em `budget_series.source`), **não aplicada na produção**. Cálculo puro (`payroll-calc`), montagem, escrita com prévia+confirmação e proteção das séries `folha` em todo caminho; aba "Quadro de pessoal" com prévia ao vivo. Exemplo do spec (CLT 5.000, Lucro Presumido) fecha **90.533,33** nos dois modos. Placares: cálculo 139/139, escrita 88/88 (banco local), migration 45 verificações (44 OK na releitura — ver `SESSION_LOG`), `tsc` limpo. Decisão 32 |
 | **Exportar o /fluxo para Excel (9–11/nov)** | Botão no `/fluxo` → `/fluxo/exportar` (route handler, xlsx via SheetJS). `lib/fluxo-export.ts`: `lerLinhasParaExportar` (uma linha por parte do rateio, motivo de ficar fora), `montarMatriz`, `montarPlanilhaDoFluxo` (aba "Fluxo de caixa" em SOMASES com valor em cache + aba "Lançamentos"). Período e filtros de dimensão da tela. 61/61 contra a produção (só leitura) + 1.040 fórmulas recalculadas no Excel sem diferença. Merge `b159f70` |
 | **Conta manual na conferência (27/out)** | Tipo "Cartão pré-pago"; aviso de saldo de abertura duplicado; cartão de crédito manual confere por **fatura** (lista de vencimentos + fatura aberta); **lançamento à mão** só em conta manual, com autoria no `metadata`, selo "Manual", filtro de origem e restauração do apagado. Decisão 30. Sem migration. 81/81 + 36/36 contra a produção, revertidos |
