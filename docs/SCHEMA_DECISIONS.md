@@ -1948,3 +1948,61 @@ da geração; viewers veem botões de escrita (o servidor recusa).
 
 **Verificado:** `verify-payroll-calc` 139/139 (exemplo do spec: 90.533,33 nos dois modos; Simples só FGTS),
 `verify-payroll-write` 88/88 contra o banco local, `verify-migration-0036` 45/45 com ROLLBACK na entrega.
+
+---
+
+## Decisão 33 — Análise de fornecedores e mesa de negociação (24/nov)
+
+**Pedido do Julio:** um Pareto das despesas por **fornecedor** (não por natureza, desconsiderando rateios)
+para preparar um orçamento mais detalhado da Quick Aviação. A análise começou fora do app (um painel no
+claude.ai, lendo um retrato do banco) e, quando os envolvidos precisaram marcar fornecedores para negociar,
+veio para dentro do lure.expert: `/fornecedores`, atrás do login, por **usuário + organização**.
+
+**1. Tela genérica, regras configuráveis.** Julio escolheu tela do produto (não página da Quick) e
+"heurística no código". As duas só convivem se a heurística for genérica, então ela se divide em duas:
+- **no código, para toda organização:** o contato do lançamento (ou o das partes do rateio, quando todas
+  apontam para o mesmo); o **nome no extrato casado com o cadastro** de contatos (o cadastro quase nunca tem
+  CNPJ — na Quick, nenhum dos 431); o CNPJ do extrato sem cadastro; a descrição normalizada.
+- **por organização, em `supplier_groupings`:** "descrição contém X" (opcionalmente numa Natureza Pai) → um
+  fornecedor só. É onde moram a folha paga em TED de lote e o câmbio pago à Ebury, que são da Quick.
+
+**2. `sobrepoe_contato` existe porque as duas regras da Quick pedem o contrário uma da outra.** A folha
+precisa vencer o contato: as partes do rateio de uma TED de lote apontam para o BANCO SICREDI ou para cada
+pessoa, e ainda assim é folha (sem isso, R$ 110 mil saíam da folha). O câmbio precisa respeitá-lo: Garmin,
+Textron e os outros pagos via Ebury continuam com o próprio nome; só o que não tem fornecedor final vira
+"Câmbio Ebury". O teste achou isso comparando com o painel.
+
+**3. O fornecedor NÃO é FK — é uma chave de texto** (`C:<contato>`, `G:<agrupamento>`, `J:<cnpj>`,
+`D:<descrição normalizada>`). Metade do valor de uma base importada não tem contato, e a mesa precisa negociar
+com esses também. `rotulo` guarda o nome de quando foi marcado. Consequência declarada: cadastrar o contato
+depois muda a chave de `D:`/`J:` para `C:`, e o item da mesa fica "sem gasto" até ser marcado de novo.
+
+**4. Rateio desconsiderado de propósito.** Cada lançamento entra pelo valor inteiro, na natureza da parte de
+maior valor. É o pedido (quem recebe, não onde o custo foi distribuído) e é a exceção consciente à regra de
+"analítica lê `transaction_lines`".
+
+**5. Curva ABC 70/20/10, pelo acumulado ANTES do item** (escolha do Julio). O fornecedor que atravessa os 70%
+ainda é A — a classe A nunca fica vazia.
+
+**6. "Antes" da mesa = média dos 3 últimos meses COMPLETOS do período.** O mês de `ate` só conta se `ate` for
+o último dia dele e ele já tiver acabado — comparar mês pela metade com mês inteiro é o falso positivo do R5.
+Redução em % vale sobre essa média; em R$ é "a menos por mês", limitada ao próprio gasto. Economia em 12
+meses = mensal × 12.
+
+**7. Mesa e agrupamentos: admin+** (escolha do Julio). Leitura: todo papel; quem lê vê a faixa de modo
+leitura e os controles desativados. Toda escrita vai a `agent_events` (`fornecedores.*`).
+
+**8. Mesmo corte das outras leituras:** competência (`t.date`), fora `pending`/`duplicate`. O painel de 24/nov
+não excluía esses: a tela dá R$ 61.564,50 a menos (27 lançamentos), e é só essa a diferença.
+
+**Desvio declarado do `DATA_TABLE_PATTERN`:** a tela tem várias tabelas analíticas (curva, matrizes,
+lançamentos), como `/dre`; cada uma rola dentro da própria caixa com cabeçalho fixo, a página rola abaixo de
+uma barra fixa (abas, período, filtros, comandos). Sem paginação nem filtro no cabeçalho de coluna.
+
+**Não coberto na v1:** os blocos que o painel tinha sob medida para a Quick (Sócios por pessoa, Importação,
+Pessoal CLT × PJ); a economia da mesa virar lançamento orçado; ferramentas MCP da mesa; contagem de quantos
+lançamentos cada agrupamento pega.
+
+**Verificado:** `verify-fornecedores` 36/36 contra a produção numa transação revertida (migration aplicada e
+desfeita, CHECKs, agrupamentos da Quick, consolidação contra o painel, mesa, `agent_events`, reversa);
+`seed-fornecedores-quick --testar-com-migration` ensaiado; `tsc`, lint e `next build` limpos.
