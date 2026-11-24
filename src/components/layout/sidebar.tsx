@@ -18,6 +18,7 @@ import {
   LogOut,
   FileText,
   Target,
+  Handshake,
 } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -39,6 +40,7 @@ const NAV = [
   { href: '/balanco', icon: Scale, label: 'Balanço' },
   { href: '/fluxo', icon: TrendingUp, label: 'Fluxo de Caixa' },
   { href: '/orcamento', icon: Target, label: 'Orçamento' },
+  { href: '/fornecedores', icon: Handshake, label: 'Fornecedores' },
   { href: '/contas', icon: Landmark, label: 'Contas' },
   { href: '/upload', icon: UploadCloud, label: 'Enviar arquivo' },
 ]

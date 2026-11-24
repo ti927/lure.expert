@@ -14,7 +14,7 @@ import { SyncScheduleField } from '@/components/settings/sync-schedule-field'
 import { PendingInvites } from '@/components/settings/pending-invites'
 import { getAutoCategorize, getAgendaDeSync } from '@/server/settings'
 import { getMeusConvites } from '@/server/members'
-import { Tags, Building2, Briefcase, Landmark, Users, UserPlus, ChevronRight, Zap, FileText, Split, Activity, Plug } from 'lucide-react'
+import { Tags, Building2, Briefcase, Landmark, Users, UserPlus, ChevronRight, Zap, FileText, Split, Activity, Plug, Layers } from 'lucide-react'
 
 const NAV_SECTIONS = [
   {
@@ -143,6 +143,21 @@ export default async function ConfiguracoesPage() {
                 <p className="text-sm font-medium text-foreground">Regras de categorização</p>
                 <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
                   Veja, edite ou apague regras que o expert aprendeu com suas classificações.
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+            </div>
+          </Link>
+
+          <Link href="/configuracoes/agrupamentos-de-fornecedor">
+            <div className="flex items-center gap-4 p-4 rounded-lg border bg-card hover:bg-muted/40 transition-colors cursor-pointer">
+              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted shrink-0">
+                <Layers className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground">Agrupamentos de fornecedor</p>
+                <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                  Junte num fornecedor só os lançamentos que a descrição identifica, como a folha paga em lote ou o câmbio.
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
