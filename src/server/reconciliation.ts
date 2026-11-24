@@ -11,6 +11,12 @@ const PAGE_SIZE = 20
 
 export type ReconciliationRow = {
   id: string
+  /**
+   * `importacao`: lançamento importado × o mesmo vindo do banco (o caso de sempre).
+   * `pendente`: os dois são do banco — uma compra que ficou pendente e a versão
+   * efetivada que chegou com outro id (relatório Pluggy de 01/11).
+   */
+  tipo: 'importacao' | 'pendente'
   date: string
   description: string
   amount: string
@@ -42,6 +48,7 @@ export async function getReconciliationQueue(page = 1): Promise<{
       amount: string
       direction: string
       score: string
+      kind: string | null
       pluggy_id: string
       pluggy_date: string
       pluggy_description: string
@@ -55,6 +62,7 @@ export async function getReconciliationQueue(page = 1): Promise<{
         t.amount::text,
         t.direction,
         (t.metadata->>'reconciliationScore')::numeric AS score,
+        (t.metadata->>'reconciliationKind') AS kind,
         (t.metadata->>'reconciliationCandidateId') AS pluggy_id,
         p.date::text AS pluggy_date,
         p.description AS pluggy_description,
@@ -84,6 +92,7 @@ export async function getReconciliationQueue(page = 1): Promise<{
   return {
     rows: rows.map(r => ({
       id: r.id,
+      tipo: r.kind === 'pendente' ? 'pendente' as const : 'importacao' as const,
       date: String(r.date),
       description: r.description,
       amount: String(r.amount),
@@ -133,6 +142,7 @@ export async function confirmDuplicate(uploadTxId: string, pluggyTxId: string) {
   delete existingMeta['reconciliationPending']
   delete existingMeta['reconciliationCandidateId']
   delete existingMeta['reconciliationScore']
+  delete existingMeta['reconciliationKind']
 
   await db
     .update(transactions)
@@ -172,6 +182,7 @@ export async function skipReconciliation(uploadTxId: string) {
   delete existingMeta['reconciliationPending']
   delete existingMeta['reconciliationCandidateId']
   delete existingMeta['reconciliationScore']
+  delete existingMeta['reconciliationKind']
 
   await db
     .update(transactions)

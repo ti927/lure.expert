@@ -339,7 +339,7 @@ subida autônoma, com dump e `lock_timeout` curto) e conferir o catálogo; (2) s
 `/dre`, `/fluxo`, o orçamento, o MCP. Deploy antes da 0036 = erro de coluna inexistente em boa parte do app. Reversa: `0036_down_folha_orcamento.sql`. **Subiu nessa ordem em 18/nov:** tag
 `backup/antes-folha-2026-11-18` + dump `lure-expert-2026-11-18-antes-0036.dump` (restaurado e idêntico à
 produção), validação com ROLLBACK na produção 46/46, 0036 em `psql -1` pelo session pooler, catálogo
-conferido e retrato idêntico antes e depois (15.275 lançamentos, orçamento 1.839.972,68). O branch `feat/pluggy-hardening` segue em espera, e por isso esta é a Decisão **32**
+conferido e retrato idêntico antes e depois (15.275 lançamentos, orçamento 1.839.972,68). O branch `feat/pluggy-hardening` estava em espera, e por isso esta é a Decisão **32**
 (a 31 mora naquele branch).
 
 **Limitações declaradas da v1:** **sem rescisão** (aviso prévio, multa de 40% do FGTS, férias indenizadas — o
@@ -369,10 +369,31 @@ seriam o mesmo número para o Excel. Verificado: `scripts/verify-fluxo-export.ts
 períodos, filtro de CC; só leitura) e o Excel real recalculando as 1.040 fórmulas sem diferença.
 O `/fluxo` não tem filtro de contato, então a exportação também não.
 
-**Em espera, NÃO no `main`: branch `feat/pluggy-hardening`** (data em Brasília, pendente que efetiva,
-janela que avança, webhook com segredo — Decisão 31, migration 0035). Aguarda o "pode subir" do Julio;
-o roteiro de deploy está no `CLAUDE.md` **daquele branch** (commit `441d753`). Ao fazer o merge, a seção
-dela substitui esta nota. `relatorio-pluggy-lure-expert.md` na raiz segue não versionado.
+**24/nov: HARDENING DO SYNC DO PLUGGY, mergeado** (feito em 03/nov; subiu em 24/nov, depois dos fornecedores). **Falta a 0035 no Studio** e a conferência só lendo — passos 2 e 3 abaixo.
+Origem: `relatorio-pluggy-lure-expert.md` (raiz, fora do git). Ver **Decisão 31**. Verificado 39/39
+(`scripts/verify-pluggy-sync.ts`, ROLLBACK contra a produção) + `next build` limpo.
+
+**Roteiro para subir, nesta ordem:**
+1. Julio diz "pode subir" → merge do branch no `main` + push (é o deploy). Conferir o deploy pela
+   API do GitHub (`/repos/ti927/lure.expert/commits/<sha>/status`).
+2. **Depois** do deploy, Julio roda `db/migrations/rls/0035_pluggy_datas_e_pendentes.sql` no SQL
+   Editor do Studio (só dados: 530 datas + 34 pares na fila). Nessa ordem, nada entra com data UTC
+   no intervalo entre as duas coisas.
+3. Conferir só lendo: 0 lançamentos do Pluggy com data UTC ≠ data de Brasília, e 34 com
+   `metadata->>'reconciliationKind' = 'pendente'`. **Não** rodar o `verify-pluggy-sync` inteiro
+   para isso — depois da 0035 a asserção "havia datas UTC para alinhar" falha por construção.
+4. Opcional, depois: `PLUGGY_WEBHOOK_SECRET` na Vercel + `?token=<mesmo valor>` na URL do webhook
+   no painel da Pluggy + redeploy. Só a variável, sem a URL nova = webhooks recusados (o cron segue).
+
+**Efeito esperado:** a primeira releitura de cada conexão ainda usa a janela longa antiga e atualiza
+de uma vez o status dos ~1.631 pendentes congelados; os que o Pluggy não devolve mais saem das somas
+— totais recentes de cartão podem mudar. **Para conferir na tela:** uma data de fim de mês em
+`/transacoes`; os pares em `/contas` → Revisar ("Pendente no banco" × "Efetivada no banco").
+
+**Ainda aberto:** defeito 3 do relatório (aviso ao reconectar banco já conectado). E o achado do dia:
+o filtro de conta de `/transacoes` duplica a opção quando a mesma conta tem tipos diferentes nos
+lançamentos (`getDataSourcesWithTransactions` agrupa por tipo e número) — o Cartão Quick foi alinhado
+pelo lápis e **deve continuar "Outra"** (Julio controla cartão por saldo); o código não foi corrigido.
 
 **Antes dela — 27/out (2ª parte): CONTA MANUAL NA CONFERÊNCIA, no ar** (merge `538be34`; a tela aguarda o olho do Julio).
 Sem migration. Ver **Decisão 30**. Quatro entregas:

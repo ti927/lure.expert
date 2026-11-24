@@ -1,20 +1,23 @@
 import { inngest } from '@/lib/inngest'
 import { db } from '@/db'
-import { transactions, dataSources } from '@/db/schema'
+import { dataSources } from '@/db/schema'
 import { eq, and } from 'drizzle-orm'
 import { getPluggyClient, isGenericPluggyConnector } from '@/lib/pluggy'
+import {
+  dataEmBrasilia, somarDias, inicioDaReleitura, pendenteMaisAntiga,
+  gravarLancamentosPluggy, marcarPendentesQueSumiram,
+} from '@/lib/pluggy-sync'
 
 const DAYS_BACK = 365
 const BATCH_SIZE = 100
 
 export function daysAgoISO(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - days)
-  return d.toISOString().split('T')[0]
+  return somarDias(todayISO(), -days)
 }
 
+// Em Brasília: o dia do calendário de quem lê a tela, não o de Greenwich.
 function todayISO(): string {
-  return new Date().toISOString().split('T')[0]
+  return dataEmBrasilia(new Date())
 }
 
 export const syncPluggyItem = inngest.createFunction(
@@ -70,9 +73,17 @@ export const syncPluggyItem = inngest.createFunction(
       return { synced: 0, accounts: 0 }
     }
 
-    const dateFrom = fromDate ?? daysAgoISO(DAYS_BACK)
     const dateTo = todayISO()
+    // A janela volta até a pendente mais antiga (com teto): é a releitura que
+    // descobre que ela foi efetivada — com o mesmo id ou com outro.
+    const dateFrom = await step.run('resolve-window', async () => inicioDaReleitura(
+      fromDate ?? daysAgoISO(DAYS_BACK),
+      await pendenteMaisAntiga(db, organizationId, dataSourceId),
+      dateTo,
+    ))
     const allInsertedIds: string[] = []
+    let updatedCount = 0
+    let replacedCount = 0
 
     // Um step por página: evita timeout em step único quando há muitas transações.
     // O Inngest memoiza cada step — ao re-invocar a função, steps completos são
@@ -80,9 +91,11 @@ export const syncPluggyItem = inngest.createFunction(
     for (const account of accountIds) {
       let after: string | undefined = undefined
       let pageNum = 0
+      const readIds: string[] = []
+      let oldestRead: string | null = null
 
       while (true) {
-        const { insertedIds, next } = await step.run(
+        const { insertedIds, updatedIds, pageIds, pageOldest, next } = await step.run(
           `sync-page-${account.id}-p${pageNum}`,
           async () => {
             const client = getPluggyClient()
@@ -92,21 +105,24 @@ export const syncPluggyItem = inngest.createFunction(
             )
 
             if (page.results.length === 0) {
-              return { insertedIds: [] as string[], next: null as string | null }
+              return {
+                insertedIds: [] as string[], updatedIds: [] as string[],
+                pageIds: [] as string[], pageOldest: null as string | null, next: null as string | null,
+              }
             }
 
             const ids: string[] = []
+            const updated: string[] = []
             for (let i = 0; i < page.results.length; i += BATCH_SIZE) {
               const batch = page.results.slice(i, i + BATCH_SIZE)
-              const rows = await db
-                .insert(transactions)
-                .values(
+              const { inseridos, atualizados } = await gravarLancamentosPluggy(
+                db,
                   batch.map(tx => ({
                     organizationId,
                     dataSourceId,
                     externalId: tx.id,
-                    date: tx.date.toISOString().split('T')[0],
-                    effectiveDate: tx.date.toISOString().split('T')[0],
+                    date: dataEmBrasilia(tx.date),
+                    effectiveDate: dataEmBrasilia(tx.date),
                     amount: String(Math.abs(tx.amount)),
                     currency: tx.currencyCode ?? 'BRL',
                     direction: tx.type === 'CREDIT' ? 'inflow' : 'outflow',
@@ -131,25 +147,46 @@ export const syncPluggyItem = inngest.createFunction(
                     },
                     needsReview: false,
                     status: 'pending',
-                  }))
-                )
-                .onConflictDoNothing()
-                .returning({ id: transactions.id })
+                  })),
+              )
 
-              ids.push(...rows.map(r => r.id))
+              ids.push(...inseridos)
+              updated.push(...atualizados)
             }
 
-            return { insertedIds: ids, next: page.next }
+            const dates = page.results.map(tx => dataEmBrasilia(tx.date)).sort()
+            return {
+              insertedIds: ids,
+              updatedIds: updated,
+              pageIds: page.results.map(tx => tx.id),
+              pageOldest: dates[0] ?? null,
+              next: page.next,
+            }
           },
         )
 
         allInsertedIds.push(...insertedIds)
+        updatedCount += updatedIds.length
+        readIds.push(...pageIds)
+        if (pageOldest && (!oldestRead || pageOldest < oldestRead)) oldestRead = pageOldest
 
         if (!next) break
         const nextAfter = new URL(next, 'https://api.pluggy.ai').searchParams.get('after')
         if (!nextAfter) break
         after = nextAfter
         pageNum++
+      }
+
+      // Só depois de ler TODAS as páginas da conta — uma página que falhasse
+      // derrubaria a função antes daqui, e nada seria marcado por falta de leitura.
+      if (readIds.length > 0 && oldestRead) {
+        const margem = somarDias(dateFrom, 1)
+        const coberturaDesde = oldestRead > margem ? oldestRead : margem
+        replacedCount += await step.run(`replace-pending-${account.id}`, () =>
+          marcarPendentesQueSumiram(db, {
+            organizationId, dataSourceId, accountId: account.id, idsLidos: readIds, coberturaDesde,
+          }),
+        )
       }
     }
 
@@ -167,7 +204,8 @@ export const syncPluggyItem = inngest.createFunction(
       const nextMeta: Record<string, unknown> = {
         ...existingMeta,
         isSandbox,
-        lastTransactionFetchedAt: dateFrom,
+        // O FIM da janela lida — gravar o início fazia a releitura nunca avançar.
+        lastTransactionFetchedAt: dateTo,
         accounts: accountIds.map(a => ({
           id: a.id,
           name: a.name,
@@ -210,6 +248,9 @@ export const syncPluggyItem = inngest.createFunction(
       })
     }
 
-    return { synced: allInsertedIds.length, accounts: accountIds.length, dateFrom }
+    return {
+      synced: allInsertedIds.length, updated: updatedCount, replaced: replacedCount,
+      accounts: accountIds.length, dateFrom,
+    }
   },
 )

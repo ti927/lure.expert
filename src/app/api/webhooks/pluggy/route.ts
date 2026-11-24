@@ -4,6 +4,7 @@ import { dataSources } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { inngest } from '@/lib/inngest'
 import { daysAgoISO } from '@/jobs/sync-pluggy-item'
+import { somarDias, webhookAutorizado } from '@/lib/pluggy-sync'
 
 type PluggyWebhookBody = {
   eventId?: string
@@ -13,6 +14,12 @@ type PluggyWebhookBody = {
 }
 
 export async function POST(request: NextRequest) {
+  // O Pluggy não assina o corpo: o segredo vai na URL cadastrada no painel dele.
+  // 401 e não 200 — um 200 silencioso esconderia uma URL mal configurada.
+  if (!webhookAutorizado(request.nextUrl.searchParams.get('token'), process.env.PLUGGY_WEBHOOK_SECRET)) {
+    return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  }
+
   let body: PluggyWebhookBody
   try {
     body = await request.json()
@@ -49,19 +56,12 @@ export async function POST(request: NextRequest) {
 
   if (event === 'item/updated') {
     const meta = (dataSource.metadata ?? {}) as Record<string, string>
-    const lastFetched = meta.lastTransactionFetchedAt
-      ? new Date(meta.lastTransactionFetchedAt)
+    // Janela: 1 dia antes de onde a última leitura terminou (`YYYY-MM-DD`), ou 7
+    // dias se nunca sincronizou. O job ainda a estende até a pendente mais antiga.
+    const lastFetched = /^\d{4}-\d{2}-\d{2}/.test(meta.lastTransactionFetchedAt ?? '')
+      ? meta.lastTransactionFetchedAt.slice(0, 10)
       : null
-
-    // Janela segura: 1 dia antes do último fetch, ou 7 dias caso nunca sincronizado
-    let fromDate: string
-    if (lastFetched) {
-      const d = new Date(lastFetched)
-      d.setDate(d.getDate() - 1)
-      fromDate = d.toISOString().split('T')[0]
-    } else {
-      fromDate = daysAgoISO(7)
-    }
+    const fromDate = lastFetched ? somarDias(lastFetched, -1) : daysAgoISO(7)
 
     try {
       await inngest.send({

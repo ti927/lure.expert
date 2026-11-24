@@ -210,7 +210,7 @@ export function ContasClient({ connections, includeSandbox, reconciliationCount,
               <span className="text-amber-800">
                 O expert identificou{' '}
                 <span className="font-semibold">{reconciliationCount} par{reconciliationCount !== 1 ? 'es' : ''}</span>{' '}
-                de possíveis duplicatas entre importações e banco conectado.
+                de lançamentos que podem estar em dobro.
               </span>
               <span className="ml-auto text-amber-600 font-medium whitespace-nowrap">Revisar →</span>
             </a>
