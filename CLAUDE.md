@@ -1032,6 +1032,7 @@ aberto, e as afirmações abaixo foram **conferidas contra o banco**, não aceit
 | **Largura de coluna por USUÁRIO** (v2 da mesma frente) | Hoje é por navegador, porque não existe tabela de preferência de usuário — `memberships` guarda papel e convite, sem jsonb. Exige migration + RLS + teste, e a decisão de onde morar (coluna `settings` em `memberships`, que a torna por usuário-E-organização, ou tabela própria) | média |
 | **`vercel.json` com `regions`** | versionar a região `gru1`, hoje só no painel (ver Infraestrutura) | trivial |
 | **Fatura de cartão do Pluggy** (27/out) | 9 cartões conectados sem conferência: o sync grava a compra como caixa. O lançamento traz `raw_data.creditCardMetadata.billId` (em parte deles) e a API `fetchCreditCardBills` dá vencimento e **total oficial do banco** — conferência mais forte que a do manual | média |
+| **Mesa de negociação → orçamento** (26/nov) | Botão "Levar ao orçamento" na mesa de `/fornecedores`, gravando o fornecedor (com a redução) numa versão existente, origem `fornecedor`. **Plano pronto, 4 decisões abertas** em `docs/superpowers/plans/2026-11-26-mesa-para-orcamento.md` — a principal é a contagem dupla com o que a natureza já tem orçado | 2 sessões |
 | **Lixeira para todo lançamento** (27/out) | Hoje só o manual apagado é restaurável. O do Pluggy volta por ressincronização, mas sem classificação; o importado, reimportando | média |
 
 Recomendação registrada: **contato pela NF-e** tem a melhor relação custo/benefício agora — é curta
